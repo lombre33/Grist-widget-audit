@@ -16,6 +16,9 @@
  *   --version            affiche la version et quitte
  *   --diff <a.json> <b.json>  compare deux rapports --json déjà générés,
  *                        sans lancer d'audit (voir README § Comparer deux audits)
+ *   --scenario <fichier.json>  remplace les données de test de l'axe D par un
+ *                        document personnalisé (voir README § Personnaliser
+ *                        le scénario de l'axe D) ; ignoré si invalide
  */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -32,6 +35,7 @@ import { genererJson } from '../src/rapport/json.js';
 import { genererHtml } from '../src/rapport/html.js';
 import { genererSarif } from '../src/rapport/sarif.js';
 import { comparerRapports, genererDiffMarkdown } from '../src/rapport/diff.js';
+import { validerScenario } from '../src/runtime/scenario.js';
 
 const RACINE_OUTIL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION = JSON.parse(fs.readFileSync(path.join(RACINE_OUTIL, 'package.json'), 'utf8')).version;
@@ -79,8 +83,9 @@ async function main() {
 
     const axesNonExecutes = new Set();
     if (!flag('sans-dynamique')) {
+      const scenario = chargerScenario(valeur('scenario', null));
       console.error("→ Analyse dynamique en condition réelle (axe D)… (navigateur Chromium, hôte Grist de test)");
-      const { constats: constatsD, nonExecute } = await auditDynamique(ctx);
+      const { constats: constatsD, nonExecute } = await auditDynamique(ctx, { scenario });
       constats.push(...constatsD);
       if (nonExecute) axesNonExecutes.add('D');
     } else {
@@ -123,6 +128,23 @@ async function main() {
     // La cible clonée est temporaire par construction (mkdtempSync) : rien ne
     // doit en survivre à l'exécution, succès ou erreur confondus.
     if (temporaire) fs.rmSync(racine, { recursive: true, force: true });
+  }
+}
+
+/**
+ * Charge et valide un scénario d'axe D personnalisé (--scenario). Un
+ * scénario invalide dégrade vers le scénario par défaut plutôt que de faire
+ * échouer tout l'outil : cohérent avec le reste de l'axe D (voir
+ * D-INDISPONIBLE dans dynamique.js), un garde-fou qui échoue se désactive et
+ * le dit, il n'empêche jamais le reste du rapport de sortir.
+ */
+function chargerScenario(cheminScenario) {
+  if (!cheminScenario) return null;
+  try {
+    return validerScenario(JSON.parse(fs.readFileSync(path.resolve(cheminScenario), 'utf8')));
+  } catch (e) {
+    console.error(`⚠ Scénario d'axe D ignoré (${cheminScenario}) : ${e.message} — le scénario par défaut est utilisé à la place.`);
+    return null;
   }
 }
 

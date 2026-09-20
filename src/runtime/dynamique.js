@@ -263,17 +263,40 @@ function imposerPlafondCpuWindows(dossierTravail, pid, secondes) {
   ], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 15_000 });
 }
 
-/** Document de test minimal, avec une charge utile d'injection dans un champ texte plausible. */
-function documentDeTest() {
+/**
+ * Document de test injecté dans l'hôte simulé.
+ *
+ * `scenario`, s'il est fourni (voir --scenario, README § Personnaliser le
+ * scénario de l'axe D), remplace la table et les colonnes par défaut — pour
+ * tester avec des données représentatives du widget réellement audité
+ * (mêmes noms de colonnes qu'il attend, plus de lignes, valeurs limites…).
+ * Il ne retire jamais la sonde XSS : celle-ci est la seule vérification qui
+ * PROUVE — plutôt que suppose — qu'une valeur de cellule peut s'exécuter
+ * comme du code (voir constatsXss ci-dessous). Un scénario personnalisé
+ * reçoit donc toujours sa propre colonne de sonde, en plus des siennes,
+ * quelle que soit la forme fournie.
+ */
+export function documentDeTest(scenario) {
+  if (!scenario) {
+    return {
+      tableId: 'Contacts',
+      nom: 'Document de test — audit dynamique',
+      colonnes: {
+        id: [1, 2, 3],
+        Nom: ['Alice Dupont', 'Bernard Martin', CHARGE_XSS],
+        Email: ['alice.dupont@exemple.gouv.fr', 'bernard.martin@exemple.gouv.fr', 'test@exemple.gouv.fr'],
+        Montant: [125.5, 42, 0],
+        Commentaire: ['RAS', CHARGE_XSS, 'Dossier clos'],
+      },
+    };
+  }
+  const nbLignes = Math.max(1, ...Object.values(scenario.colonnes).map((c) => (Array.isArray(c) ? c.length : 1)));
   return {
-    tableId: 'Contacts',
-    nom: 'Document de test — audit dynamique',
+    tableId: scenario.tableId || 'Contacts',
+    nom: scenario.nom || 'Document de test — audit dynamique (scénario personnalisé)',
     colonnes: {
-      id: [1, 2, 3],
-      Nom: ['Alice Dupont', 'Bernard Martin', CHARGE_XSS],
-      Email: ['alice.dupont@exemple.gouv.fr', 'bernard.martin@exemple.gouv.fr', 'test@exemple.gouv.fr'],
-      Montant: [125.5, 42, 0],
-      Commentaire: ['RAS', CHARGE_XSS, 'Dossier clos'],
+      ...scenario.colonnes,
+      _GwauditSondeXss: Array.from({ length: nbLignes }, () => CHARGE_XSS),
     },
   };
 }
@@ -310,6 +333,8 @@ function urlScriptGrist(contenuHtml) {
  * @param {object} [options]
  * @param {number} [options.delaiMs]     temps laissé au widget pour réagir après chaque événement
  * @param {boolean} [options.capturesEcran]
+ * @param {{tableId?: string, nom?: string, colonnes: object}} [options.scenario]
+ *   remplace le document de test par défaut — voir documentDeTest() ci-dessous.
  * @returns {Promise<{constats: Array, brut: object}>}
  */
 export async function auditDynamique(ctx, options = {}) {
@@ -418,7 +443,7 @@ export async function auditDynamique(ctx, options = {}) {
       window.__CONFIG_DOC__ = doc;
       window.__WIDGET_URL__ = widgetUrl;
       window.__REGLAGE__ = { niveauAccorde: 'full' };
-    }, { doc: documentDeTest(), widgetUrl: `${origine}/widget/${entree}` });
+    }, { doc: documentDeTest(options.scenario), widgetUrl: `${origine}/widget/${entree}` });
 
     // L'ensemble chargement + évaluations + a11y est couru contre un délai
     // global : `goto` et `waitForFunction` ont chacun leur propre timeout,

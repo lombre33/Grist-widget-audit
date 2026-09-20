@@ -103,6 +103,41 @@ comparaison dans un fichier au lieu de l'afficher. Le code de sortie est `2`
 si des constats nouveaux sont apparus (utile pour gater une CI dessus),
 sinon `0`.
 
+## Personnaliser le scénario de l'axe D
+
+Par défaut, l'axe D (analyse dynamique) charge le widget face à un document
+de test fixe (table `Contacts`, quelques colonnes). `--scenario <fichier.json>`
+remplace ces données par les vôtres — utile pour tester avec des noms de
+colonnes que le widget attend réellement, plus de lignes, ou des valeurs
+limites (nombres négatifs, cellules vides, texte très long) :
+
+```json
+{
+  "tableId": "Commandes",
+  "colonnes": {
+    "id": [1, 2],
+    "Client": ["Marie Curie", "Ada Lovelace"],
+    "Montant": [42.5, 0],
+    "Statut": ["payée", "en attente"]
+  }
+}
+```
+
+```bash
+node bin/gwaudit.js /chemin/vers/mon-widget --scenario ./mon-scenario.json
+```
+
+`colonnes` est obligatoire (un objet de tableaux de valeurs, une entrée par
+colonne) ; `tableId` et `nom` sont optionnels. Un scénario invalide (JSON
+mal formé, `colonnes` absent ou mal typé) est ignoré avec un avertissement
+sur la sortie d'erreur, et l'audit continue avec le scénario par défaut —
+il ne fait jamais échouer tout l'outil.
+
+La sonde qui prouve qu'une valeur de cellule peut s'exécuter comme du code
+(constat `D-XSS-01`) est toujours ajoutée, dans sa propre colonne, quel que
+soit le scénario fourni : la personnaliser sert à tester avec des données
+représentatives, pas à retirer cette vérification.
+
 ## Ce que l'outil vérifie
 
 Voir [`docs/METHODOLOGIE.md`](docs/METHODOLOGIE.md) pour le détail des six
