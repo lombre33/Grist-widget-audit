@@ -235,7 +235,36 @@ function commitDepot(racine) {
  * de fournir la garantie anti-rebinding qu'exigerait un service exposé —
  * celle-ci revient à un proxy de sortie dédié côté V2 (docs/ARCHITECTURE-V2.md, §4).
  */
+/**
+ * Un `\` littéral dans une URL https:// est normalisé en `/` par le
+ * parseur WHATWG de `new URL()` (schéma « spécial ») AVANT que la limite
+ * d'autorité (userinfo@hôte) ne soit recherchée — mais `git`/libcurl, qui
+ * clonera réellement la cible juste après cette validation, suit RFC 3986
+ * à la lettre et ne fait rien de tel : pour
+ * `https://hote-public.example\@CIBLE-INTERNE/x`, Node calcule
+ * `hostname === "hote-public.example"` (validé, externe) alors que git se
+ * connecte réellement à `CIBLE-INTERNE` (`\` devient un caractère anodin du
+ * userinfo côté curl, pas un séparateur de chemin). Reproduit et confirmé
+ * ici avec un vrai `git ls-remote` : le message d'erreur cite explicitement
+ * l'hôte interne visé, pas l'hôte public placé avant le `\`. Rejeter tout
+ * `\` littéral, et tout userinfo (`user[:pass]@`) même sans `\`, ferme
+ * cette divergence de parseur plutôt que de faire confiance à
+ * `new URL(...).hostname` comme oracle de ce que git contactera vraiment.
+ */
+function contientUserinfoOuBackslash(cible) {
+  if (cible.includes('\\')) return true;
+  try {
+    const u = new URL(cible);
+    return Boolean(u.username || u.password);
+  } catch {
+    return false;
+  }
+}
+
 async function validerHoteClone(cible) {
+  if (contientUserinfoOuBackslash(cible)) {
+    throw new Error(`Clonage refusé : l'URL contient un caractère '\\' ou des identifiants (userinfo) — les deux permettent de tromper la validation de l'hôte cible : ${cible}`);
+  }
   let hote;
   if (/^https:\/\//i.test(cible)) {
     hote = new URL(cible).hostname;
