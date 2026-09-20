@@ -47,8 +47,14 @@ services:
     # docs/ARCHITECTURE-V2.md §4). Doit refaire sa propre résolution DNS et
     # rejeter les plages privées/loopback/link-local : ne pas se reposer
     # uniquement sur la validation applicative de gwaudit.
-    # Non implémenté ici — à choisir (ex. tinyproxy/squid + ACL, ou un
-    # petit proxy dédié) et configurer sur le VPS d'Antoine.
+    # Non implémenté ici — proposition (voir docs/ARCHITECTURE-V2.md §4,
+    # "Proposition concrète pour le VPS d'Antoine") : un proxy CONNECT
+    # explicite (tinyproxy ou squid) en liste blanche par nom d'hôte
+    # (github.com, gitlab.com, registry.npmjs.org). Pas de terminaison TLS
+    # nécessaire (CONNECT tunnelise, ne casse pas le certificate pinning
+    # git/npm) — mais la syntaxe exacte du filtre par domaine de l'outil
+    # choisi n'a pas été vérifiée contre sa documentation actuelle, à
+    # confirmer avant écriture du Dockerfile.
     image: à-définir
     networks:
       - reseau-ferme
