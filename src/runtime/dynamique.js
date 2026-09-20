@@ -28,6 +28,7 @@
  */
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
@@ -373,29 +374,69 @@ export async function auditDynamique(ctx, options = {}) {
   let navigateur, page, arreterServeur, serveurChromium, dossierTravail;
 
   try {
-    dossierTravail = fs.mkdtempSync(path.join(RACINE_OUTIL, '.tmp-'));
+    // Dossier de scratch de l'axe D : sur le disque temporaire du système
+    // (`os.tmpdir()`), jamais dans le dépôt lui-même. Quand l'outil tourne
+    // depuis le dossier de projet partagé (monté en réseau, `fuse.rclone` —
+    // constaté ~250-300ms par opération fichier contre ~10ms sur le disque
+    // local), le serveur qui sert le harnais à Chromium à chaque requête de
+    // page lisait ces fichiers depuis ce montage lent, plutôt exposé aux à-
+    // coups de latence réseau que le disque local : plausible explication
+    // des échecs intermittents de l'axe D observés par le fil protocole
+    // (timeout de lancement ou de scénario selon le moment). `os.tmpdir()`
+    // reste local sur les trois environnements cibles (`/tmp` sous
+    // Linux/macOS, `%TEMP%` sous Windows) sans rien changer au reste.
+    dossierTravail = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-axeD-'));
     const harnaisRacine = await construireHarnais(dossierTravail);
     const { origine, fermer } = await demarrerServeur({ widgetRacine: ctx.racine, harnaisRacine });
     arreterServeur = fermer;
 
     const cheminReel = cheminChromium(chromium);
-    if (process.platform === 'win32') {
-      // Pas de wrapper transparent possible ici (voir imposerPlafondCpuWindows) :
-      // `launchServer()` expose le PID réel, contrairement à `launch()`.
-      serveurChromium = await chromium.launchServer({ args: construireArgsChromium(), env: envChromiumSansProxy(), executablePath: cheminReel });
+
+    // `chromium.launch()`/`launchServer()` peut échouer avec un message
+    // générique (« Target page, context or browser has been closed ») sans
+    // rapport avec le widget audité : signalé par le fil protocole après une
+    // quinzaine de lancements dans la même VM, premier réussi puis tous les
+    // suivants en échec identique — un schéma qui évoque un incident
+    // transitoire côté Chromium/hôte (le message ne dit rien de plus
+    // précis) plutôt qu'une cause reproductible localement (38 lancements
+    // d'affilée ici, aucun échec). Vu ce doute non tranché, une reprise
+    // bornée est la mesure honnête : elle absorbe l'incident s'il est
+    // transitoire, et si les deux tentatives échouent l'erreur remonte
+    // telle quelle, sans la masquer.
+    const TENTATIVES_LANCEMENT = 2;
+    let erreurLancement;
+    for (let tentative = 1; tentative <= TENTATIVES_LANCEMENT; tentative++) {
       try {
-        imposerPlafondCpuWindows(dossierTravail, serveurChromium.process().pid, limiteCpuSecondes());
+        if (process.platform === 'win32') {
+          // Pas de wrapper transparent possible ici (voir imposerPlafondCpuWindows) :
+          // `launchServer()` expose le PID réel, contrairement à `launch()`.
+          serveurChromium = await chromium.launchServer({ args: construireArgsChromium(), env: envChromiumSansProxy(), executablePath: cheminReel });
+          try {
+            imposerPlafondCpuWindows(dossierTravail, serveurChromium.process().pid, limiteCpuSecondes());
+          } catch (e) {
+            console.error(`⚠ Plafond CPU inactif pour ce lancement de Chromium (Windows) : ${String(e?.message ?? e).split('\n')[0]}`);
+          }
+          navigateur = await chromium.connect(serveurChromium.wsEndpoint());
+        } else {
+          navigateur = await chromium.launch({
+            args: construireArgsChromium(),
+            env: envChromiumSansProxy(),
+            executablePath: construireLanceurChromium(dossierTravail, cheminReel),
+          });
+        }
+        erreurLancement = null;
+        break;
       } catch (e) {
-        console.error(`⚠ Plafond CPU inactif pour ce lancement de Chromium (Windows) : ${String(e?.message ?? e).split('\n')[0]}`);
+        erreurLancement = e;
+        serveurChromium = undefined;
+        navigateur = undefined;
+        if (tentative < TENTATIVES_LANCEMENT) {
+          console.error(`⚠ Échec du lancement de Chromium (tentative ${tentative}/${TENTATIVES_LANCEMENT}), nouvel essai : ${String(e?.message ?? e).split('\n')[0]}`);
+          await new Promise((r) => setTimeout(r, 1000));
+        }
       }
-      navigateur = await chromium.connect(serveurChromium.wsEndpoint());
-    } else {
-      navigateur = await chromium.launch({
-        args: construireArgsChromium(),
-        env: envChromiumSansProxy(),
-        executablePath: construireLanceurChromium(dossierTravail, cheminReel),
-      });
     }
+    if (erreurLancement) throw erreurLancement;
     const contexte = await navigateur.newContext({ locale: 'fr-FR', viewport: { width: 1280, height: 900 } });
     page = await contexte.newPage();
 
@@ -528,7 +569,7 @@ export async function auditDynamique(ctx, options = {}) {
         titre: "Analyse dynamique non exécutée : l'axe D a échoué",
         constat: `${String(e?.message ?? e).split('\n')[0]}`,
         impact: "Les constats de l'axe D (comportement réel du widget : réseau, XSS à l'exécution, accessibilité rendue) ne peuvent pas être produits. Ce n'est pas une absence de risque, c'est une absence de mesure.",
-        remediation: "Voir le message ci-dessus pour la cause. Si Chromium n'est pas installé : `npx playwright install chromium`. Sinon, relancer avec `--sans-dynamique` pour ignorer cet axe en attendant.",
+        remediation: "Voir le message ci-dessus pour la cause. Si Chromium n'est pas installé : `npx playwright install chromium`. Si le message est « Target page, context or browser has been closed » (Chromium démarre puis se ferme aussitôt) dans un conteneur ou une VM, essayer `GWAUDIT_CHROMIUM_SANS_SANDBOX=1` — le bac à sable natif de Chromium est une source connue d'échecs de ce type dans ce genre d'environnement. Sinon, relancer avec `--sans-dynamique` pour ignorer cet axe en attendant.",
       })],
       brut: null,
       nonExecute: true,
