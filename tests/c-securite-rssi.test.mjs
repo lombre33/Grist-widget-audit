@@ -7,6 +7,7 @@ import {
   analyserPressePapiers,
   analyserScriptDynamique,
   analyserCspPermissive,
+  analyserImportDynamique,
 } from '../src/regles/c-securite.js';
 
 function fichier(chemin, contenu, extra = {}) {
@@ -155,4 +156,19 @@ test('C-CSP-02 ne se déclenche pas en cas d\'absence totale de CSP (rôle de C-
   const ctx = { fichiers: [fichier('index.html', html)], entrees: ['index.html'] };
   const constats = analyserCspPermissive(ctx);
   assert.equal(constats.length, 0);
+});
+
+test("C-EXFIL-06 détecte un import() dont la source est calculée à l'exécution", () => {
+  const ctx = { fichiers: [fichier('app.js', "async function charger() { await import(base + '/module.js'); }")] };
+  const constats = analyserImportDynamique(ctx);
+  const c = constats.find((x) => x.regle === 'C-EXFIL-06');
+  assert.ok(c);
+  assertTroisChoses(c);
+  assert.equal(c.confiance, 'a_verifier');
+});
+
+test("C-EXFIL-06 ne se déclenche pas sur un import() littéral (déjà couvert par C-EXFIL-01)", () => {
+  const ctx = { fichiers: [fichier('app.js', "import('./local.js');")] };
+  const constats = analyserImportDynamique(ctx);
+  assert.equal(constats.filter((x) => x.regle === 'C-EXFIL-06').length, 0);
 });

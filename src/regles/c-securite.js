@@ -881,6 +881,51 @@ export function analyserScriptDynamique(ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// C-EXFIL-06 — import() dont la source est calculée à l'exécution
+// ---------------------------------------------------------------------------
+
+/**
+ * `analyserSortiesReseau` (C-EXFIL-01) ne signale un `import()` que si sa
+ * source est un littéral distant : un `import()` dont la source est calculée
+ * (concaténation, variable, template avec expression) n'est actuellement
+ * signalé par aucune règle — contrairement à `fetch()`/XHR/WebSocket, qui ont
+ * chacun leur variante « source calculée ». C'est précisément le chargement
+ * différé (déclenché après un délai ou une interaction) que la méthodologie
+ * identifie comme hors de la fenêtre d'observation d'un audit ponctuel.
+ */
+export function analyserImportDynamique(ctx) {
+  const constats = [];
+  const vus = new Set();
+
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+    if (!ast) return;
+    walk.simple(ast, {
+      ImportExpression(n) {
+        if (chaineLitterale(n.source) !== null) return;         // littéral : déjà couvert par C-EXFIL-01
+        if (!estDynamique(n.source)) return;                     // ni littéral ni dynamique reconnu (rare) : rien à affirmer
+
+        const cle = `${unite.chemin}:${ligneDe(n)}`;
+        if (vus.has(cle)) return;
+        vus.add(cle);
+
+        constats.push(constat({
+          regle: 'C-EXFIL-06', axe: 'C', severite: 'majeur', confiance: 'a_verifier',
+          titre: "import() dynamique dont la source est calculée à l'exécution",
+          fichier: unite.chemin, ligne: ligneDe(n),
+          extrait: extraireSource(unite.source, n),
+          constat: "Le code appelle `import(...)` avec une source construite à l'exécution (variable, concaténation) plutôt qu'un chemin littéral : la lecture du code seule ne permet pas de savoir quel module sera réellement chargé, ni depuis où.",
+          impact: "Un module chargé de cette façon peut être différé (après un délai, une interaction de l'agent) au-delà de la fenêtre d'observation d'un audit ponctuel, et échappe à toute vérification d'intégrité statique. Une fois exécuté, il a tous les privilèges du widget.",
+          remediation: "Restreindre la source à une liste blanche de constantes littérales, et documenter dans le README la liste exhaustive des modules chargés dynamiquement et les conditions de leur chargement.",
+          referentiels: [REF_GUIDE, 'OWASP Top 10 A08:2021 — Intégrité logicielle', 'CWE-829'],
+        }));
+      },
+    });
+  });
+
+  return constats;
+}
+
+// ---------------------------------------------------------------------------
 // Utilitaires locaux
 // ---------------------------------------------------------------------------
 
@@ -902,4 +947,5 @@ export const reglesC = [
   analyserStockage, analyserSecrets, analyserAlea,
   analyserEmpreinteAutomatisation, analyserPersistanceHorsWidget,
   analyserEmissionPostMessage, analyserPressePapiers, analyserScriptDynamique,
+  analyserImportDynamique,
 ];
