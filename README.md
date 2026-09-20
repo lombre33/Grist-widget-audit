@@ -37,12 +37,25 @@ qui plafonne le temps CPU que peut consommer Chromium pendant l'axe D
 repose sous Linux/macOS sur `ulimit`, absent de Windows — elle y est donc
 réimplémentée avec l'équivalent natif (Job Objects Win32, via un script
 PowerShell généré à la volée ; PowerShell 5.1, présent par défaut sur
-Windows 10/11, suffit). Ce mécanisme n'a pas pu être testé sur une machine
-Windows réelle avant publication : si le message `⚠ Plafond CPU inactif
-pour ce lancement de Chromium (Windows)` apparaît dans la sortie, cette
-protection précise n'a pas pu s'activer pour cette exécution (l'audit
-continue normalement, sans ce filet) — un signalement (issue) est
-bienvenu dans ce cas.
+Windows 10/11, suffit). Confirmé sur une machine Windows 11 réelle : le
+mécanisme s'installe sans erreur (pas de message `⚠ Plafond CPU inactif
+pour ce lancement de Chromium (Windows)` dans la sortie). Si ce message
+apparaît malgré tout, cette protection précise n'a pas pu s'activer pour
+cette exécution (l'audit continue normalement, sans ce filet) — un
+signalement (issue) est bienvenu dans ce cas.
+
+**Limite connue, sur les deux plateformes** : ce plafond CPU est une
+protection de dernier recours qui, dans le déroulement normal de l'axe D,
+n'a structurellement pas l'occasion de s'exercer. Un widget qui bloque le
+thread principal dès le chargement fait expirer le timeout propre de
+Playwright (30s) avant que le plafond CPU (réglé à ce timeout + 30s) n'ait
+le temps d'intervenir ; un widget qui charge normalement puis sature le
+CPU en arrière-plan (Web Workers) ne retarde pas les étapes du scénario
+qui gouvernent la durée de l'axe D, qui se termine donc normalement bien
+avant ce plafond, sans laisser de processus derrière lui. Mesuré dans les
+deux cas : le plafond CPU n'a jamais été le mécanisme qui met fin à
+l'exécution. Il reste un filet de sécurité en profondeur, pas la
+protection qui agit en pratique.
 
 ### Chromium déjà présent, mais sous une autre révision (`GWAUDIT_CHROMIUM_PATH`)
 

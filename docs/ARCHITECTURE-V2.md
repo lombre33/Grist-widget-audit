@@ -44,7 +44,7 @@ ce qui suit est la dernière, à jour.
 | 8 | Le passe-droit réseau « local » ne comparait que le *hostname* | `src/runtime/dynamique.js` | Compare désormais l'origine exacte (`urlOrigine === origine`, protocole + hôte + port), pas seulement le hostname. |
 | 9 | Aucun plafond de fichiers/octets cumulés pendant l'inventaire | `src/contexte/inventaire.js` | `MAX_FICHIERS` (20 000) et `MAX_OCTETS_LUS_CUMULES` (200 Mo), avec troncature explicite plutôt que crash, signalée dans `ctx.tronque`. |
 | 10a | Aucun timeout global sur l'axe D après le chargement initial | `src/runtime/dynamique.js` | Tout le scénario (chargement + évaluations + a11y) est couru contre `DELAI_GLOBAL_AXE_D_MS` (45 s par défaut) via `avecDelai()`, qui lève le constat `D-TIMEOUT-01` en cas de dépassement. |
-| 10b | Aucune limite de temps CPU sur le processus Chromium | `src/runtime/dynamique.js` | Chromium est lancé via un script qui pose `ulimit -t` (RLIMIT_CPU) avant un `exec` (donc sans changer de PID : les processus que Chromium fait naître — zygote, rendu, GPU — héritent la même limite dès leur création), fixée à `DELAI_GLOBAL_AXE_D_MS` + 30 s. Un filet complémentaire au timeout 10a, pas un substitut. |
+| 10b | Aucune limite de temps CPU sur le processus Chromium | `src/runtime/dynamique.js` | Chromium est lancé via un script qui pose `ulimit -t` (RLIMIT_CPU) avant un `exec` (donc sans changer de PID : les processus que Chromium fait naître — zygote, rendu, GPU — héritent la même limite dès leur création), fixée à `DELAI_GLOBAL_AXE_D_MS` + 30 s. **Mesuré le 2026-09-20 (commit `e99aba0`) : ce plafond n'a structurellement pas l'occasion de s'exercer en usage réel.** Un widget qui bloque le thread principal dès le chargement fait expirer le timeout propre de Playwright (30 s) et ferme Chromium en ~1 s, bien avant les 75 s du plafond ; un widget qui charge normalement puis sature tous les cœurs en arrière-plan (Web Workers) ne retarde aucune étape qui gouverne la durée du scénario — l'audit se termine en quelques secondes, sans processus survivant. Les deux formes de widget hostile testées : dans aucune, le plafond CPU n'est le mécanisme qui a mis fin à l'exécution. **Reste un filet de sécurité en profondeur pour un cas non encore rencontré, pas la protection qui agit en pratique** — même verdict que pour la mémoire (constat 10c) : la vraie limite CPU par job en V2 viendra du conteneur (cgroups v2 via Docker, §4), pas d'un réglage de lancement dans le process. |
 | 12 | `git clone` sans timeout, dossier temporaire jamais supprimé | `bin/gwaudit.js` | `timeout: 120_000` sur le clone ; `main()` dans un `try/finally` qui purge systématiquement. |
 
 ### Atténués, mais pas structurellement fermés
@@ -287,6 +287,16 @@ une seule cause commune : le code de la V1 suppose implicitement **un seul
 audit à la fois, lancé par une personne de confiance**, et ne peut pas
 s'auto-attribuer une vraie limite de mémoire résidente. Pour un service
 public, il faut explicitement :
+
+**Un point de conception que la mesure du 2026-09-20 (constat 10b) rend
+concret** : un widget hostile ne cherche pas à faire durer son propre
+audit — il consomme des ressources *pendant* qu'il tourne, et l'audit se
+termine normalement, dans son délai habituel, qu'il y ait eu saturation
+CPU en arrière-plan ou non. L'exposition réelle n'est donc pas « un audit
+qui dure trop longtemps » (déjà borné, 10a) mais **le nombre d'audits
+simultanés** qui consomment chacun leur part de CPU/mémoire en même temps
+sur la même machine — ce qui renforce, plutôt qu'il ne l'assouplit, le
+besoin d'une vraie limite de concurrence (constat 11, ci-dessous).
 
 - un nombre maximal de jobs simultanés (aujourd'hui : aucun, puisqu'un
   `gwaudit` = un process séquentiel — voir constat 11) ;
