@@ -105,7 +105,10 @@ multi-utilisateurs (concurrence) que seule la V2 introduira.
 - **Zone « exécution »** (confiance zéro — la deuxième instance Docker
   qu'Antoine évoque) : c'est là que `gwaudit` tourne réellement sur le code
   soumis. Elle n'a aucun accès entrant depuis l'extérieur ; elle consomme
-  des jobs depuis la file et publie un résultat, rien d'autre.
+  des jobs depuis la file et publie un résultat, rien d'autre. **C'est le
+  même code que la V1** — un seul `gwaudit`, portable, pensé pour tourner
+  identiquement en local (Windows/Linux/macOS) et empaqueté tel quel dans
+  cette image : pas de variante ni de fork « serveur ».
 
 Règles non négociables pour que la séparation soit réelle et pas seulement
 nominale :
