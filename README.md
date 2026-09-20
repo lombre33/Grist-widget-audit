@@ -60,6 +60,27 @@ une vraie instance : voir la méthodologie pour pourquoi ce choix. Pour
 valider un widget dans un vrai Grist avant publication, voir
 [`docker/README.md`](docker/README.md).
 
+## Réseau et proxy d'entreprise
+
+L'axe D (navigateur) n'a besoin d'aucun accès réseau réel : le widget testé
+et le hôte Grist de test sont tous les deux servis en local
+(`127.0.0.1`), et tout le trafic sortant du widget est de toute façon
+neutralisé (voir méthodologie). Chromium est donc lancé sans proxy
+(`--proxy-server=direct://`) et sans les variables `*_PROXY` de
+l'environnement, pour qu'aucun service interne du navigateur ne puisse
+sortir non plus — cela **ne dépend d'aucune configuration réseau** :
+l'axe D fonctionne à l'identique derrière un proxy d'entreprise ou sans
+accès Internet du tout.
+
+`npm audit` (axe E), en revanche, a réellement besoin d'atteindre
+`registry.npmjs.org` : il conserve les variables `HTTP(S)_PROXY`/`NO_PROXY`
+de l'environnement pour fonctionner derrière un proxy d'entreprise, tout en
+ignorant le `.npmrc` et le reste de l'environnement du dépôt audité (voir
+`src/regles/e-dependances.js`, qui l'exécute dans un dossier isolé pour
+cette raison). Sans accès réseau du tout, utiliser `--sans-reseau` : l'axe E
+le dit explicitement dans le rapport plutôt que de laisser croire à une
+absence de vulnérabilité.
+
 ## Structure du dépôt
 
 ```

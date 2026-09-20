@@ -224,6 +224,16 @@ async function npmAudit(racine) {
       HOME: dossierIsole,               // pas le HOME réel : pas de ~/.npmrc surprenant à hériter non plus
       npm_config_userconfig: npmrcVide, // écarte tout ~/.npmrc réel malgré HOME
       npm_config_registry: 'https://registry.npmjs.org/',
+      // `npm audit` a, lui, réellement besoin d'atteindre le registre npm —
+      // contrairement à l'axe D, dont tout le trafic est neutralisé par
+      // construction. On transmet donc le proxy éventuel de l'environnement
+      // (pas le reste : ni secrets, ni config surprenante), pour qu'un poste
+      // derrière un proxy d'entreprise continue de fonctionner.
+      ...Object.fromEntries(
+        ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy']
+          .filter((cle) => process.env[cle] !== undefined)
+          .map((cle) => [cle, process.env[cle]])
+      ),
     };
 
     const { stdout } = await execFileAsync('npm', ['audit', '--json', '--audit-level=info', '--registry', 'https://registry.npmjs.org/'], {
