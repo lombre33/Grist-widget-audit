@@ -700,7 +700,7 @@ function constatsReseau(requetes, substitutionApiGrist = []) {
     impact: "Ceci n'est plus une hypothèse d'analyse statique : la requête a réellement quitté le widget pendant l'exécution. Elle a été interceptée et neutralisée par le harnais d'audit ; en usage réel, elle aurait atteint ce domaine avec les données que le widget y a placées.",
     remediation: "Confirmer ou infirmer avec le contributeur ce que cette requête transporte, et l'autoriser explicitement (documentation, liste blanche) ou la supprimer.",
     referentiels: ['OWASP Top 10 A10:2021'],
-    preuve: { requetes: liste.slice(0, 10) },
+    preuve: { hote, requetes: liste.slice(0, 10) },
   })));
   return constats;
 }
