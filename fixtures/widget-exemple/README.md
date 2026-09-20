@@ -20,7 +20,8 @@ il ne lit ni n'écrit aucune donnée du document.
 
 ## Dépendances
 
-`grist-plugin-api.js`, chargé depuis `docs.getgrist.com` (usage de
-développement courant ; un widget déployé le sert plutôt depuis sa propre
-instance, voir la remédiation de la règle `C-EXFIL-04`). Aucune autre
+`grist-plugin-api.js`, embarqué dans ce dossier plutôt que chargé depuis
+`docs.getgrist.com` : c'est la remédiation que recommande la règle
+`C-EXFIL-04` elle-même, et cela évite qu'une politique de sécurité de
+contenu stricte (`default-src 'self'`) bloque le script. Aucune autre
 dépendance.
