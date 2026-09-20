@@ -12,6 +12,10 @@
  *   --sortie <dossier>   dossier de sortie des rapports (défaut : ./rapport-<nom>)
  *   --json               écrit aussi rapport.json
  *   --sans-html          n'écrit pas rapport.html (écrit par défaut)
+ *   --sarif              écrit aussi rapport.sarif (SARIF 2.1.0, intégration CI)
+ *   --version            affiche la version et quitte
+ *   --diff <a.json> <b.json>  compare deux rapports --json déjà générés,
+ *                        sans lancer d'audit (voir README § Comparer deux audits)
  */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -26,6 +30,8 @@ import { noter } from '../src/moteur/notation.js';
 import { genererMarkdown } from '../src/rapport/markdown.js';
 import { genererJson } from '../src/rapport/json.js';
 import { genererHtml } from '../src/rapport/html.js';
+import { genererSarif } from '../src/rapport/sarif.js';
+import { comparerRapports, genererDiffMarkdown } from '../src/rapport/diff.js';
 
 const RACINE_OUTIL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION = JSON.parse(fs.readFileSync(path.join(RACINE_OUTIL, 'package.json'), 'utf8')).version;
@@ -36,8 +42,20 @@ async function main() {
   const flag = (nom) => argv.includes(`--${nom}`);
   const valeur = (nom, def) => { const i = argv.indexOf(`--${nom}`); return i >= 0 ? argv[i + 1] : def; };
 
+  if (flag('version')) {
+    console.log(VERSION);
+    process.exit(0);
+  }
+
+  if (flag('diff')) {
+    diffRapports(argv);
+    return;
+  }
+
   if (!cible || flag('aide') || flag('help')) {
-    console.log(`Usage : gwaudit <chemin-ou-url-du-widget> [--sans-dynamique] [--sans-reseau] [--sans-html] [--sortie <dossier>] [--json]`);
+    console.log(`Usage : gwaudit <chemin-ou-url-du-widget> [--sans-dynamique] [--sans-reseau] [--sans-html] [--sarif] [--sortie <dossier>] [--json]`);
+    console.log(`        gwaudit --diff <ancien-rapport.json> <nouveau-rapport.json> [--sortie <fichier.md>]`);
+    console.log(`        gwaudit --version`);
     // --aide/--help est une réussite (code 0) même sans cible : ce n'est une
     // erreur d'usage (code 1) que si ni l'un ni l'autre n'a été demandé.
     process.exit((flag('aide') || flag('help')) ? 0 : 1);
@@ -95,12 +113,56 @@ async function main() {
       console.error(`→ Rapport écrit : ${path.join(dossierSortie, 'rapport.html')} (ouvrable directement dans un navigateur)`);
     }
 
+    if (flag('sarif')) {
+      fs.writeFileSync(path.join(dossierSortie, 'rapport.sarif'), genererSarif({ notation, meta }), 'utf8');
+      console.error(`→ Rapport écrit : ${path.join(dossierSortie, 'rapport.sarif')} (SARIF 2.1.0, pour ingestion CI)`);
+    }
+
     process.exitCode = notation.bloquants.length ? 2 : (notation.verdict === 'CONFORME' ? 0 : 1);
   } finally {
     // La cible clonée est temporaire par construction (mkdtempSync) : rien ne
     // doit en survivre à l'exécution, succès ou erreur confondus.
     if (temporaire) fs.rmSync(racine, { recursive: true, force: true });
   }
+}
+
+/**
+ * Compare deux rapports `--json` déjà générés, sans relancer d'audit — pour
+ * suivre l'effet d'un correctif ou gater une CI sur l'absence de régression.
+ * Quitte le process (ne retourne jamais) : code 2 si des constats nouveaux
+ * sont apparus (utile pour faire échouer une étape CI dessus), sinon 0.
+ */
+function diffRapports(argv) {
+  const i = argv.indexOf('--diff');
+  const ancienChemin = argv[i + 1];
+  const nouveauChemin = argv[i + 2];
+  if (!ancienChemin || !nouveauChemin || ancienChemin.startsWith('--') || nouveauChemin.startsWith('--')) {
+    console.error('Usage : gwaudit --diff <ancien-rapport.json> <nouveau-rapport.json> [--sortie <fichier.md>]');
+    console.error("Les deux fichiers doivent avoir été générés avec l'option --json.");
+    process.exit(1);
+  }
+  const valeur = (nom, def) => { const idx = argv.indexOf(`--${nom}`); return idx >= 0 ? argv[idx + 1] : def; };
+
+  let ancien, nouveau;
+  try {
+    ancien = JSON.parse(fs.readFileSync(path.resolve(ancienChemin), 'utf8'));
+    nouveau = JSON.parse(fs.readFileSync(path.resolve(nouveauChemin), 'utf8'));
+  } catch (e) {
+    console.error(`Erreur de lecture des rapports à comparer : ${e.message}`);
+    process.exit(3);
+  }
+
+  const diff = comparerRapports(ancien, nouveau);
+  const md = genererDiffMarkdown(diff, { ancienChemin, nouveauChemin });
+
+  const sortie = valeur('sortie', null);
+  if (sortie) {
+    fs.writeFileSync(path.resolve(sortie), md, 'utf8');
+    console.error(`→ Comparaison écrite : ${path.resolve(sortie)}`);
+  } else {
+    console.log(md);
+  }
+  process.exit(diff.nouveaux.length ? 2 : 0);
 }
 
 /** Résout la cible en chemin local à auditer, et indique si ce chemin est un clone temporaire à purger après usage. */

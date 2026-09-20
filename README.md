@@ -16,12 +16,28 @@ npm install                                   # dépendances de l'outil
 npx playwright install chromium               # nécessaire pour l'axe D (analyse dynamique)
 ```
 
+### Installation globale (commande `gwaudit` disponible partout)
+
+Depuis une copie clonée du dépôt :
+
+```bash
+npm install
+npm link                                      # crée le lien symbolique global
+gwaudit /chemin/vers/mon-widget               # utilisable depuis n'importe quel dossier
+```
+
+`npm link` s'appuie sur le champ `bin` de `package.json` (déjà présent) :
+aucune configuration supplémentaire n'est nécessaire. Pour retirer le lien :
+`npm unlink -g grist-widget-audit`.
+
 ## Utilisation
 
 ```bash
 node bin/gwaudit.js /chemin/vers/mon-widget
 node bin/gwaudit.js https://github.com/quelquun/grist-widget-exemple
 ```
+
+(ou `gwaudit /chemin/vers/mon-widget` après `npm link`, voir ci-dessus.)
 
 Le rapport est écrit dans `./rapport-<nom-du-widget>/rapport.md`.
 
@@ -30,10 +46,34 @@ Options :
 - `--sans-reseau` : ne consulte pas `npm audit` (fonctionne hors-ligne).
 - `--sortie <dossier>` : change le dossier de sortie.
 - `--json` : écrit aussi `rapport.json`, pour intégration outillée.
+- `--sarif` : écrit aussi `rapport.sarif` (SARIF 2.1.0), pour l'ingestion CI
+  — par exemple `github/codeql-action/upload-sarif` en GitHub Actions, qui
+  affiche alors les constats dans l'onglet Security du dépôt.
+- `--version` : affiche la version de l'outil et quitte.
 
 Le code de sortie reflète le verdict : `0` conforme, `1` conforme sous
 réserve, `2` non conforme (point bloquant), `3` erreur d'exécution de
 l'outil lui-même.
+
+## Comparer deux audits
+
+Pour suivre l'effet d'un correctif, ou faire échouer une étape CI en cas de
+régression, comparer deux rapports `--json` déjà générés (pas besoin de
+relancer l'analyse) :
+
+```bash
+node bin/gwaudit.js /chemin/vers/mon-widget --json --sortie ./avant
+# ... correctifs sur le widget ...
+node bin/gwaudit.js /chemin/vers/mon-widget --json --sortie ./apres
+
+node bin/gwaudit.js --diff ./avant/rapport.json ./apres/rapport.json
+```
+
+Affiche l'évolution du score global et par axe, et liste les constats
+corrigés, nouveaux et persistants. `--sortie <fichier.md>` écrit la
+comparaison dans un fichier au lieu de l'afficher. Le code de sortie est `2`
+si des constats nouveaux sont apparus (utile pour gater une CI dessus),
+sinon `0`.
 
 ## Ce que l'outil vérifie
 
