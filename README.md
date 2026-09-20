@@ -180,6 +180,13 @@ publiquement (plusieurs utilisateurs, code non fiable) demande l'isolation
 que la V2 est censée fournir autour de cette même interface — ne pas la
 lier à une interface réseau publique telle quelle.
 
+Le code (chemins, arrêt du sous-processus au timeout, choix du port) est
+écrit pour être portable, mais ce mode précis n'a pas encore été lancé sur
+une machine Windows réelle avant publication — voir § Windows ci-dessus
+pour le même avertissement sur l'axe D. Si quelque chose s'y comporte
+autrement (port, pare-feu, arrêt de Chromium au bout de 5 minutes), un
+signalement (issue) est bienvenu.
+
 ## Ce que l'outil vérifie
 
 Voir [`docs/METHODOLOGIE.md`](docs/METHODOLOGIE.md) pour le détail des six

@@ -148,7 +148,16 @@ async function lancerInterface(valeur) {
     console.error(`Port invalide : ${valeur('port')}`);
     process.exit(1);
   }
-  const { hote } = await demarrerInterface({ port });
+  let hote;
+  try {
+    ({ hote } = await demarrerInterface({ port }));
+  } catch (e) {
+    if (e?.code === 'EADDRINUSE') {
+      console.error(`Le port ${port} est déjà utilisé — une autre interface gwaudit tourne peut-être déjà. Réessayer avec --port <n>.`);
+      process.exit(1);
+    }
+    throw e;
+  }
   console.error(`→ Interface disponible sur http://${hote}:${port} (Ctrl+C pour arrêter)`);
   await new Promise(() => {}); // le serveur tourne tant que le process vit
 }
