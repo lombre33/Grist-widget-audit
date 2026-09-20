@@ -188,6 +188,74 @@ entièrement remplacer — à éprouver sur le VPS d'Antoine.
   pré-chauffés peut réduire la latence, mais aucun ne doit survivre à un
   second job.
 
+### Proposition concrète pour le VPS d'Antoine (Debian 13)
+
+Antoine a confirmé le 2026-09-20 que le VPS tourne sous **Debian 13
+« trixie »**. Ce qui suit est écrit **de mémoire**, pas vérifié dans cette
+session contre une documentation à jour pour cette version précise : deux
+tentatives de consultation de la documentation officielle ont été bloquées
+côté permissions dans cet environnement, et la première adresse encore
+accessible pointait vers Debian 11 (bullseye), pas trixie — une version
+insuffisamment proche sur ce qui compte ici (noyau, systemd, cgroups) pour
+servir de vérification. Chaque point ci-dessous reste donc **à confirmer
+par Antoine sur sa propre machine**, la seule qui compte réellement :
+
+- **Docker Engine** : installer depuis le dépôt officiel Docker
+  (`download.docker.com/linux/debian`) plutôt que le paquet `docker.io` de
+  Debian — versions plus récentes et correctifs de sécurité plus rapides.
+  *À vérifier sur le VPS* : si `trixie` n'est pas encore listée dans ce
+  dépôt au moment de l'installation, l'entrée `bookworm` est généralement
+  utilisable en attendant (compatibilité glibc/systemd suffisante en
+  pratique pour Docker), mais ça se confirme au moment de l'installation,
+  pas ici.
+- **cgroups v2 et la limite mémoire (constat 10c)** : Debian, depuis
+  plusieurs versions déjà, active cgroups v2 (hiérarchie unifiée) par
+  défaut — ce que confirme `docker info | grep -i cgroup` une fois Docker
+  installé. C'est ce qui referme structurellement 10c : une limite Docker
+  (`mem_limit`/`--memory`) s'appuie sur `memory.max` du cgroup, qui compte
+  la mémoire **résidente** réellement utilisée — pas la mémoire **virtuelle
+  adressée** que compte `ulimit -v` (RLIMIT_AS), et qui est précisément ce
+  qui rend `ulimit -v` inutilisable avec Chromium (constat 10c, ci-dessus).
+  *À vérifier sur le VPS, pas supposé* : lancer le même Chromium dans un
+  conteneur avec `mem_limit: 768m` et confirmer qu'il démarre normalement
+  puis qu'il est bien tué s'il dépasse — le test qui a fait échouer
+  `ulimit -v` refait cette fois dans le bon cadre.
+- **Durcissement du conteneur, par priorité** :
+  1. Ce qui est déjà dans l'esquisse ci-dessous (`cap_drop: ALL`,
+     `no-new-privileges`, rootfs en lecture seule + `tmpfs` borné,
+     `pids_limit`, `mem_limit`, `cpus`) — coût nul, à faire dès le premier
+     conteneur.
+  2. Le profil seccomp par défaut de Docker (actif tant qu'il n'est pas
+     explicitement désactivé) — un profil personnalisé plus restrictif
+     n'est à envisager que si un besoin précis apparaît à l'usage, pas
+     comme prérequis.
+  3. `userns-remap` dans `/etc/docker/daemon.json` sur l'hôte, en
+     défense en profondeur : remappe l'UID root du conteneur vers un UID
+     non privilégié côté VPS, pour qu'une évasion de conteneur n'atterrisse
+     pas root sur la machine. Connu pour ajouter de la friction (montages,
+     certains volumes) — à activer une fois le reste stabilisé, pas dans la
+     première itération, et à valider sur la version de Docker réellement
+     installée.
+  4. Docker rootless complet (dockerd en mode rootless) n'est **pas**
+     recommandé en première itération pour ce cas précis : un seul VPS
+     mono-tenant, où `cap_drop` + `no-new-privileges` + `userns-remap`
+     couvre déjà l'essentiel du gain pour l'effort. Rootless redevient
+     intéressant si le VPS héberge un jour plusieurs services à des
+     niveaux de confiance différents.
+- **Proxy de sortie** (remplace le `image: à-définir` de l'esquisse) : un
+  proxy CONNECT explicite (tinyproxy ou squid), avec une liste blanche par
+  nom d'hôte limitée à `github.com`/`gitlab.com`/`registry.npmjs.org`,
+  consommé via `HTTP_PROXY`/`HTTPS_PROXY` côté `git`/`npm` dans le
+  conteneur d'exécution. Un proxy CONNECT n'a pas besoin de terminer TLS
+  (git et npm ouvrent un tunnel CONNECT puis parlent TLS de bout en bout à
+  travers) donc pas de rupture de certificate pinning ni de MITM à gérer.
+  Le proxy doit résoudre lui-même le DNS du nom demandé et rejeter les
+  plages privées/loopback/lien-local **avant** d'autoriser le `CONNECT`
+  (anti-SSRF, anti-DNS-rebinding), indépendamment de la validation déjà
+  faite côté `gwaudit` — voir plus haut. *À vérifier* : la syntaxe exacte
+  du filtre par domaine de l'outil choisi n'a pas été confirmée dans cette
+  session contre sa documentation actuelle.
+
 Une esquisse de `docker-compose` pour cette zone est dans
 [`docker/docker-compose.v2-execution.yml`](../docker/docker-compose.v2-execution.yml)
 — non testée ici pour la même raison que le reste de `docker/`.
