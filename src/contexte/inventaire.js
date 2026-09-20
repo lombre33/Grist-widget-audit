@@ -75,7 +75,13 @@ function parcourir(racine, dossier, acc, etat) {
     if (e.isDirectory()) { parcourir(racine, abs, acc, etat); continue; }
     if (!e.isFile()) continue;
     if (acc.length >= MAX_FICHIERS) { etat.tronqueFichiers = true; return; }
-    const rel = path.relative(racine, abs);
+    // Normalisé en '/' une fois pour toutes, quelle que soit la plateforme :
+    // `path.relative()` rend le séparateur natif (`\` sous Windows), et
+    // laisser passer cette variation obligerait chaque règle à connaître le
+    // détail (déjà vu deux fois : `estVendorise` ci-dessous, et le motif de
+    // détection des tests dans a-qualite.js). Un seul point de vérité ici
+    // évite d'en rater une troisième en silence.
+    const rel = path.relative(racine, abs).split(path.sep).join('/');
     const ext = path.extname(e.name).toLowerCase();
     let taille = 0;
     try { taille = fs.statSync(abs).size; } catch { continue; }
@@ -113,7 +119,11 @@ function trouverPointsDEntree(racine, fichiers, manifestes) {
   const entrees = new Set();
 
   for (const f of html) {
-    const profondeur = f.chemin.split(path.sep).length - 1;
+    // `f.chemin` est normalisé en '/' (voir parcourir()) : le compte de
+    // segments doit rester cohérent avec cette convention sur toute
+    // plateforme, jamais avec le séparateur natif de celle qui exécute
+    // l'audit.
+    const profondeur = f.chemin.split('/').length - 1;
     const nom = path.basename(f.chemin).toLowerCase();
     if (nom === 'index.html' && profondeur <= 1) entrees.add(f.chemin);
   }
@@ -122,7 +132,10 @@ function trouverPointsDEntree(racine, fichiers, manifestes) {
     for (const w of liste) {
       if (typeof w?.url !== 'string') continue;
       if (/^https?:/i.test(w.url)) continue; // widget hébergé ailleurs : hors surface locale
-      const cible = path.normalize(path.join(path.dirname(m.chemin), w.url)).replace(/^(\.\.[/\\])+/, '');
+      // `path.posix.*`, pas `path.join`/`path.normalize` natifs : ceux-ci
+      // rendent `\` sous Windows même à partir d'entrées en '/', ce qui
+      // romprait la comparaison avec `f.chemin` (normalisé en '/').
+      const cible = path.posix.normalize(path.posix.join(path.posix.dirname(m.chemin), w.url)).replace(/^(\.\.\/)+/, '');
       if (fichiers.some((f) => f.chemin === cible)) entrees.add(cible);
     }
   }
@@ -149,8 +162,9 @@ function calculerSurface(racine, fichiers, entrees) {
 
     for (const ref of referencesSortantes(f)) {
       if (/^(https?:)?\/\//i.test(ref) || ref.startsWith('data:')) continue;
-      const cible = path.normalize(path.join(path.dirname(rel), ref.split(/[?#]/)[0]));
-      for (const candidat of [cible, `${cible}.js`, `${cible}.mjs`, path.join(cible, 'index.js')]) {
+      // `path.posix.*` ici aussi, même raison que dans trouverPointsDEntree().
+      const cible = path.posix.normalize(path.posix.join(path.posix.dirname(rel), ref.split(/[?#]/)[0]));
+      for (const candidat of [cible, `${cible}.js`, `${cible}.mjs`, path.posix.join(cible, 'index.js')]) {
         if (parChemin.has(candidat) && !surface.has(candidat)) file.push(candidat);
       }
     }

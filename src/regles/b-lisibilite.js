@@ -58,7 +58,7 @@ export function analyserNommage(ctx) {
 /** README : présence et couverture des trois points exigés par le guide. */
 export function analyserReadme(ctx) {
   const constats = [];
-  const readme = ctx.fichiers.find((f) => /^readme(\.md|\.txt)?$/i.test(path.basename(f.chemin)) && !f.chemin.includes(path.sep));
+  const readme = ctx.fichiers.find((f) => /^readme(\.md|\.txt)?$/i.test(path.basename(f.chemin)) && !f.chemin.includes('/'));
 
   if (!readme) {
     constats.push(constat({
