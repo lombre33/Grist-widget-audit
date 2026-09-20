@@ -1,19 +1,13 @@
-// Widget de test dont le thread principal boucle indéfiniment dès le
-// chargement — sert à vérifier si le plafond CPU posé sur Chromium pendant
-// l'axe D (ulimit sous Linux/macOS, Job Object sous Windows) arrête
-// réellement un navigateur bloqué, pas seulement s'il s'installe sans
-// erreur. Une boucle sur le thread principal (pas un Worker) bloque
-// l'évènement "load" : `page.goto()` finit par expirer (30s) et gwaudit
-// tente alors de fermer le navigateur — s'il ne répond plus, c'est
-// exactement le cas que le plafond CPU est censé couvrir.
+// Widget de test qui charge normalement (page.goto() réussit tout de
+// suite, contrairement à une boucle bloquante sur le thread principal) puis
+// sature tous les cœurs CPU disponibles pendant 2 minutes via des Web
+// Workers, une fois la page rendue — sert à observer ce qui borne
+// réellement l'exécution de l'axe D dans ce cas (délai JS de 45s, puis
+// éventuellement le plafond CPU natif), et si des processus survivent
+// après la fin de l'audit.
 //
 // Usage : node scripts/creer-widget-cpu.mjs
 // Puis  : node bin/gwaudit.js widget-cpu-test --sortie ./test-cpu --json
-//
-// Résultat attendu si le plafond fonctionne : la commande finit par se
-// terminer d'elle-même après un peu plus d'une minute (le plafond a tué
-// le processus bloqué). Si elle ne se termine jamais (Ctrl+C au bout de
-// 2-3 minutes), le plafond n'a pas arrêté le navigateur bloqué.
 
 import fs from 'node:fs';
 
@@ -21,7 +15,12 @@ const html = `<!DOCTYPE html>
 <html>
 <body>
 <script>
-while (true) { Math.sqrt(Math.random()); }
+const nb = navigator.hardwareConcurrency || 4;
+for (let i = 0; i < nb; i++) {
+  const code = "const fin = Date.now() + 120000; while (Date.now() < fin) { Math.sqrt(Math.random()); }";
+  const blob = new Blob([code], { type: "application/javascript" });
+  new Worker(URL.createObjectURL(blob));
+}
 </script>
 </body>
 </html>
@@ -29,4 +28,4 @@ while (true) { Math.sqrt(Math.random()); }
 
 fs.mkdirSync('widget-cpu-test', { recursive: true });
 fs.writeFileSync('widget-cpu-test/index.html', html);
-console.log('Widget créé : widget-cpu-test/index.html (boucle indéfiniment dès le chargement)');
+console.log('Widget créé : widget-cpu-test/index.html (charge normalement, puis sature tous les cœurs pendant 2 minutes)');
