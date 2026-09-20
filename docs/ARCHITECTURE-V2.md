@@ -45,40 +45,27 @@ ce qui suit est la dernière, à jour.
 | 9 | Aucun plafond de fichiers/octets cumulés pendant l'inventaire | `src/contexte/inventaire.js` | `MAX_FICHIERS` (20 000) et `MAX_OCTETS_LUS_CUMULES` (200 Mo), avec troncature explicite plutôt que crash, signalée dans `ctx.tronque`. |
 | 10a | Aucun timeout global sur l'axe D après le chargement initial | `src/runtime/dynamique.js` | Tout le scénario (chargement + évaluations + a11y) est couru contre `DELAI_GLOBAL_AXE_D_MS` (45 s par défaut) via `avecDelai()`, qui lève le constat `D-TIMEOUT-01` en cas de dépassement. |
 | 10b | Aucune limite de temps CPU sur le processus Chromium | `src/runtime/dynamique.js` | Chromium est lancé via un script qui pose `ulimit -t` (RLIMIT_CPU) avant un `exec` (donc sans changer de PID : les processus que Chromium fait naître — zygote, rendu, GPU — héritent la même limite dès leur création), fixée à `DELAI_GLOBAL_AXE_D_MS` + 30 s. **Mesuré le 2026-09-20 (commit `e99aba0`) : ce plafond n'a structurellement pas l'occasion de s'exercer en usage réel.** Un widget qui bloque le thread principal dès le chargement fait expirer le timeout propre de Playwright (30 s) et ferme Chromium en ~1 s, bien avant les 75 s du plafond ; un widget qui charge normalement puis sature tous les cœurs en arrière-plan (Web Workers) ne retarde aucune étape qui gouverne la durée du scénario — l'audit se termine en quelques secondes, sans processus survivant. Les deux formes de widget hostile testées : dans aucune, le plafond CPU n'est le mécanisme qui a mis fin à l'exécution. **Reste un filet de sécurité en profondeur pour un cas non encore rencontré, pas la protection qui agit en pratique** — même verdict que pour la mémoire (constat 10c) : la vraie limite CPU par job en V2 viendra du conteneur (cgroups v2 via Docker, §4), pas d'un réglage de lancement dans le process. |
+| 5 | WebSocket hors de portée de `route()` — aucune trace dans le rapport, passe-droit `127.0.0.1`/`localhost` sans vérification d'origine | `src/runtime/dynamique.js` | **Requalifié en deux temps le 2026-09-20.** D'abord vérifié à l'exécution (un vrai Chromium avec `--host-resolver-rules`, face à un vrai écouteur TCP) : cette couche bloquait déjà toute cible externe réelle, nom d'hôte ou IP littérale — contrairement à l'hypothèse initiale par analogie avec WebRTC (constat 6), dont le sous-système ICE/UDP séparé ne consulte pas le même résolveur. Restait un trou plus étroit : le passe-droit Chromium vers `127.0.0.1`/`localhost` (nécessaire pour le harnais) n'a pas de restriction de port, et la vérification d'origine exacte (constat 8) n'existe que dans `context.route()` — aveugle à WebSocket. Fermé au commit `670df9d` : `contexte.routeWebSocket('**/*', ...)` enregistre chaque tentative dans `brut.requetes` (remontée en `D-RESEAU-01`, même pipeline que le HTTP) et ferme la connexion sans jamais appeler `connectToServer()` — une route WebSocket enregistrée ne se connecte par défaut jamais au serveur réel, donc ce seul geste neutralise n'importe quelle destination sans exception, `127.0.0.1` compris (le harnais RPC parle par `postMessage`, jamais par WebSocket : aucun besoin de passe-droit ici, contrairement au HTTP). Non-régression prouvée par un test qui écoute réellement sur un port local et vérifie qu'aucune connexion n'y arrive (`tests/dynamique-websocket.test.mjs`), exécuté ici avec succès. |
 | 12 | `git clone` sans timeout, dossier temporaire jamais supprimé | `bin/gwaudit.js` | `timeout: 120_000` sur le clone ; `main()` dans un `try/finally` qui purge systématiquement. |
 
 ### Atténués, mais pas structurellement fermés
 
-Ces trois-là gardent la même limite qu'avant au niveau de l'API Playwright
-(`context.route()` ne les voit toujours pas), mais une nouvelle couche
+Ces deux-là gardent la même limite qu'avant au niveau de l'API Playwright
+(`context.route()` ne les voit toujours pas), et une nouvelle couche
 ajoutée en même temps que le reste réduit le risque réel en pratique :
 `chromium.launch()` reçoit désormais `--host-resolver-rules=MAP *
 0.0.0.0,EXCLUDE 127.0.0.1,EXCLUDE localhost` et `--proxy-server=direct://`
 (avec les variables `*_PROXY` retirées de l'environnement du process
 Chromium), qui coupent la résolution de tout nom de domaine réel — y
-compris pour du trafic que `route()` ne voit pas.
-
-**Vérifié à l'exécution le 2026-09-20** (un vrai Chromium lancé avec ces
-réglages, face à un vrai écouteur TCP, `tests` non commités car jetables) :
-pour WebSocket, cette couche ne se contente pas de couper les noms d'hôte —
-elle bloque tout autant une cible désignée par adresse IP littérale, testée
-à la fois sur une IP en plage loopback (`127.0.0.3`, volontairement hors de
-`EXCLUDE 127.0.0.1`) et sur l'adresse réelle de l'interface réseau du
-conteneur (hors `127.0.0.0/8`) : aucune des deux ne reçoit la connexion TCP.
-L'hypothèse de départ — un même angle mort IP-littérale que WebRTC, par
-analogie avec le constat 6 — est donc fausse pour WebSocket. La raison tient
-à l'architecture de Chromium : une connexion WebSocket passe par le même
-résolveur réseau (`net::HostResolver`) que le reste du trafic HTTP(S), où
-`MAP *` intercepte la chaîne demandée qu'elle soit un nom ou une IP ; WebRTC
-utilise un sous-système ICE/UDP séparé qui ne consulte pas ce résolveur pour
-une candidate ICE en IP littérale, d'où son contournement documenté au
-constat 6. Deux constats qui se ressemblaient au 2026-09-19 (« hors de
-portée de `route()` ») se distinguent donc nettement à l'exécution.
+compris pour du trafic que `route()` ne voit pas. Le WebSocket (constat 5,
+ci-dessus) est passé en corrigé après vérification empirique de cette
+couche puis fermeture applicative du passe-droit local restant ; WebRTC
+reste structurellement différent, son sous-système ICE/UDP séparé ne
+consultant pas ce même résolveur pour une cible IP littérale.
 
 | # | Constat | Ce que la nouvelle couche change | Ce qui reste ouvert |
 |---|---|---|---|
-| 5 | WebSocket hors de portée de `route()` | **Vérifié à l'exécution (2026-09-20)** : bloqué que la cible soit un nom d'hôte ou une adresse IP littérale (loopback ou interface réelle) — voir le paragraphe ci-dessus. | Un angle mort plus étroit et propre à ce mécanisme : le passe-droit vers `127.0.0.1`/`localhost` n'a pas de restriction de port au niveau de Chromium, alors que la comparaison d'origine exacte (protocole+hôte+port, constat 8) n'existe que dans `contexte.route()` — aveugle à WebSocket. Un widget pourrait donc ouvrir un WebSocket vers `127.0.0.1:<un autre port>` et atteindre un autre service local du même conteneur, sans que l'origine exacte du harnais ne soit vérifiée pour ce trafic-là. Confiné au même hôte/conteneur, pas une exfiltration vers un tiers réel — nettement moins sévère que le trou d'origine. |
-| 6 | WebRTC hors de portée de `route()` | Idem pour un serveur STUN/TURN désigné par nom d'hôte | Une cible WebRTC désignée par adresse IP littérale contourne ce blocage : son sous-système ICE/UDP ne passe pas par `net::HostResolver`, donc aucune règle de résolution ne l'arrête — structurellement différent de WebSocket (ci-dessus), pas seulement pas encore testé |
+| 6 | WebRTC hors de portée de `route()` | Bloque un serveur STUN/TURN désigné par nom d'hôte | Une cible WebRTC désignée par adresse IP littérale contourne ce blocage : son sous-système ICE/UDP ne passe pas par `net::HostResolver`, donc aucune règle de résolution ne l'arrête — structurellement différent de WebSocket (constat 5, désormais corrigé), pas seulement pas encore testé |
 | 7 | `serviceWorkers` laissé à `allow` | Les requêtes d'un Service Worker vers un nom d'hôte réel échouent aussi désormais | L'enregistrement du Service Worker lui-même reste possible (`newContext()` ne passe toujours pas `serviceWorkers: 'block'`) |
 
 ### Encore ouverts
@@ -89,7 +76,7 @@ portée de `route()` ») se distinguent donc nettement à l'exécution.
 | 11 | Aucune limite de concurrence, pas de file d'attente | — | N'a pas de sens pour un outil en ligne de commande (un `gwaudit` = un process séquentiel). Propre à l'orchestration V2 (§5), qui n'existe pas encore. |
 
 Sur les 12 écarts distincts d'origine (14 en comptant 10a/10b/10c
-séparément, plus précis que de les garder groupés) : **9 sont corrigés, 3
+séparément, plus précis que de les garder groupés) : **10 sont corrigés, 2
 sont atténués sans être structurellement fermés, 2 restent ouverts** — et
 cette fois les deux qui restent ouverts le sont pour une bonne raison
 documentée dans le code, pas par défaut de temps : la concurrence (11) n'a
@@ -110,8 +97,8 @@ ci-dessus.
 l'analyse statique par AST (`acorn`), qui ne fait qu'analyser du texte sans
 jamais l'exécuter — aucun de ces axes n'ouvre de surface nouvelle en V2. Le
 point dur restant est concentré dans l'axe D (navigateur : limite mémoire,
-canaux WebSocket/WebRTC/Service Worker) et dans l'orchestration
-multi-utilisateurs (concurrence) que seule la V2 introduira.
+canaux WebRTC/Service Worker) et dans l'orchestration multi-utilisateurs
+(concurrence) que seule la V2 introduira.
 
 ## 2. Principe : deux zones de confiance étanches
 
@@ -141,6 +128,10 @@ nominale :
 - Aucun secret, jeton ou identifiant du site (base de données, mailer,
   API…) n'est accessible depuis la zone d'exécution.
 - La zone d'exécution ne conserve rien après un job : voir §4.
+- Le conteneur d'un job ne partage jamais l'espace de noms réseau d'un
+  autre processus ou conteneur (pas de `network_mode: host` ni équivalent)
+  — c'est cette règle, pas une propriété de `gwaudit`, qui confine
+  `127.0.0.1`/`localhost` au harnais de ce job et à rien d'autre. Voir §4.
 
 ## 3. Cycle de vie d'un audit
 
@@ -219,6 +210,31 @@ entièrement remplacer — à éprouver sur le VPS d'Antoine.
   de destinations autorisées consultée requête par requête, mais un refus
   par défaut de toute résolution de nom réel à l'échelle du navigateur —
   vérifié à l'exécution pour WebSocket au constat 5.
+- **Ce que devient `127.0.0.1`/`localhost` en conteneur, une fois le trou
+  WebSocket fermé côté V1 (`670df9d`, §1 constat 5).** Le trou lui-même
+  n'existe plus : `routeWebSocket('**/*', ...)` neutralise désormais toute
+  destination sans exception, y compris `127.0.0.1`. Reste une question
+  différente, posée le 2026-09-20 après cette fermeture : le passe-droit
+  Chromium `EXCLUDE 127.0.0.1,EXCLUDE localhost` (nécessaire pour le HTTP
+  du harnais, voir plus haut) reste-t-il, en exécution conteneurisée, aussi
+  étroit qu'il l'est sur un poste de développeur — ou une boucle locale
+  partagée entre services (l'`egress-proxy` de l'esquisse, un futur autre
+  job) l'élargit-elle ? Non : Docker isole par défaut la boucle locale de
+  chaque conteneur, tant qu'aucun ne tourne en `network_mode: host` ni ne
+  partage autrement son espace de noms réseau (règle ajoutée au §2) — ce
+  que l'esquisse (`docker-compose.v2-execution.yml`) ne fait déjà pas.
+  `127.0.0.1` vu depuis Chromium dans `execution-audit` ne peut donc
+  atteindre ni `egress-proxy` (un service Compose distinct, joignable
+  seulement par nom sur le réseau), ni un autre conteneur de job, ni le VPS
+  hôte : seulement ce qui tourne **dans ce même conteneur**, et
+  `src/runtime/serveur.js` confirme que le harnais s'y limite déjà
+  (`serveur.listen(0, '127.0.0.1', ...)`, dans le même process `gwaudit`
+  que Chromium). **Le risque n'est donc pas plus sérieux en V2 : il y est
+  structurellement plus étroit qu'en V1** — un poste de développeur héberge
+  souvent d'autres services en boucle locale (base de données, autre
+  serveur de dev…) qu'un widget hostile pourrait chercher à atteindre, alors
+  qu'un conteneur de job ne fait tourner que ce job et rien d'autre à
+  portée de `127.0.0.1`.
 - **Réseau pour le clonage git et `npm audit`** : ces deux étapes ont
   besoin d'une vraie sortie réseau. La faire passer par un **proxy de
   sortie à liste blanche** (GitHub, GitLab, `registry.npmjs.org`…) qui
