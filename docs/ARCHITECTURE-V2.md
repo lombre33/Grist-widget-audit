@@ -58,10 +58,27 @@ ajoutée en même temps que le reste réduit le risque réel en pratique :
 Chromium), qui coupent la résolution de tout nom de domaine réel — y
 compris pour du trafic que `route()` ne voit pas.
 
+**Vérifié à l'exécution le 2026-09-20** (un vrai Chromium lancé avec ces
+réglages, face à un vrai écouteur TCP, `tests` non commités car jetables) :
+pour WebSocket, cette couche ne se contente pas de couper les noms d'hôte —
+elle bloque tout autant une cible désignée par adresse IP littérale, testée
+à la fois sur une IP en plage loopback (`127.0.0.3`, volontairement hors de
+`EXCLUDE 127.0.0.1`) et sur l'adresse réelle de l'interface réseau du
+conteneur (hors `127.0.0.0/8`) : aucune des deux ne reçoit la connexion TCP.
+L'hypothèse de départ — un même angle mort IP-littérale que WebRTC, par
+analogie avec le constat 6 — est donc fausse pour WebSocket. La raison tient
+à l'architecture de Chromium : une connexion WebSocket passe par le même
+résolveur réseau (`net::HostResolver`) que le reste du trafic HTTP(S), où
+`MAP *` intercepte la chaîne demandée qu'elle soit un nom ou une IP ; WebRTC
+utilise un sous-système ICE/UDP séparé qui ne consulte pas ce résolveur pour
+une candidate ICE en IP littérale, d'où son contournement documenté au
+constat 6. Deux constats qui se ressemblaient au 2026-09-19 (« hors de
+portée de `route()` ») se distinguent donc nettement à l'exécution.
+
 | # | Constat | Ce que la nouvelle couche change | Ce qui reste ouvert |
 |---|---|---|---|
-| 5 | WebSocket hors de portée de `route()` | Une connexion vers un nom d'hôte réel échoue désormais (résolution DNS coupée) | Aucune protection dédiée si Playwright ajoute un jour `routeWebSocket()` au harnais — repose entièrement sur le blocage réseau |
-| 6 | WebRTC hors de portée de `route()` | Idem pour un serveur STUN/TURN désigné par nom d'hôte | Une cible WebRTC désignée par adresse IP littérale contourne ce blocage : aucune politique Chromium ne désactive WebRTC lui-même |
+| 5 | WebSocket hors de portée de `route()` | **Vérifié à l'exécution (2026-09-20)** : bloqué que la cible soit un nom d'hôte ou une adresse IP littérale (loopback ou interface réelle) — voir le paragraphe ci-dessus. | Un angle mort plus étroit et propre à ce mécanisme : le passe-droit vers `127.0.0.1`/`localhost` n'a pas de restriction de port au niveau de Chromium, alors que la comparaison d'origine exacte (protocole+hôte+port, constat 8) n'existe que dans `contexte.route()` — aveugle à WebSocket. Un widget pourrait donc ouvrir un WebSocket vers `127.0.0.1:<un autre port>` et atteindre un autre service local du même conteneur, sans que l'origine exacte du harnais ne soit vérifiée pour ce trafic-là. Confiné au même hôte/conteneur, pas une exfiltration vers un tiers réel — nettement moins sévère que le trou d'origine. |
+| 6 | WebRTC hors de portée de `route()` | Idem pour un serveur STUN/TURN désigné par nom d'hôte | Une cible WebRTC désignée par adresse IP littérale contourne ce blocage : son sous-système ICE/UDP ne passe pas par `net::HostResolver`, donc aucune règle de résolution ne l'arrête — structurellement différent de WebSocket (ci-dessus), pas seulement pas encore testé |
 | 7 | `serviceWorkers` laissé à `allow` | Les requêtes d'un Service Worker vers un nom d'hôte réel échouent aussi désormais | L'enregistrement du Service Worker lui-même reste possible (`newContext()` ne passe toujours pas `serviceWorkers: 'block'`) |
 
 ### Encore ouverts
@@ -186,6 +203,22 @@ entièrement remplacer — à éprouver sur le VPS d'Antoine.
   ci-dessus — la revue a montré trois angles morts différents de `route()`
   (WebSocket, WebRTC, Service Worker) : la défense doit exister aux deux
   niveaux.
+- **Ce n'est pas le proxy CONNECT ci-dessous qui ferme le trou
+  WebSocket.** Question posée le 2026-09-20 par l'étude d'exhaustivité, par
+  analogie avec la fermeture de la divergence de parseur d'URL (constat 1,
+  §1) : le proxy CONNECT en liste blanche décrit au point suivant est-il
+  structurellement immunisé contre le trou WebSocket de `route()` (constat
+  5, §1), comme il l'est déjà contre cette divergence de parseur ? Non — les
+  deux n'ont rien à voir. Ce proxy n'existe que pour `git clone` et `npm
+  audit`, deux étapes qui ne passent jamais par un navigateur : le trafic
+  du navigateur pendant l'axe D ne le traverse à aucun moment, qu'il
+  s'agisse de HTTP(S) intercepté par `route()` ou de WebSocket qui y
+  échappe. C'est le mécanisme du point précédent
+  (`--host-resolver-rules` + `--proxy-server=direct://`) qui protège ce
+  trafic-là, et il est structurellement différent : pas une liste blanche
+  de destinations autorisées consultée requête par requête, mais un refus
+  par défaut de toute résolution de nom réel à l'échelle du navigateur —
+  vérifié à l'exécution pour WebSocket au constat 5.
 - **Réseau pour le clonage git et `npm audit`** : ces deux étapes ont
   besoin d'une vraie sortie réseau. La faire passer par un **proxy de
   sortie à liste blanche** (GitHub, GitLab, `registry.npmjs.org`…) qui
