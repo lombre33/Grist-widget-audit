@@ -19,6 +19,9 @@
  *   --scenario <fichier.json>  remplace les données de test de l'axe D par un
  *                        document personnalisé (voir README § Personnaliser
  *                        le scénario de l'axe D) ; ignoré si invalide
+ *   --interface          lance l'interface web locale (lien du dépôt → suivi
+ *                        en direct → page d'audit) au lieu d'un audit direct
+ *   --port <n>            port de l'interface web (défaut : 4317)
  */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -36,6 +39,7 @@ import { genererHtml } from '../src/rapport/html.js';
 import { genererSarif } from '../src/rapport/sarif.js';
 import { comparerRapports, genererDiffMarkdown } from '../src/rapport/diff.js';
 import { validerScenario } from '../src/runtime/scenario.js';
+import { demarrerInterface } from '../src/interface/serveur.js';
 
 const RACINE_OUTIL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION = JSON.parse(fs.readFileSync(path.join(RACINE_OUTIL, 'package.json'), 'utf8')).version;
@@ -56,9 +60,15 @@ async function main() {
     return;
   }
 
+  if (flag('interface')) {
+    await lancerInterface(valeur);
+    return; // la promesse ne se résout qu'à l'arrêt du serveur (Ctrl+C)
+  }
+
   if (!cible || flag('aide') || flag('help')) {
     console.log(`Usage : gwaudit <chemin-ou-url-du-widget> [--sans-dynamique] [--sans-reseau] [--sans-html] [--sarif] [--sortie <dossier>] [--json]`);
     console.log(`        gwaudit --diff <ancien-rapport.json> <nouveau-rapport.json> [--sortie <fichier.md>]`);
+    console.log(`        gwaudit --interface [--port <n>]`);
     console.log(`        gwaudit --version`);
     // --aide/--help est une réussite (code 0) même sans cible : ce n'est une
     // erreur d'usage (code 1) que si ni l'un ni l'autre n'a été demandé.
@@ -129,6 +139,18 @@ async function main() {
     // doit en survivre à l'exécution, succès ou erreur confondus.
     if (temporaire) fs.rmSync(racine, { recursive: true, force: true });
   }
+}
+
+/** Démarre l'interface web locale et attend indéfiniment (jusqu'à Ctrl+C). */
+async function lancerInterface(valeur) {
+  const port = Number(valeur('port', 4317));
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    console.error(`Port invalide : ${valeur('port')}`);
+    process.exit(1);
+  }
+  const { hote } = await demarrerInterface({ port });
+  console.error(`→ Interface disponible sur http://${hote}:${port} (Ctrl+C pour arrêter)`);
+  await new Promise(() => {}); // le serveur tourne tant que le process vit
 }
 
 /**

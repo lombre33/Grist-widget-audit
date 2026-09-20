@@ -12,6 +12,7 @@
   },
   "scripts": {
     "audit": "node bin/gwaudit.js",
+    "interface": "node bin/gwaudit.js --interface",
     "test": "node --test tests/*.test.mjs"
   },
   "dependencies": {

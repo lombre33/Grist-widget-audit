@@ -138,6 +138,32 @@ La sonde qui prouve qu'une valeur de cellule peut s'exécuter comme du code
 soit le scénario fourni : la personnaliser sert à tester avec des données
 représentatives, pas à retirer cette vérification.
 
+## Interface web locale
+
+`--interface` lance une interface minimale au lieu d'un audit direct : un
+formulaire (lien du dépôt à auditer), le suivi en direct de l'audit, puis
+la page de rapport une fois terminé.
+
+```bash
+node bin/gwaudit.js --interface          # http://127.0.0.1:4317
+node bin/gwaudit.js --interface --port 8080
+```
+
+Cette interface ne réimplémente rien : elle pilote `gwaudit` lui-même en
+sous-processus et affiche ce qu'il imprime déjà (mêmes rapports, mêmes
+codes de sortie). C'est le même code, quel que soit l'endroit où il
+tourne (poste local, VPS) — voir le fil de discussion sur les versions du
+dépôt.
+
+Pensée pour un usage local, mono-utilisateur, sans authentification : elle
+n'écoute que sur `127.0.0.1` par défaut, un audit à la fois, et seuls les
+liens de dépôt (`https://` ou `git@`) sont acceptés — jamais un chemin
+local, pour qu'un formulaire ne puisse jamais faire auditer (donc lire) un
+dossier arbitraire de la machine qui l'héberge. Un usage hébergé et exposé
+publiquement (plusieurs utilisateurs, code non fiable) demande l'isolation
+que la V2 est censée fournir autour de cette même interface — ne pas la
+lier à une interface réseau publique telle quelle.
+
 ## Ce que l'outil vérifie
 
 Voir [`docs/METHODOLOGIE.md`](docs/METHODOLOGIE.md) pour le détail des six
