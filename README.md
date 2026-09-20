@@ -11,10 +11,38 @@ en quelques secondes sur un widget en cours de développement.
 
 ## Installation
 
+Prérequis : [Node.js](https://nodejs.org/) 20 ou plus récent, et `git`
+disponible dans le `PATH` (utilisé pour auditer une URL de dépôt et pour
+lier chaque rapport au commit audité).
+
 ```bash
 npm install                                   # dépendances de l'outil
 npx playwright install chromium               # nécessaire pour l'axe D (analyse dynamique)
 ```
+
+`npm install` ne télécharge lui-même aucun navigateur (Playwright n'a plus
+de script d'installation automatique) : la seconde commande est donc bien
+nécessaire, et télécharge environ 150 à 300 Mio depuis les serveurs de
+Playwright — prévoir un accès réseau à ce moment précis, y compris derrière
+un proxy d'entreprise (voir plus bas ce qui, une fois ce téléchargement
+fait, ne dépend plus du réseau). Si cette étape est ignorée ou échoue,
+`gwaudit` ne plante pas : l'axe D est signalé comme non exécuté dans le
+rapport (constat `D-INDISPONIBLE`), les cinq autres axes s'exécutent
+normalement. Utiliser `--sans-dynamique` pour l'ignorer volontairement.
+
+### Windows
+
+L'outil tourne sous Windows (10/11), avec une différence : la protection
+qui plafonne le temps CPU que peut consommer Chromium pendant l'axe D
+repose sous Linux/macOS sur `ulimit`, absent de Windows — elle y est donc
+réimplémentée avec l'équivalent natif (Job Objects Win32, via un script
+PowerShell généré à la volée ; PowerShell 5.1, présent par défaut sur
+Windows 10/11, suffit). Ce mécanisme n'a pas pu être testé sur une machine
+Windows réelle avant publication : si le message `⚠ Plafond CPU inactif
+pour ce lancement de Chromium (Windows)` apparaît dans la sortie, cette
+protection précise n'a pas pu s'activer pour cette exécution (l'audit
+continue normalement, sans ce filet) — un signalement (issue) est
+bienvenu dans ce cas.
 
 ## Utilisation
 

@@ -28,6 +28,7 @@
  */
 import path from 'node:path';
 import fs from 'node:fs';
+import { execFileSync } from 'node:child_process';
 import * as esbuild from 'esbuild';
 import { demarrerServeur } from './serveur.js';
 import { constat } from '../moteur/modele.js';
@@ -104,22 +105,47 @@ function envChromiumSansProxy() {
 }
 
 /**
- * Chemin réel du binaire Chromium à lancer : celui préinstallé de
- * l'environnement s'il existe (évite un téléchargement réseau si la
- * version de Playwright installée localement en attend une révision
- * différente), sinon celui que Playwright installerait par défaut.
+ * Chemin réel du binaire Chromium à lancer : celui géré par Playwright
+ * (`npx playwright install chromium`, voir README) par défaut.
+ *
+ * `GWAUDIT_CHROMIUM_PATH` permet de pointer explicitement vers un Chromium
+ * déjà présent sur la machine (utile dans un environnement d'exécution qui
+ * en fournit un et n'a pas d'accès réseau vers les serveurs de Playwright).
+ * Ce n'était jusqu'ici pas un réglage mais un chemin d'un environnement de
+ * développement précis écrit en dur dans le code (`/opt/pw-browsers/…`) —
+ * absent, donc sans effet, sur la machine de tout autre utilisateur du
+ * dépôt, mais qui, là où il existe, faisait tourner l'axe D sur un
+ * Chromium potentiellement très différent de celui que Playwright aurait
+ * réellement installé (constaté : Chromium 141 présent contre Chrome for
+ * Testing 153 attendu par la version de Playwright fixée dans
+ * `package-lock.json`), sans que rien ne le signale.
  */
 function cheminChromium(chromium) {
-  const preinstalle = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
-  return fs.existsSync(preinstalle) ? preinstalle : chromium.executablePath();
+  const impose = process.env.GWAUDIT_CHROMIUM_PATH;
+  if (impose) {
+    if (!fs.existsSync(impose)) {
+      throw new Error(`GWAUDIT_CHROMIUM_PATH="${impose}" ne pointe vers aucun fichier.`);
+    }
+    return impose;
+  }
+  return chromium.executablePath();
+}
+
+/** Plafond de temps CPU appliqué à Chromium — même valeur sur les deux plateformes (voir les deux fonctions ci-dessous). */
+function limiteCpuSecondes() {
+  return Math.ceil(DELAI_GLOBAL_AXE_D_MS / 1000) + 30;
 }
 
 /**
- * Enveloppe le binaire Chromium dans un script qui pose un plafond de temps
- * CPU (`ulimit -t`, RLIMIT_CPU) avant de l'exécuter avec `exec` — donc sans
- * changer de PID, si bien que tous les processus que Chromium fait naître
- * ensuite (zygote, rendu, GPU, réseau…) héritent la même limite dès leur
- * création, pas seulement le process principal.
+ * Enveloppe le binaire Chromium dans un script `/bin/sh` qui pose un
+ * plafond de temps CPU (`ulimit -t`, RLIMIT_CPU) avant de l'exécuter avec
+ * `exec` — donc sans changer de PID, si bien que tous les processus que
+ * Chromium fait naître ensuite (zygote, rendu, GPU, réseau…) héritent la
+ * même limite dès leur création, pas seulement le process principal.
+ *
+ * POSIX uniquement (Linux, macOS) : `ulimit` est une commande interne de
+ * `/bin/sh`, absente de Windows — voir `imposerPlafondCpuWindows()` pour
+ * l'équivalent utilisé là-bas.
  *
  * Une limite de MÉMOIRE (`ulimit -v`, RLIMIT_AS) a été essayée et écartée :
  * un renderer Chromium réserve, dès son démarrage normal, un espace
@@ -140,14 +166,91 @@ function cheminChromium(chromium) {
  * filet complémentaire, pas un substitut.
  */
 function construireLanceurChromium(dossierTravail, cheminReel) {
-  const limiteCpuSecondes = Math.ceil(DELAI_GLOBAL_AXE_D_MS / 1000) + 30;
   const lanceur = path.join(dossierTravail, 'lancer-chromium.sh');
   fs.writeFileSync(
     lanceur,
-    `#!/bin/sh\nulimit -t ${limiteCpuSecondes} 2>/dev/null\nexec "${cheminReel}" "$@"\n`,
+    `#!/bin/sh\nulimit -t ${limiteCpuSecondes()} 2>/dev/null\nexec "${cheminReel}" "$@"\n`,
     { mode: 0o755 },
   );
   return lanceur;
+}
+
+/**
+ * Script PowerShell (Windows PowerShell 5.1, présent par défaut sur
+ * Windows 10/11 — pas besoin de PowerShell 7) qui pose, via l'API Win32
+ * des Job Objects, un plafond de temps CPU cumulé (utilisateur, toutes les
+ * générations de processus confondues) sur un process déjà démarré, dont
+ * on ne connaît que le PID. Windows applique lui-même la coupure au
+ * dépassement (tous les processus du job sont terminés) : ce script ne
+ * fait qu'installer le plafond puis se termine, il n'a pas besoin de
+ * rester actif pour que la limite continue à s'appliquer.
+ *
+ * Reçoit le PID en paramètre plutôt que de lancer Chromium lui-même : sur
+ * Windows, `executablePath` doit être un exécutable natif (`CreateProcess`
+ * n'interprète pas de shebang comme `/bin/sh` le fait), donc pas moyen d'y
+ * glisser un script transparent comme le fait `construireLanceurChromium`
+ * ci-dessus. Le contournement : Chromium est lancé normalement via
+ * `chromium.launchServer()` (qui, à la différence de `chromium.launch()`,
+ * expose le process réel et son PID), puis ce plafond lui est appliqué
+ * après coup, avant de s'y connecter en client avec `chromium.connect()`.
+ *
+ * Non exécuté sur une vraie machine Windows depuis cet environnement de
+ * développement (Linux) — voir le README, section Windows.
+ */
+const SCRIPT_PLAFOND_CPU_WINDOWS = `
+param([int]$ProcessId, [double]$LimiteSecondes)
+$ErrorActionPreference = 'Stop'
+Add-Type -Language CSharp -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public class GwauditPlafondCpu {
+  [StructLayout(LayoutKind.Sequential)]
+  public struct JOBOBJECT_BASIC_LIMIT_INFORMATION {
+    public long PerProcessUserTimeLimit;
+    public long PerJobUserTimeLimit;
+    public uint LimitFlags;
+    public UIntPtr MinimumWorkingSetSize;
+    public UIntPtr MaximumWorkingSetSize;
+    public uint ActiveProcessLimit;
+    public UIntPtr Affinity;
+    public uint PriorityClass;
+    public uint SchedulingClass;
+  }
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern IntPtr CreateJobObject(IntPtr lpJobAttributes, string lpName);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern bool SetInformationJobObject(IntPtr hJob, int JobObjectInfoClass, ref JOBOBJECT_BASIC_LIMIT_INFORMATION lpJobObjectInfo, uint cbJobObjectInfoLength);
+  [DllImport("kernel32.dll", SetLastError = true)]
+  public static extern bool AssignProcessToJobObject(IntPtr hJob, IntPtr hProcess);
+}
+"@
+# JOB_OBJECT_LIMIT_JOB_TIME = 0x4 : plafond cumulé (PerJobUserTimeLimit),
+# en unités de 100 nanosecondes, sur tout le job — pas seulement le process
+# principal : les processus enfants restent dans le même job par défaut.
+$job = [GwauditPlafondCpu]::CreateJobObject([IntPtr]::Zero, $null)
+if ($job -eq [IntPtr]::Zero) { throw "CreateJobObject a échoué" }
+$info = New-Object GwauditPlafondCpu+JOBOBJECT_BASIC_LIMIT_INFORMATION
+$info.PerJobUserTimeLimit = [long]($LimiteSecondes * 10000000)
+$info.LimitFlags = 0x4
+$taille = [System.Runtime.InteropServices.Marshal]::SizeOf($info)
+if (-not [GwauditPlafondCpu]::SetInformationJobObject($job, 2, [ref]$info, $taille)) { throw "SetInformationJobObject a échoué" }
+$proc = Get-Process -Id $ProcessId
+if (-not [GwauditPlafondCpu]::AssignProcessToJobObject($job, $proc.Handle)) { throw "AssignProcessToJobObject a échoué" }
+`.trim();
+
+/**
+ * Applique le plafond CPU ci-dessus à un process Windows déjà démarré.
+ * Ne lève jamais : un plafond de sécurité qui manque ne doit pas empêcher
+ * l'audit de tourner, mais son échec doit être visible (voir l'appelant),
+ * pas silencieux.
+ */
+function imposerPlafondCpuWindows(dossierTravail, pid, secondes) {
+  const scriptPath = path.join(dossierTravail, 'plafond-cpu-windows.ps1');
+  fs.writeFileSync(scriptPath, SCRIPT_PLAFOND_CPU_WINDOWS, 'utf8');
+  execFileSync('powershell.exe', [
+    '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass',
+    '-File', scriptPath, '-ProcessId', String(pid), '-LimiteSecondes', String(secondes),
+  ], { stdio: ['ignore', 'ignore', 'pipe'], timeout: 15_000 });
 }
 
 /** Document de test minimal, avec une charge utile d'injection dans un champ texte plausible. */
@@ -233,18 +336,51 @@ export async function auditDynamique(ctx, options = {}) {
   const dossierTravail = fs.mkdtempSync(path.join(RACINE_OUTIL, '.tmp-'));
   const constats = [];
   const brut = { requetes: [], requetesLocales: [], substitutionApiGrist: [], consoles: [], erreursPage: [], journalHote: null, a11y: null };
-  let navigateur, page, arreterServeur;
+  let navigateur, page, arreterServeur, serveurChromium;
 
   try {
     const harnaisRacine = await construireHarnais(dossierTravail);
     const { origine, fermer } = await demarrerServeur({ widgetRacine: ctx.racine, harnaisRacine });
     arreterServeur = fermer;
 
-    navigateur = await chromium.launch({
-      args: construireArgsChromium(),
-      env: envChromiumSansProxy(),
-      executablePath: construireLanceurChromium(dossierTravail, cheminChromium(chromium)),
-    });
+    try {
+      const cheminReel = cheminChromium(chromium);
+      if (process.platform === 'win32') {
+        // Pas de wrapper transparent possible ici (voir imposerPlafondCpuWindows) :
+        // `launchServer()` expose le PID réel, contrairement à `launch()`.
+        serveurChromium = await chromium.launchServer({ args: construireArgsChromium(), env: envChromiumSansProxy(), executablePath: cheminReel });
+        try {
+          imposerPlafondCpuWindows(dossierTravail, serveurChromium.process().pid, limiteCpuSecondes());
+        } catch (e) {
+          console.error(`⚠ Plafond CPU inactif pour ce lancement de Chromium (Windows) : ${String(e?.message ?? e).split('\n')[0]}`);
+        }
+        navigateur = await chromium.connect(serveurChromium.wsEndpoint());
+      } else {
+        navigateur = await chromium.launch({
+          args: construireArgsChromium(),
+          env: envChromiumSansProxy(),
+          executablePath: construireLanceurChromium(dossierTravail, cheminReel),
+        });
+      }
+    } catch (e) {
+      // Playwright installé mais aucun Chromium exécutable trouvé (`npx
+      // playwright install chromium` jamais lancé, ou échoué) : même
+      // traitement que Playwright totalement absent plus haut, pas un
+      // plantage brutal de tout l'outil (constaté : sans ce garde-fou,
+      // l'erreur brute de Playwright remonte jusqu'à `main()` et fait sortir
+      // gwaudit en code 3, y compris pour les axes A/B/C/E/F déjà calculés).
+      return {
+        constats: [constat({
+          regle: 'D-INDISPONIBLE', axe: 'D', severite: 'info', confiance: 'certain',
+          titre: 'Analyse dynamique non exécutée : aucun Chromium exécutable trouvé',
+          constat: `Le lancement du navigateur a échoué : ${String(e?.message ?? e).split('\n')[0]}`,
+          impact: "Les constats de l'axe D (comportement réel du widget : réseau, XSS à l'exécution, accessibilité rendue) ne peuvent pas être produits. Ce n'est pas une absence de risque, c'est une absence de mesure.",
+          remediation: 'Lancer `npx playwright install chromium` (voir README), ou relancer avec `--sans-dynamique` pour ignorer cet axe.',
+        })],
+        brut: null,
+        nonExecute: true,
+      };
+    }
     const contexte = await navigateur.newContext({ locale: 'fr-FR', viewport: { width: 1280, height: 900 } });
     page = await contexte.newPage();
 
@@ -366,6 +502,11 @@ export async function auditDynamique(ctx, options = {}) {
   } finally {
     await page?.close().catch(() => {});
     await navigateur?.close().catch(() => {});
+    // Sur Windows, `navigateur` est un client `connect()` : `.close()` peut
+    // se contenter de couper la connexion. `serveurChromium.close()` est ce
+    // qui garantit que le process réel (et le job qui porte son plafond
+    // CPU) se termine bien.
+    await serveurChromium?.close().catch(() => {});
     await arreterServeur?.().catch(() => {});
     fs.rmSync(dossierTravail, { recursive: true, force: true });
   }
