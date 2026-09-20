@@ -373,6 +373,25 @@ const LIBELLES_SEVERITE_ROADMAP = { critique: 'Critique', majeur: 'Majeur', mine
 // à l'écran, sans faire défiler des dizaines de lignes pour la trouver.
 const SEUIL_ETAPES_VISIBLES = 8;
 
+/**
+ * `concerneAussi` (moteur) ne dit jamais que corriger cette étape élimine
+ * les autres — juste qu'elles citent le même service externe (`hote`).
+ * Regroupé par hôte ici, avec la même réserve rendue explicite une seule
+ * fois dans l'intro de page plutôt que répétée sur chaque ligne.
+ */
+function rendreConcerneAussi(item) {
+  if (!item.concerneAussi?.length) return '';
+  const parHote = new Map();
+  for (const rel of item.concerneAussi) {
+    if (!parHote.has(rel.hote)) parHote.set(rel.hote, new Set());
+    parHote.get(rel.hote).add(rel.regle);
+  }
+  const lignes = [...parHote.entries()].map(([hote, regles]) =>
+    `même service (${echapperHtml(hote)}) que ${[...regles].map((r) => `<code class="regle">${echapperHtml(r)}</code>`).join(', ')}`
+  );
+  return `\n          <p class="etape-lien">↳ ${lignes.join(' · ')}</p>`;
+}
+
 function rendreEtapeRoadmap(item, rang) {
   const etiquettes = [
     item.bloquant ? '<span class="etq etq-bloquant">Bloquant</span>' : '',
@@ -386,7 +405,7 @@ function rendreEtapeRoadmap(item, rang) {
         <span class="rang">${rang}</span>
         <div class="etape-corps">
           <p class="etape-titre">${etiquettes} ${echapperHtml(item.titre)}</p>
-          <p class="etape-meta"><code class="regle">${echapperHtml(item.regle)}</code>${portee ? ' · ' + echapperHtml(portee) : ''}</p>
+          <p class="etape-meta"><code class="regle">${echapperHtml(item.regle)}</code>${portee ? ' · ' + echapperHtml(portee) : ''}</p>${rendreConcerneAussi(item)}
         </div>
       </li>`;
 }
@@ -419,6 +438,8 @@ function pageRoadmap(etat, roadmap) {
   .etape-titre { margin: 0 0 .25rem; font-weight: 500; }
   .etape-meta { margin: 0; font-size: .8rem; color: #666; }
   .etape-meta code.regle { background: #f4f4f4; border-radius: 4px; padding: 1px 5px; }
+  .etape-lien { margin: .3rem 0 0; font-size: .78rem; color: #666; }
+  .etape-lien code.regle { background: #f4f4f4; border-radius: 4px; padding: 1px 5px; }
   .etq { display: inline-block; font-size: .7rem; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; border-radius: 4px; padding: 1px 6px; margin-right: .3rem; color: #fff; white-space: nowrap; }
   .etq-bloquant { background: #b00020; }
   .etq-critique { background: #b00020; }
@@ -440,7 +461,7 @@ function pageRoadmap(etat, roadmap) {
   <a href="/audits/${etat.id}/rapport.json" download>Télécharger en JSON</a>
 </div>
 <h1>Par quoi commencer — <span>${echapperHtml(etat.cible)}</span></h1>
-<p class="aide">Classé du problème qui compte le plus pour la note — les points bloquants d'abord — au moins urgent, pas juste par gravité brute.</p>
+<p class="aide">Classé du problème qui compte le plus pour la note — les points bloquants d'abord — au moins urgent, pas juste par gravité brute. Quand plusieurs étapes citent le même service externe, elles sont signalées entre elles (↳) : ça vaut le coup de les regarder ensemble, mais corriger l'une n'élimine pas forcément les autres.</p>
 ${roadmap.length ? `<ol class="feuille">
 ${lignesVisibles}
     </ol>${repliees.length ? `
