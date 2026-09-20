@@ -128,6 +128,7 @@ export function analyserAccesGrist(ctx) {
       constat: `${usages.ecritureSchema.length} action(s) de schéma détectée(s) (création ou suppression de table ou de colonne).`,
       impact: "Une erreur de logique peut détruire des colonnes de l'agent, sans que Grist ne puisse distinguer cette action d'une action volontaire de l'utilisateur.",
       remediation: 'Confirmer explicitement auprès de l\'agent avant toute action de schéma, et documenter ces actions dans le README.',
+      preuve: { emplacements: usages.ecritureSchema },
     }));
   }
 
@@ -401,7 +402,7 @@ export function analyserInjections(ctx) {
       constat: `Le code affecte du balisage littéral à \`innerHTML\` à ${htmlConstant.length} endroit(s), répartis sur ${fichiers.length} fichier(s).`,
       impact: "Aucun risque d'injection tant que le contenu reste littéral. Mentionné pour mémoire : ces emplacements deviennent dangereux le jour où une variable y est interpolée, et ils sont donc à surveiller en revue.",
       remediation: "Aucune action requise. Si une valeur dynamique doit un jour y entrer, basculer sur `textContent` ou `createElement` à ce moment-là.",
-      preuve: { emplacements: htmlConstant.slice(0, 40) },
+      preuve: { emplacements: htmlConstant },
     }));
   }
 
@@ -524,7 +525,7 @@ export function analyserStockage(ctx) {
       impact: "Le guide de contribution demande qu'aucune donnée utilisateur ne soit stockée hors de Grist. Les données écrites ici survivent à la fermeture du document, échappent aux droits d'accès Grist, ne sont pas couvertes par les sauvegardes, et ne disparaissent pas quand l'agent perd l'accès au document. Si elles contiennent des données personnelles, cela constitue un traitement non déclaré.",
       remediation: "Distinguer les deux cas. Préférences d'affichage (thème, colonne triée) : acceptable, à documenter dans le README. Contenu issu du document : à replacer dans une table Grist, ou à ne pas persister du tout.",
       referentiels: ['Guide de contribution Grist.Gouv — « no storage of user data outside of Grist »', 'RGPD art. 5'],
-      preuve: { emplacements: emplacements.slice(0, 20) },
+      preuve: { emplacements },
     }));
   }
   return constats;

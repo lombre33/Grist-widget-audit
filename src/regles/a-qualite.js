@@ -200,7 +200,7 @@ export function analyserTracesDev(ctx) {
       constat: `${consoles.length} traces de débogage réparties sur ${fichiers.length} fichier(s).`,
       impact: "Bruit dans la console de l'agent, et risque d'y déverser le contenu de cellules du document — donc des données potentiellement sensibles, lisibles par toute extension de navigateur installée.",
       remediation: "Passer par une fonction de journalisation activable par un indicateur, désactivée par défaut.",
-      preuve: { emplacements: consoles.slice(0, 30) },
+      preuve: { emplacements: consoles },
     }));
   }
   if (marqueurs.length > 5) {
@@ -211,7 +211,7 @@ export function analyserTracesDev(ctx) {
       constat: `Le dépôt contient ${marqueurs.length} marqueurs de travail inachevé.`,
       impact: "Difficile pour un relecteur de distinguer ce qui est volontairement hors périmètre de ce qui est un défaut connu non traité.",
       remediation: 'Convertir en tickets, ou supprimer ceux qui ne sont plus d\'actualité.',
-      preuve: { emplacements: marqueurs.slice(0, 30) },
+      preuve: { emplacements: marqueurs },
     }));
   }
   return constats;
@@ -265,20 +265,35 @@ export function analyserDuplication(ctx) {
       impact: "Le guide le dit explicitement : « un défaut corrigé à un endroit restera silencieusement présent dans les autres ». La duplication entre fichiers est aussi ce qui fait grossir le temps de revue sans rien apporter.",
       remediation: 'Extraire la logique partagée dans un module commun importé par les deux emplacements.',
       referentiels: ['Guide de contribution Grist.Gouv — « Duplicated code is harder to review and creates maintenance debt »'],
-      preuve: { groupes: retenus.slice(0, 15).map((o) => o.slice(0, 6)) },
+      preuve: { groupes: retenus },
     }));
   }
   return constats;
 }
 
 /** Présence et nature des tests, exigence explicite du guide. */
+// `(^|\/)(tests?...)\/ ` exigeait la limite de segment juste avant, donc
+// ratait `dev-tests/` (le `dev-` est collé, pas séparé par `/`) : un vrai
+// dossier de tests substantiel se voyait déclaré absent. `[/_-]` élargit la
+// frontière acceptée à `-`/`_` en plus de `/`, ce qui attrape `dev-tests/`,
+// `test-utils/`, `unit_tests/` sans capturer `latest.js` ou `contest.js` (le
+// caractère juste avant `test` y est une lettre, pas une frontière).
+const CHEMIN_TEST_UNITAIRE = /(^|[/_-])tests?([/_-]|$)/i;
+// Même défaut côté e2e : `require('/opt/.../playwright')` ne matche ni
+// `require(['"]puppeteer` ni `from ['"]playwright`, alors que c'est
+// exactement la preuve qu'un vrai Chromium est piloté. On élargit à
+// `playwright` n'importe où dans un require/import (pas seulement en
+// spécificateur de module nu), et aux appels caractéristiques de
+// Playwright/Puppeteer eux-mêmes plutôt qu'au nom exact du paquet cité.
+const CONTENU_TEST_E2E = /require\(['"][^'"]*playwright|from\s+['"][^'"]*playwright|@playwright\/test|require\(['"]puppeteer|\.launch\(|\.newPage\(|\bchromium\./i;
+
 export function analyserTests(ctx) {
   const constats = [];
   const testsUnitaires = ctx.fichiers.filter((f) =>
-    /(^|\/)(tests?|__tests__|spec)\//i.test(f.chemin) || /\.(test|spec)\.(m?js|ts|jsx|tsx)$/i.test(f.chemin));
+    CHEMIN_TEST_UNITAIRE.test(f.chemin) || /\.(test|spec)\.(m?js|ts|jsx|tsx)$/i.test(f.chemin));
   const e2e = ctx.fichiers.filter((f) =>
     /(playwright|cypress|puppeteer|e2e|integration|browser)/i.test(f.chemin) ||
-    (f.contenu && /@playwright\/test|require\(['"]puppeteer|from ['"]playwright/.test(f.contenu)));
+    (f.contenu && CONTENU_TEST_E2E.test(f.contenu)));
 
   if (!testsUnitaires.length) {
     constats.push(constat({
@@ -340,7 +355,7 @@ export function analyserPratiques(ctx) {
       constat: 'Des comparaisons utilisent `==` ou `!=` avec conversion de type implicite.',
       impact: "`'0' == false` vaut vrai, `[] == false` aussi : ces conversions produisent des défauts difficiles à reproduire, en particulier sur des valeurs de cellules Grist qui peuvent être nulles, vides ou numériques.",
       remediation: 'Utiliser `===` et `!==`.',
-      preuve: { emplacements: laches.slice(0, 20) },
+      preuve: { emplacements: laches },
     }));
   }
   if (vars.length > 20) {
@@ -351,7 +366,7 @@ export function analyserPratiques(ctx) {
       constat: 'Le code utilise massivement `var` plutôt que `let` / `const`.',
       impact: "`var` remonte au niveau de la fonction : une variable reste visible en dehors du bloc où elle a été déclarée, ce qui produit des collisions silencieuses dans les fonctions longues.",
       remediation: 'Remplacer par `const` par défaut, `let` si réaffectation.',
-      preuve: { emplacements: vars.slice(0, 20) },
+      preuve: { emplacements: vars },
     }));
   }
   return constats;
@@ -399,7 +414,7 @@ export function analyserCodeInatteignable(ctx) {
       impact: "Le guide demande un widget « minimal […], sans code mort ». Du code structurellement inatteignable trompe le relecteur sur le comportement réel du widget, et signale parfois une erreur de logique (un `return` placé trop tôt par mégarde).",
       remediation: "Supprimer les instructions mortes, ou déplacer le `return` / `throw` / `break` / `continue` si le code qui suit devait réellement s'exécuter.",
       referentiels: ['Guide de contribution Grist.Gouv — « Minimal: no unnecessary dependencies, no dead code »', 'CWE-561'],
-      preuve: { emplacements: trouvailles.slice(0, 20) },
+      preuve: { emplacements: trouvailles },
     }));
   }
   return constats;

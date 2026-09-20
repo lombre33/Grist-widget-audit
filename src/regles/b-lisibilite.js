@@ -49,7 +49,7 @@ export function analyserNommage(ctx) {
       impact: "Le guide demande des noms « explicites et descriptifs ». Un nom comme `data` ou `tmp` oblige le relecteur à remonter la chaîne d'affectations pour savoir ce que la variable contient.",
       remediation: 'Renommer en décrivant le contenu, pas le type : `lignesSelectionnees` plutôt que `data`.',
       referentiels: [REF_GUIDE_LISIBILITE],
-      preuve: { emplacements: pauvres.slice(0, 25) },
+      preuve: { emplacements: pauvres },
     }));
   }
   return constats;
@@ -122,6 +122,7 @@ export function analyserReadme(ctx) {
       impact: "Sans cette mention, ni l'agent qui installe le widget ni le relecteur sécurité ne peuvent savoir que ce flux existe sans lire tout le code source.",
       remediation: `Ajouter au README, pour chacun, ce qui lui est envoyé et pourquoi : ${nonDocumentees.join(', ')}.`,
       referentiels: ['Guide de contribution Grist.Gouv — « Safe: no requests to undocumented external services »'],
+      preuve: { hotes: nonDocumentees },
     }));
   }
   return constats;
@@ -199,7 +200,7 @@ export function analyserSignauxGeneration(ctx) {
       impact: "Le guide autorise explicitement l'aide d'un outil d'IA, mais refuse la sortie brute non relue, et demande que le contributeur puisse défendre chaque partie du code en revue. Ces marqueurs sont le signal que le relecteur regardera en priorité.",
       remediation: "Relire les fichiers concernés : supprimer les commentaires qui paraphrasent le code, garder ceux qui expliquent une intention. Aucun de ces signaux n'est disqualifiant en soi ; ce sont les endroits où la relecture humaine doit être démontrable.",
       referentiels: ['Guide de contribution Grist.Gouv — « A note on AI-generated contributions »'],
-      preuve: { signaux: signaux.slice(0, 20) },
+      preuve: { signaux },
     }));
   }
   return constats;
