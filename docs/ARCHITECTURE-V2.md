@@ -37,7 +37,7 @@ ce qui suit est la dernière, à jour.
 
 | # | Constat (état au 2026-09-19) | Fichier | Correction vérifiée |
 |---|---|---|---|
-| 1 | `git clone` recevait l'URL soumise sans résolution d'hôte ni liste blanche — SSRF | `bin/gwaudit.js` | `resoudreCible()` appelle `validerHoteClone()` avant tout clonage : résolution DNS puis rejet des adresses privées/loopback/lien-local/métadonnées cloud, refus du `http://` non chiffré. Pas de protection anti-DNS-rebinding entre la vérification et la connexion — laissé au proxy de sortie V2 (§4). |
+| 1 | `git clone` recevait l'URL soumise sans résolution d'hôte ni liste blanche — SSRF | `bin/gwaudit.js` | `resoudreCible()` appelle `validerHoteClone()` avant tout clonage : résolution DNS puis rejet des adresses privées/loopback/lien-local/métadonnées cloud, refus du `http://` non chiffré. **Ce correctif avait lui-même un trou**, trouvé par revue adversariale le 2026-09-20 et corrigé au commit `19c0134` : `new URL()` normalise un `\` littéral en `/` avant de chercher la limite `userinfo@hôte`, alors que git/libcurl (RFC 3986) ne le font pas — une cible comme `https://hote-public.example\@CIBLE-INTERNE/x` passait la validation (hôte calculé : le domaine public) pendant que git se connectait réellement à `CIBLE-INTERNE`. Reproduit avec un vrai `git ls-remote`, fermé en rejetant tout `\` littéral et tout userinfo explicite avant la résolution DNS, non-régression prouvée par un test qui écoute réellement sur un port local (`tests/ssrf.test.mjs`). Toujours pas de protection anti-DNS-rebinding entre la vérification et la connexion — laissé au proxy de sortie V2 (§4), qui n'a structurellement pas ce type de trou : voir §4. |
 | 2 | `npm audit` héritait tout `process.env` et lisait le `.npmrc` du dépôt audité | `src/regles/e-dependances.js` | `npmAudit()` copie seulement `package.json`/`package-lock.json` dans un dossier neutre, avec un environnement dédié (`HOME` isolé, `npm_config_userconfig` pointé sur un `.npmrc` vide, `npm_config_registry` figé sur `registry.npmjs.org`, proxy d'entreprise transmis explicitement) : le `.npmrc` du dépôt audité n'est jamais lu. |
 | 3 | Chromium était lancé avec `--no-sandbox` | `src/runtime/dynamique.js` | Sandbox natif actif par défaut ; `--no-sandbox` seulement si `GWAUDIT_CHROMIUM_SANS_SANDBOX=1` est positionnée explicitement. |
 | 4 | Aucun hash de commit rattaché au rapport | `bin/gwaudit.js` | `commitDepot()` (`git rev-parse HEAD`) inclus dans `meta.commit` ; identité du dépôt tirée de l'URL réelle. |
@@ -191,8 +191,19 @@ entièrement remplacer — à éprouver sur le VPS d'Antoine.
   sortie à liste blanche** (GitHub, GitLab, `registry.npmjs.org`…) qui
   refait sa propre résolution DNS et rejette lui-même les plages privées —
   en défense en profondeur, indépendante de la validation faite côté
-  `gwaudit`, qui peut avoir un trou (c'est précisément ce qui vient d'être
-  démontré).
+  `gwaudit`, qui peut avoir un trou. Pas une hypothèse d'école : la
+  validation d'hôte de `gwaudit` (constat 1, §1) avait un trou réel,
+  trouvé et corrigé le 2026-09-20 (commit `19c0134`) — un `\` littéral
+  dans l'URL soumise faisait calculer à `new URL()` un hôte différent de
+  celui que git contactait réellement. Un validateur d'URL ne vaut que
+  s'il coupe l'autorité au même endroit que le client qui exécutera la
+  requête ; deux parseurs différents (ici Node vs. libcurl) peuvent
+  légitimement diverger sur ce point. Le proxy CONNECT décrit plus bas
+  n'a structurellement pas ce défaut : il voit et valide l'hôte:port que
+  git a **réellement** demandé en `CONNECT` (ce que le client a résolu),
+  pas une valeur re-dérivée par un second parseur d'une URL — la classe
+  de bug qui vient d'être fermée dans `gwaudit` ne peut pas s'y reproduire
+  de la même façon.
 - **Un job = un conteneur à usage unique.** Un pool de conteneurs vierges
   pré-chauffés peut réduire la latence, mais aucun ne doit survivre à un
   second job.
