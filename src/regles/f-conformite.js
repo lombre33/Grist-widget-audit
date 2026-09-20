@@ -82,10 +82,11 @@ export function analyserAccessibiliteStatique(ctx) {
     const entree = ctx.entrees.includes(f.chemin);
 
     if (entree && !/<html[^>]+\blang\s*=\s*["'][a-z]{2}/i.test(c)) {
+      const balise = c.match(/<html\b[^>]*>/i);
       constats.push(constat({
         regle: 'F-RGAA-01', axe: 'F', severite: 'mineur', confiance: 'certain',
         titre: "La langue de la page n'est pas déclarée",
-        fichier: f.chemin,
+        fichier: f.chemin, ligne: balise ? c.slice(0, balise.index).split('\n').length : null,
         constat: "La balise `<html>` ne porte pas d'attribut `lang`.",
         impact: "Le lecteur d'écran prononce le contenu avec la mauvaise voix de synthèse, ce qui le rend souvent inintelligible.",
         remediation: 'Ajouter `<html lang="fr">`.',
@@ -228,7 +229,7 @@ export function analyserConformiteGuide(ctx) {
         constats.push(constat({
           regle: 'F-GUIDE-03', axe: 'F', severite: 'mineur', confiance: 'certain',
           titre: `Entrée de manifeste incomplète : champs manquants (${manque.join(', ')})`,
-          fichier: m.chemin,
+          fichier: m.chemin, ligne: ligneDansManifeste(ctx, m.chemin, w.name ?? w.widgetId ?? w.url),
           constat: `L'entrée \`${w.name ?? w.widgetId ?? '(sans nom)'}\` ne déclare pas : ${manque.join(', ')}.`,
           impact: "Un manifeste incomplet empêche l'ajout du widget au catalogue d'une instance : Grist ne peut ni l'identifier de façon stable ni le charger.",
           remediation: 'Compléter `name`, `url`, `widgetId`, et déclarer `accessLevel` pour que le niveau d\'accès soit visible avant installation.',
@@ -239,7 +240,7 @@ export function analyserConformiteGuide(ctx) {
         constats.push(constat({
           regle: 'F-GUIDE-04', axe: 'F', severite: 'mineur', confiance: 'certain',
           titre: `Le manifeste ne déclare pas le niveau d'accès de « ${w.name ?? w.widgetId} »`,
-          fichier: m.chemin,
+          fichier: m.chemin, ligne: ligneDansManifeste(ctx, m.chemin, w.name ?? w.widgetId ?? w.url),
           constat: `Le code demande \`${ctx.usagesGrist.acces[0].niveau}\`, le manifeste ne mentionne pas \`accessLevel\`.`,
           impact: "L'agent découvre la demande d'accès au moment de l'installation, sans pouvoir la comparer à ce qui était annoncé au catalogue.",
           remediation: `Ajouter \`"accessLevel": "${ctx.usagesGrist.acces[0].niveau}"\` à l'entrée du manifeste.`,
@@ -249,6 +250,19 @@ export function analyserConformiteGuide(ctx) {
     }
   }
   return constats;
+}
+
+/**
+ * Ligne (1-based) d'une entrée dans le manifest.json brut, repérée par une
+ * valeur de champ encore présente dans l'entrée (name, widgetId ou url) —
+ * `ctx.manifestes` ne garde que le JSON déjà interprété, sans position.
+ */
+function ligneDansManifeste(ctx, cheminManifeste, valeurAncre) {
+  if (!valeurAncre) return null;
+  const f = ctx.fichiers.find((x) => x.chemin === cheminManifeste);
+  if (!f?.lignes) return null;
+  const i = f.lignes.findIndex((l) => l.includes(String(valeurAncre)));
+  return i === -1 ? null : i + 1;
 }
 
 export const reglesF = [

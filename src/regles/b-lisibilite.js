@@ -177,8 +177,13 @@ export function analyserSignauxGeneration(ctx) {
     if (!f.contenu || f.binaire || f.vendorise || !['.js', '.mjs', '.html'].includes(f.ext)) continue;
     if (f.chemin.endsWith('.md')) continue;
     for (const [re, libelle] of motifs) {
-      const n = [...f.contenu.matchAll(re)].length;
-      if (n) signaux.push({ fichier: f.chemin, libelle, occurrences: n });
+      const occurrences = [...f.contenu.matchAll(re)];
+      if (occurrences.length) {
+        signaux.push({
+          fichier: f.chemin, libelle, occurrences: occurrences.length,
+          ligne: f.contenu.slice(0, occurrences[0].index).split('\n').length,
+        });
+      }
     }
   }
 
@@ -189,7 +194,7 @@ export function analyserSignauxGeneration(ctx) {
     constats.push(constat({
       regle: 'B-IA-01', axe: 'B', severite: 'mineur', confiance: 'a_verifier',
       titre: 'Marqueurs évoquant du code généré puis peu retouché',
-      fichier: signaux[0].fichier,
+      fichier: signaux[0].fichier, ligne: signaux[0].ligne,
       constat: `${total} occurrence(s) réparties sur ${familles.size} familles de marqueurs : ${[...familles].join(' ; ')}.`,
       impact: "Le guide autorise explicitement l'aide d'un outil d'IA, mais refuse la sortie brute non relue, et demande que le contributeur puisse défendre chaque partie du code en revue. Ces marqueurs sont le signal que le relecteur regardera en priorité.",
       remediation: "Relire les fichiers concernés : supprimer les commentaires qui paraphrasent le code, garder ceux qui expliquent une intention. Aucun de ces signaux n'est disqualifiant en soi ; ce sont les endroits où la relecture humaine doit être démontrable.",

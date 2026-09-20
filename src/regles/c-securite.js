@@ -319,7 +319,7 @@ export function analyserInjections(ctx) {
             fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
             constat: 'Le second argument est construit à l\'exécution.',
             impact: "Même risque que `innerHTML` : une donnée de cellule interprétée comme du balisage devient du code exécuté dans le widget.",
-            remediation: 'Assainir la valeur, ou construire les nœuds programmatiquement.',
+            remediation: "Utiliser `textContent` pour du texte, ou construire les nœuds avec `document.createElement`. Si du HTML riche est indispensable, passer par un assainisseur (DOMPurify) embarqué dans le dépôt, et le documenter.",
             referentiels: ['OWASP Top 10 A03:2021', 'CWE-79'],
           }));
         }
@@ -331,7 +331,7 @@ export function analyserInjections(ctx) {
             fichier: unite.chemin, ligne: ligneDe(n),
             constat: '`document.write()` écrit directement dans le flux du document.',
             impact: "Interprète son argument comme du balisage, bloque l'analyse de la page et est incompatible avec une politique de sécurité de contenu stricte.",
-            remediation: 'Remplacer par une manipulation du DOM.',
+            remediation: "Injecter le contenu voulu au chargement avec `document.createElement` / `textContent` sur un conteneur déjà présent dans le HTML, plutôt qu'en réécrivant le flux du document.",
             referentiels: ['CWE-79'],
           }));
         }
