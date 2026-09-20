@@ -11,7 +11,7 @@
 # main : "build: ./execution" et l'image de egress-proxy restent à écrire.
 services:
   execution-audit:
-    build: ./execution   # Dockerfile : Node + gwaudit + Chromium, à écrire
+    build: ./execution   # Dockerfile : Node + Chromium + le même gwaudit que la V1 (npm install du dépôt, pas un fork serveur), à écrire
     # Un conteneur = un seul job d'audit. L'orchestrateur (file d'attente,
     # hors de ce fichier) le démarre pour un job précis et le détruit
     # ensuite — ne jamais le laisser tourner pour un deuxième job.

@@ -28,6 +28,12 @@ function hote(url) {
 const estGrist = (h) => h && HOTES_GRIST.some((r) => r.test(h));
 const estLocal = (h) => !h || h === 'widget.local' || h === 'localhost' || h === '127.0.0.1';
 
+/** Mémorise un hôte externe réellement contacté, pour le contrôle croisé « documenté dans le README » de l'axe B (B-DOC-04). */
+function enregistrerDestination(ctx, h) {
+  if (!h) return;
+  (ctx.destinationsExternes ?? (ctx.destinationsExternes = new Set())).add(h);
+}
+
 // ---------------------------------------------------------------------------
 // C-GRIST — négociation du niveau d'accès
 // ---------------------------------------------------------------------------
@@ -146,6 +152,7 @@ export function analyserSortiesReseau(ctx) {
       const cle = `${unite.chemin}:${ligneDe(n)}:${canal}`;
       if (vus.has(cle)) return;
       vus.add(cle);
+      if (!dynamique) enregistrerDestination(ctx, h);
 
       constats.push(constat({
         regle: dynamique ? 'C-EXFIL-02' : 'C-EXFIL-01', axe: 'C',
@@ -243,6 +250,7 @@ export function analyserRessourcesExternes(ctx) {
         }
 
         if (estGrist(h)) continue;
+        enregistrerDestination(ctx, h);
 
         const sri = /\bintegrity\s*=/.test(balise);
         constats.push(constat({

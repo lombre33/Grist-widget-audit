@@ -98,14 +98,23 @@ multi-utilisateurs (concurrence) que seule la V2 introduira.
 
 ## 2. Principe : deux zones de confiance étanches
 
-- **Zone « site »** (confiance normale — ce qui existe déjà sur le VPS
-  d'Antoine) : formulaire de soumission, quotas, file d'attente, base des
-  résultats, affichage du verdict. Cette zone **n'exécute jamais** de code
-  audité.
+- **Zone « site »** (confiance normale — l'infrastructure qui existe déjà
+  sur le VPS d'Antoine) : quotas, file d'attente, base des résultats.
+  Le formulaire de soumission, l'affichage des tests en cours et la page
+  d'audit ne sont **pas** un front web écrit pour la V2 : c'est
+  l'interface de `gwaudit` lui-même (`src/interface/`), le même code
+  utilisé dans les 3 environnements (local, CI, VPS), possédée par le fil
+  « Fonctionnalités de l'outil ». Le périmètre V2 se limite à la faire
+  tourner en sécurité autour de cette interface partagée — isolation (§4),
+  mise en file (§5), quotas et anti-abus (§5) — jamais à en écrire une
+  version distincte. Cette zone **n'exécute jamais** de code audité.
 - **Zone « exécution »** (confiance zéro — la deuxième instance Docker
   qu'Antoine évoque) : c'est là que `gwaudit` tourne réellement sur le code
   soumis. Elle n'a aucun accès entrant depuis l'extérieur ; elle consomme
-  des jobs depuis la file et publie un résultat, rien d'autre.
+  des jobs depuis la file et publie un résultat, rien d'autre. **C'est le
+  même code que la V1** — un seul `gwaudit`, portable, pensé pour tourner
+  identiquement en local (Windows/Linux/macOS) et empaqueté tel quel dans
+  cette image : pas de variante ni de fork « serveur ».
 
 Règles non négociables pour que la séparation soit réelle et pas seulement
 nominale :

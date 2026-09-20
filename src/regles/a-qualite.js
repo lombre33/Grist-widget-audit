@@ -357,7 +357,56 @@ export function analyserPratiques(ctx) {
   return constats;
 }
 
+/**
+ * Code syntaxiquement inatteignable : instructions placées après un
+ * `return` / `throw` / `break` / `continue` dans le même bloc. Volontairement
+ * restreint à ce cas non ambigu (pas d'analyse d'exhaustivité des branches
+ * if/else) : le guide demande un widget « minimal, sans code mort », et un
+ * faux positif ici coûterait plus cher à la confiance dans l'outil que ce
+ * que rapporterait une détection plus large.
+ */
+const TERMINALES = new Set(['ReturnStatement', 'ThrowStatement', 'BreakStatement', 'ContinueStatement']);
+
+export function analyserCodeInatteignable(ctx) {
+  const constats = [];
+  const trouvailles = [];
+
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+    if (!ast) return;
+    const verifierListe = (liste) => {
+      if (!Array.isArray(liste)) return;
+      let mort = false;
+      for (const stmt of liste) {
+        if (mort && stmt.type !== 'FunctionDeclaration') {
+          trouvailles.push({ fichier: unite.chemin, ligne: ligneDe(stmt) });
+        }
+        if (!mort && TERMINALES.has(stmt.type)) mort = true;
+      }
+    };
+    walk.simple(ast, {
+      Program(n) { verifierListe(n.body); },
+      BlockStatement(n) { verifierListe(n.body); },
+      SwitchCase(n) { verifierListe(n.consequent); },
+    });
+  });
+
+  if (trouvailles.length) {
+    constats.push(constat({
+      regle: 'A-MORT-01', axe: 'A', severite: trouvailles.length > 3 ? 'majeur' : 'mineur', confiance: 'certain',
+      titre: `${trouvailles.length} instruction(s) syntaxiquement inatteignable(s)`,
+      fichier: trouvailles[0].fichier, ligne: trouvailles[0].ligne,
+      constat: "Du code apparaît après un `return`, `throw`, `break` ou `continue` dans le même bloc : il ne s'exécute jamais.",
+      impact: "Le guide demande un widget « minimal […], sans code mort ». Du code structurellement inatteignable trompe le relecteur sur le comportement réel du widget, et signale parfois une erreur de logique (un `return` placé trop tôt par mégarde).",
+      remediation: "Supprimer les instructions mortes, ou déplacer le `return` / `throw` / `break` / `continue` si le code qui suit devait réellement s'exécuter.",
+      referentiels: ['Guide de contribution Grist.Gouv — « Minimal: no unnecessary dependencies, no dead code »', 'CWE-561'],
+      preuve: { emplacements: trouvailles.slice(0, 20) },
+    }));
+  }
+  return constats;
+}
+
 export const reglesA = [
   analyserTailleFichiers, analyserFonctions, analyserGestionErreurs,
   analyserTracesDev, analyserDuplication, analyserTests, analyserPratiques,
+  analyserCodeInatteignable,
 ];
