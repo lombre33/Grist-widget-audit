@@ -2,7 +2,11 @@
 export function genererJson({ ctx, notation, meta }) {
   const axes = {};
   for (const [code, a] of Object.entries(notation.parAxe)) {
-    axes[code] = { titre: a.titre, score: a.score, nonExecute: a.nonExecute, repartition: a.repartition, constats: a.constats };
+    // penaliteBrute : la pénalité cumulée avant le plancher souple à 0 (voir
+    // src/moteur/notation.js). Deux axes à 0 ou proches de 0 restent
+    // distinguables ici même quand le score arrondi ne les distingue plus,
+    // utile pour comparer deux widgets ou recalibrer sans tout remesurer.
+    axes[code] = { titre: a.titre, score: a.score, penaliteBrute: a.penaliteBrute ?? null, nonExecute: a.nonExecute, repartition: a.repartition, constats: a.constats };
   }
   return JSON.stringify({
     outil: 'gwaudit', version: meta.version, genereLe: new Date().toISOString(),

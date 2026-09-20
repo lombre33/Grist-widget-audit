@@ -12,6 +12,33 @@
 import { AXES, SEVERITES, facteurOccurrences } from './modele.js';
 
 /**
+ * Score d'un axe à partir de sa pénalité cumulée. En-deçà de `SEUIL_LINEAIRE`,
+ * c'est la soustraction directe (100 - pénalité). Au-delà, un plancher
+ * souple prend le relais au lieu d'un `Math.max(0, ...)` : une pénalité de
+ * 105 et une de 300 rendaient toutes les deux 0, un widget très mauvais et
+ * un widget catastrophique devenaient indiscernables — pour un audit
+ * automatisé, un score muet n'aide personne à savoir par où commencer, ni à
+ * comparer deux widgets avant d'en installer un.
+ *
+ * Le seuil ne peut pas être 100 : la branche linéaire y vaudrait déjà 0, et
+ * reprendre une décroissance depuis 0 forcerait soit des valeurs négatives,
+ * soit une remontée artificielle juste après le seuil — une pénalité plus
+ * grande rendrait alors une meilleure note, l'inverse de ce qu'on corrige.
+ * Le plancher souple part donc de la valeur de la branche linéaire à
+ * `SEUIL_LINEAIRE` (8) et décroît strictement depuis là, sans jamais
+ * atteindre 0 — continue à `SEUIL_LINEAIRE`, strictement décroissante
+ * partout, jamais plus généreuse que l'ancienne formule.
+ */
+const SEUIL_LINEAIRE = 92;
+const PLANCHER_SOUPLE = 100 - SEUIL_LINEAIRE;
+const ECHELLE_QUEUE = 40;
+
+export function noterAxe(penalite) {
+  if (penalite <= SEUIL_LINEAIRE) return Math.round(100 - penalite);
+  return Math.round(PLANCHER_SOUPLE * Math.exp(-(penalite - SEUIL_LINEAIRE) / ECHELLE_QUEUE));
+}
+
+/**
  * @param {Array} constats
  * @param {Set<string>} [axesNonExecutes] axes dont les règles n'ont pas tourné
  *   (ex. D quand l'analyse dynamique est désactivée) : ils sont notés `null`
@@ -42,7 +69,8 @@ export function noter(constats, axesNonExecutes = new Set()) {
     detail.sort((a, b) => b.penalite - a.penalite);
     parAxe[code] = {
       ...AXES[code],
-      score: Math.max(0, Math.round(100 - penalite)),
+      score: noterAxe(penalite),
+      penaliteBrute: Math.round(penalite * 10) / 10,
       nonExecute: false,
       constats: liste,
       repartition: compter(liste),
