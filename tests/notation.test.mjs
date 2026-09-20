@@ -18,6 +18,19 @@ test('un axe non exécuté est exclu du score global plutôt que noté 100', () 
   assert.ok(n2.axesNonExecutes.includes('D'));
 });
 
+test('un axe non exécuté abaisse le verdict et le dit dans le motif, jamais silencieusement', () => {
+  const n = noter([], new Set(['D']));
+  assert.equal(n.verdict, 'CONFORME SOUS RÉSERVE');
+  assert.match(n.motif, /non exécuté/);
+  assert.match(n.motif, /\bD\b/);
+});
+
+test('sans axe manquant, un score haut reste CONFORME sans réserve', () => {
+  const n = noter([], new Set());
+  assert.equal(n.verdict, 'CONFORME');
+  assert.doesNotMatch(n.motif, /non exécuté/);
+});
+
 test('les occurrences répétées d\'une même règle sont plafonnées, pas simplement additionnées', () => {
   const beaucoup = Array.from({ length: 50 }, () => constat({ regle: 'REP', axe: 'A', titre: 't', severite: 'mineur', constat: 'c' }));
   const n = noter(beaucoup, new Set());

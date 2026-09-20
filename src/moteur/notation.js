@@ -74,6 +74,21 @@ export function noter(constats, axesNonExecutes = new Set()) {
     motif = `Score global de ${global}/100, aucun point bloquant identifié.`;
   }
 
+  // Un axe non exécuté est exclu du calcul (voir plus haut) : le score et le
+  // verdict ci-dessus portent donc sur une partie seulement du référentiel.
+  // Un « CONFORME » sans réserve serait mensonger quand un quart de la note
+  // (poids de l'axe D) n'a jamais été mesuré — ça s'est produit une fois en
+  // silence : le verdict seul, sans lire le détail par axe, ne le montrait
+  // pas. Le dire ici le rend visible partout où `motif` est affiché, plutôt
+  // que réservé au détail par axe.
+  if (axesNonExecutes.size) {
+    const detail = [...axesNonExecutes]
+      .map((code) => `${code} (${AXES[code].titre}, poids ${AXES[code].poids}/100)`)
+      .join(', ');
+    if (verdict === 'CONFORME') verdict = 'CONFORME SOUS RÉSERVE';
+    motif = `⚠️ Audit partiel — axe(s) non exécuté(s) : ${detail}. Score calculé sans eux, à ne pas comparer à un audit complet. ${motif}`;
+  }
+
   return {
     global,
     verdict,
