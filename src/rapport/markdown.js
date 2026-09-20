@@ -58,6 +58,9 @@ export function genererMarkdown({ ctx, notation, meta }) {
   l.push(`- Commit audité : \`${meta.commit ?? 'non déterminable (pas un dépôt git, ou dépôt local sans commit)'}\``);
   l.push(`- ⚠️ Ce verdict ne vaut que pour ce commit précis : si le dépôt évolue par la suite, il ne le couvre plus.`);
   l.push(`- Fichiers inventoriés : ${ctx.fichiers.length}, dont ${ctx.surface.size} dans la surface réellement exécutée par le navigateur`);
+  if (meta.tronque) {
+    l.push(`- ⚠️ Inventaire tronqué : dépôt anormalement volumineux (${meta.tronque.fichiers ? `plus de ${meta.tronque.maxFichiers} fichiers` : ''}${meta.tronque.fichiers && meta.tronque.octets ? ', ' : ''}${meta.tronque.octets ? `plus de ${Math.round(meta.tronque.maxOctets / 1024 / 1024)} Mio de contenu lu` : ''}). Ce rapport ne couvre qu'une partie du dépôt.`);
+  }
   l.push(`- Point(s) d'entrée détecté(s) : ${ctx.entrees.map((e) => `\`${e}\``).join(', ') || 'aucun'}`);
   if (ctx.usagesGrist?.acces?.length) {
     l.push(`- Niveau d'accès Grist demandé dans le code : \`${[...new Set(ctx.usagesGrist.acces.map((a) => a.niveau))].join(', ')}\``);

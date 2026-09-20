@@ -14,6 +14,7 @@
  *   3. de développement         — risque limité au poste du contributeur
  */
 import path from 'node:path';
+import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
@@ -192,17 +193,49 @@ export async function analyserPaquetNpm(ctx, options = {}) {
   return constats;
 }
 
+/**
+ * Lance `npm audit` dans un dossier neutre, isolé du dépôt audité — pas dans
+ * `racine` directement. `npm` lit le `.npmrc` du dossier courant avant toute
+ * option de ligne de commande : un dépôt hostile pourrait sinon y déclarer un
+ * `registry` arbitraire et faire partir la requête (avec l'environnement du
+ * process qui l'exécute, dont d'éventuels secrets) vers un hôte qu'il
+ * contrôle plutôt que vers le registre npm réel (docs/ARCHITECTURE-V2.md,
+ * constat 2). On ne copie que ce qu'il faut à l'audit — `package.json` et
+ * `package-lock.json` — jamais le `.npmrc` du dépôt.
+ */
 async function npmAudit(racine) {
-  if (!fs.existsSync(path.join(racine, 'package-lock.json'))) return { erreur: 'aucun package-lock.json' };
+  const verrou = path.join(racine, 'package-lock.json');
+  if (!fs.existsSync(verrou)) return { erreur: 'aucun package-lock.json' };
+
+  const dossierIsole = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-npm-audit-'));
   try {
-    const { stdout } = await execFileAsync('npm', ['audit', '--json', '--audit-level=info'], {
-      cwd: racine, timeout: 120000, maxBuffer: 32 * 1024 * 1024,
+    fs.copyFileSync(verrou, path.join(dossierIsole, 'package-lock.json'));
+    const paquetSrc = path.join(racine, 'package.json');
+    if (fs.existsSync(paquetSrc)) {
+      fs.copyFileSync(paquetSrc, path.join(dossierIsole, 'package.json'));
+    } else {
+      fs.writeFileSync(path.join(dossierIsole, 'package.json'), JSON.stringify({ name: 'gwaudit-audit-isole', version: '0.0.0', private: true }));
+    }
+    const npmrcVide = path.join(dossierIsole, '.npmrc-audit-gwaudit');
+    fs.writeFileSync(npmrcVide, '');
+
+    const envIsole = {
+      PATH: process.env.PATH,
+      HOME: dossierIsole,               // pas le HOME réel : pas de ~/.npmrc surprenant à hériter non plus
+      npm_config_userconfig: npmrcVide, // écarte tout ~/.npmrc réel malgré HOME
+      npm_config_registry: 'https://registry.npmjs.org/',
+    };
+
+    const { stdout } = await execFileAsync('npm', ['audit', '--json', '--audit-level=info', '--registry', 'https://registry.npmjs.org/'], {
+      cwd: dossierIsole, timeout: 120000, maxBuffer: 32 * 1024 * 1024, env: envIsole,
     }).catch((e) => ({ stdout: e.stdout || '' }));   // npm audit sort en code ≠ 0 dès qu'il trouve quelque chose
     if (!stdout.trim()) return { erreur: 'sortie vide' };
     const j = JSON.parse(stdout);
     return { avis: j.vulnerabilities ?? {} };
   } catch (e) {
     return { erreur: String(e.message ?? e).slice(0, 200) };
+  } finally {
+    fs.rmSync(dossierIsole, { recursive: true, force: true });
   }
 }
 

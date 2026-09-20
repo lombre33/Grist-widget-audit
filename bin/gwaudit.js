@@ -38,7 +38,9 @@ async function main() {
 
   if (!cible || flag('aide') || flag('help')) {
     console.log(`Usage : gwaudit <chemin-ou-url-du-widget> [--sans-dynamique] [--sans-reseau] [--sans-html] [--sortie <dossier>] [--json]`);
-    process.exit(cible ? 0 : 1);
+    // --aide/--help est une réussite (code 0) même sans cible : ce n'est une
+    // erreur d'usage (code 1) que si ni l'un ni l'autre n'a été demandé.
+    process.exit((flag('aide') || flag('help')) ? 0 : 1);
   }
 
   const { racine, temporaire, identite } = await resoudreCible(cible);
@@ -50,6 +52,9 @@ async function main() {
     console.error(`→ Inventaire du dépôt : ${racine}`);
     const ctx = construireContexte(racine);
     console.error(`  ${ctx.fichiers.length} fichier(s), ${ctx.surface.size} dans la surface exécutée, point(s) d'entrée : ${ctx.entrees.join(', ') || '(aucun)'}`);
+    if (ctx.tronque) {
+      console.error(`  ⚠ Inventaire tronqué (dépôt anormalement volumineux) : ${ctx.tronque.fichiers ? `plus de ${ctx.tronque.maxFichiers} fichiers` : ''}${ctx.tronque.fichiers && ctx.tronque.octets ? ' et ' : ''}${ctx.tronque.octets ? `plus de ${Math.round(ctx.tronque.maxOctets / 1024 / 1024)} Mio de contenu lu` : ''} — le rapport porte sur une partie du dépôt seulement.`);
+    }
 
     console.error('→ Analyse statique (axes A, B, C, E, F)…');
     const constats = await analyseStatique(ctx, { reseau: !flag('sans-reseau') });
@@ -69,7 +74,7 @@ async function main() {
     console.error(`→ Verdict : ${notation.verdict} (score global ${notation.global}/100, ${notation.bloquants.length} bloquant(s))`);
 
     const commit = commitDepot(racine);
-    const meta = { version: VERSION, nomDepot, commit, cible: temporaire ? cible : null };
+    const meta = { version: VERSION, nomDepot, commit, cible: temporaire ? cible : null, tronque: ctx.tronque };
     const md = genererMarkdown({ ctx, notation, meta });
     fs.writeFileSync(path.join(dossierSortie, 'rapport.md'), md, 'utf8');
     console.error(`→ Rapport écrit : ${path.join(dossierSortie, 'rapport.md')}`);

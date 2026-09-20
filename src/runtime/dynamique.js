@@ -16,10 +16,15 @@
  *
  * Sécurité de l'audit lui-même : aucune requête sortante n'est laissée
  * aboutir vers un domaine tiers réel. Chaque requête est interceptée ; celles
- * qui visent l'origine locale du harnais passent normalement, les autres
+ * qui visent l'origine exacte du harnais passent normalement, les autres
  * sont enregistrées puis court-circuitées par une réponse neutre. Un widget
  * qui exfiltre réellement des données ne les fait donc jamais sortir
- * pendant l'audit.
+ * pendant l'audit. En complément de cette interception au niveau page,
+ * Chromium est lancé avec `--host-resolver-rules` : les services internes du
+ * navigateur (mise à jour de composants, Safe Browsing…) qui parlent au
+ * réseau en dehors de tout contexte de page, et échappent donc à
+ * `context.route()`, ne peuvent résoudre aucun nom de domaine réel — voir
+ * `construireArgsChromium()`.
  */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -31,6 +36,72 @@ const ICI = path.dirname(new URL(import.meta.url).pathname);
 const RACINE_OUTIL = path.resolve(ICI, '../..');
 
 const CHARGE_XSS = '<img src=x onerror="window.parent.__poc_xss_exec=(window.parent.__poc_xss_exec||0)+1">';
+
+/**
+ * Délai global du scénario joué dans le navigateur (chargement + évaluations
+ * + a11y). Les timeouts déjà posés sur `goto` et `waitForFunction` ne
+ * couvrent qu'eux-mêmes : un widget qui bloque le thread principal *après*
+ * ces deux étapes (par exemple dans un gestionnaire déclenché par
+ * `grist.onRecords`) peut sinon suspendre l'audit indéfiniment, puisque
+ * `page.evaluate()` n'a pas de timeout propre.
+ */
+const DELAI_GLOBAL_AXE_D_MS = Number(process.env.GWAUDIT_DELAI_AXE_D_MS) || 45_000;
+
+/** Course entre une promesse et un délai : rejette avec un message reconnaissable si le délai gagne. */
+function avecDelai(promesse, ms, libelle) {
+  let minuteur;
+  const depasse = new Promise((_, reject) => {
+    minuteur = setTimeout(() => reject(new Error(`DELAI_DEPASSE:${libelle}`)), ms);
+  });
+  return Promise.race([promesse, depasse]).finally(() => clearTimeout(minuteur));
+}
+
+/**
+ * Arguments de lancement de Chromium qui coupent son trafic réseau propre
+ * (mise à jour de composants, Safe Browsing, synchronisation…), en plus de
+ * l'interception `context.route()` posée sur les pages. Deux couches,
+ * volontairement redondantes :
+ *  - `--host-resolver-rules` fait porter la coupure au niveau DNS : sans nom
+ *    d'hôte résolvable, ce trafic échoue quel que soit le sous-système de
+ *    Chromium qui l'a émis. Sans risque pour le harnais lui-même, dont
+ *    l'origine est toujours une IP littérale (`127.0.0.1`), jamais un nom à
+ *    résoudre.
+ *  - `--proxy-server=direct://`, combiné à un environnement du process
+ *    Chromium purgé des variables `*_PROXY`, empêche ce même trafic de
+ *    contourner le blocage DNS en passant par un proxy HTTP(S) sortant : dans
+ *    ce cas, c'est le proxy qui résoud le nom d'hôte, pas Chromium — la seule
+ *    règle `--host-resolver-rules` ne suffit alors plus (constaté en
+ *    testant : `www.google.com` continuait de sortir via le proxy de cet
+ *    environnement cloud, alors que le nom n'aurait pas dû être résolu).
+ */
+function construireArgsChromium() {
+  const argsReseau = [
+    '--host-resolver-rules=MAP * 0.0.0.0,EXCLUDE 127.0.0.1,EXCLUDE localhost',
+    '--proxy-server=direct://',
+    '--proxy-bypass-list=<-loopback>',
+    '--disable-background-networking',
+    '--disable-component-update',
+    '--disable-domain-reliability',
+    '--disable-client-side-phishing-detection',
+    '--disable-sync',
+    '--no-first-run',
+    '--no-default-browser-check',
+  ];
+  // Le bac à sable natif de Chromium reste actif par défaut : c'est
+  // justement du code non fiable qu'on exécute ici. Ne le désactiver que
+  // si l'environnement l'exige (ex. conteneur sans espaces de noms
+  // utilisateur non privilégiés) et en connaissance de cause.
+  return process.env.GWAUDIT_CHROMIUM_SANS_SANDBOX === '1' ? [...argsReseau, '--no-sandbox'] : argsReseau;
+}
+
+/** Variables d'environnement à ne PAS transmettre au process Chromium — voir `construireArgsChromium()`. */
+const VARS_PROXY = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'];
+
+function envChromiumSansProxy() {
+  const env = { ...process.env };
+  for (const cle of VARS_PROXY) delete env[cle];
+  return env;
+}
 
 /** Document de test minimal, avec une charge utile d'injection dans un champ texte plausible. */
 function documentDeTest() {
@@ -122,13 +193,9 @@ export async function auditDynamique(ctx, options = {}) {
     const { origine, fermer } = await demarrerServeur({ widgetRacine: ctx.racine, harnaisRacine });
     arreterServeur = fermer;
 
-    // Le bac à sable natif de Chromium reste actif par défaut : c'est
-    // justement du code non fiable qu'on exécute ici. Ne le désactiver que
-    // si l'environnement l'exige (ex. conteneur sans espaces de noms
-    // utilisateur non privilégiés) et en connaissance de cause.
-    const args = process.env.GWAUDIT_CHROMIUM_SANS_SANDBOX === '1' ? ['--no-sandbox'] : [];
     navigateur = await chromium.launch({
-      args,
+      args: construireArgsChromium(),
+      env: envChromiumSansProxy(),
       // Chromium préinstallé de l'environnement : évite un téléchargement
       // réseau si la version de Playwright installée localement en attend
       // une révision différente (voir README de déploiement).
@@ -145,8 +212,15 @@ export async function auditDynamique(ctx, options = {}) {
     await contexte.route('**/*', (route) => {
       const req = route.request();
       const url = req.url();
-      let h; try { h = new URL(url).hostname; } catch { h = null; }
-      const local = h === '127.0.0.1' || h === 'localhost';
+      let h, urlOrigine;
+      try { const u = new URL(url); h = u.hostname; urlOrigine = u.origin; } catch { h = null; urlOrigine = null; }
+      // Comparaison à l'origine exacte du harnais (protocole + hôte + port),
+      // pas au seul hostname : sur un poste où d'autres services écoutent en
+      // boucle locale (base de données, autre serveur de dev…), un simple
+      // `hostname === '127.0.0.1'` leur ouvrirait un passe-droit que rien ne
+      // justifie — seule l'origine précise que l'outil vient de démarrer
+      // doit passer.
+      const local = urlOrigine === origine;
 
       if (/\/grist-plugin-api\.js(\?|$)/i.test(url) && !local) {
         // Substitution intentionnelle : le widget croit charger l'API depuis
@@ -177,48 +251,71 @@ export async function auditDynamique(ctx, options = {}) {
       window.__REGLAGE__ = { niveauAccorde: 'full' };
     }, { doc: documentDeTest(), widgetUrl: `${origine}/widget/${entree}` });
 
-    await page.goto(`${origine}/harnais/page-hote.html`, { waitUntil: 'load', timeout: 30000 });
-    await page.waitForFunction(() => window.__hotePret === true, { timeout: 20000 }).catch(() => {});
-
-    brut.journalHote = await page.evaluate(() => window.__hoteJournal ?? null).catch(() => null);
-    const erreurHote = await page.evaluate(() => window.__hoteErreur ?? null).catch(() => null);
-    const xssExecutes = await page.evaluate(() => window.__poc_xss_exec ?? 0).catch(() => 0);
-
-    // Accessibilité : axe-core injecté et exécuté dans le cadre du widget lui-même.
+    // L'ensemble chargement + évaluations + a11y est couru contre un délai
+    // global : `goto` et `waitForFunction` ont chacun leur propre timeout,
+    // mais rien ne bornait ce qui suit — `page.evaluate()` n'a pas de
+    // timeout propre et attendrait indéfiniment un widget qui bloque le
+    // thread principal après le chargement initial.
+    let delaiDepasse = false;
     try {
-      const frame = page.frames().find((f) => f !== page.mainFrame());
-      if (frame) {
-        // `url` plutôt que `path` : Playwright injecterait sinon le contenu du
-        // fichier comme script INLINE, que la CSP `script-src 'self'` d'un
-        // widget bien conçu refuse à raison (voir C-CSP-01 / test 1 ci-dessus).
-        // Une balise `<script src=…>` de même origine reste, elle, couverte
-        // par `'self'`.
-        await frame.addScriptTag({ url: `${origine}/harnais/axe.min.js` });
-        brut.a11y = await frame.evaluate(async () => {
-          const r = await window.axe.run(document, { resultTypes: ['violations'] });
-          return r.violations.map((v) => ({
-            id: v.id, impact: v.impact, description: v.description, aide: v.help, url: v.helpUrl,
-            occurrences: v.nodes.length,
-            exemples: v.nodes.slice(0, 3).map((n) => n.html?.slice(0, 200)),
-          }));
-        });
-      }
-    } catch (e) { brut.a11yErreur = String(e?.message ?? e); }
+      await avecDelai((async () => {
+        await page.goto(`${origine}/harnais/page-hote.html`, { waitUntil: 'load', timeout: 30000 });
+        await page.waitForFunction(() => window.__hotePret === true, { timeout: 20000 }).catch(() => {});
+
+        brut.journalHote = await page.evaluate(() => window.__hoteJournal ?? null).catch(() => null);
+        brut.erreurHote = await page.evaluate(() => window.__hoteErreur ?? null).catch(() => null);
+        brut.xssExecutes = await page.evaluate(() => window.__poc_xss_exec ?? 0).catch(() => 0);
+
+        // Accessibilité : axe-core injecté et exécuté dans le cadre du widget lui-même.
+        try {
+          const frame = page.frames().find((f) => f !== page.mainFrame());
+          if (frame) {
+            // `url` plutôt que `path` : Playwright injecterait sinon le contenu du
+            // fichier comme script INLINE, que la CSP `script-src 'self'` d'un
+            // widget bien conçu refuse à raison (voir C-CSP-01 / test 1 ci-dessus).
+            // Une balise `<script src=…>` de même origine reste, elle, couverte
+            // par `'self'`.
+            await frame.addScriptTag({ url: `${origine}/harnais/axe.min.js` });
+            brut.a11y = await frame.evaluate(async () => {
+              const r = await window.axe.run(document, { resultTypes: ['violations'] });
+              return r.violations.map((v) => ({
+                id: v.id, impact: v.impact, description: v.description, aide: v.help, url: v.helpUrl,
+                occurrences: v.nodes.length,
+                exemples: v.nodes.slice(0, 3).map((n) => n.html?.slice(0, 200)),
+              }));
+            });
+          }
+        } catch (e) { brut.a11yErreur = String(e?.message ?? e); }
+      })(), DELAI_GLOBAL_AXE_D_MS, 'scenario-navigateur');
+    } catch (e) {
+      if (String(e?.message ?? '').startsWith('DELAI_DEPASSE:')) delaiDepasse = true;
+      else throw e;
+    }
 
     // --- Constats ---
 
-    if (erreurHote) {
+    if (delaiDepasse) {
+      constats.push(constat({
+        regle: 'D-TIMEOUT-01', axe: 'D', severite: 'majeur', confiance: 'prouve',
+        titre: `Le scénario de test n'a pas terminé dans le délai imparti (${Math.round(DELAI_GLOBAL_AXE_D_MS / 1000)}s)`,
+        constat: "Le chargement et les vérifications de l'axe D n'ont pas pu se terminer dans le temps alloué : le widget occupe le navigateur au-delà de ce qu'un simple scénario de chargement justifie normalement.",
+        impact: "Les vérifications de cet axe qui n'ont pas eu le temps de s'exécuter sont absentes du rapport ci-dessous — leur absence ne vaut pas conformité.",
+        remediation: "Vérifier si le widget contient une boucle bloquante ou un traitement long au chargement. Si le widget a légitimement besoin de plus de temps, relancer avec la variable d'environnement GWAUDIT_DELAI_AXE_D_MS.",
+      }));
+    }
+
+    if (brut.erreurHote) {
       constats.push(constat({
         regle: 'D-ERR-00', axe: 'D', severite: 'majeur', confiance: 'prouve',
         titre: "Le widget n'a pas pu être chargé dans l'hôte de test",
-        constat: `Erreur : ${erreurHote}`,
+        constat: `Erreur : ${brut.erreurHote}`,
         impact: "Aucune des autres vérifications dynamiques n'a pu s'exécuter normalement. Les constats de l'axe D ci-dessous sont partiels.",
         remediation: "Vérifier que le widget appelle bien grist.ready() sans dépendre d'une fonctionnalité Grist non simulée par ce harnais léger (voir méthodologie).",
       }));
     }
 
     constats.push(...constatsReseau(brut.requetes, brut.substitutionApiGrist));
-    constats.push(...constatsXss(xssExecutes));
+    constats.push(...constatsXss(brut.xssExecutes));
     constats.push(...constatsA11y(brut.a11y));
     constats.push(...constatsConsole(brut.consoles, brut.erreursPage, brut.requetes.length));
     constats.push(...constatsNegociationAcces(brut.journalHote));

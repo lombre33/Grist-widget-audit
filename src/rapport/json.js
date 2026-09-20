@@ -10,6 +10,7 @@ export function genererJson({ ctx, notation, meta }) {
     contexte: {
       fichiers: ctx.fichiers.length, surfaceExecutee: ctx.surface.size,
       entrees: ctx.entrees, niveauxAccesDetectes: [...new Set((ctx.usagesGrist?.acces ?? []).map((a) => a.niveau))],
+      tronque: meta.tronque ?? null,
     },
     verdict: notation.verdict, motif: notation.motif, scoreGlobal: notation.global,
     bloquants: notation.bloquants.map((c) => c.uid),

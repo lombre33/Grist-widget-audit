@@ -19,6 +19,17 @@ const EXCLUS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'cover
 const BINAIRES = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pdf', '.woff', '.woff2',
   '.ttf', '.otf', '.eot', '.zip', '.gz', '.mp4', '.webm', '.mp3', '.wasm']);
 
+/**
+ * Plafonds sur l'inventaire, indépendants de la confiance qu'on peut avoir
+ * dans le dépôt audité : `gwaudit` est justement conçu pour tourner sur du
+ * code qu'on ne connaît pas encore. Sans ça, un dépôt hostile (des dizaines
+ * de milliers de petits fichiers, ou quelques gros fichiers texte juste sous
+ * le seuil « binaire ») peut geler ou épuiser la mémoire de la machine qui
+ * audite — bien avant que la moindre règle statique ne tourne.
+ */
+const MAX_FICHIERS = 20_000;
+const MAX_OCTETS_LUS_CUMULES = 200 * 1024 * 1024;
+
 /** Extensions considérées comme du code exécuté côté navigateur. */
 const CODE_WEB = new Set(['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.html', '.htm', '.css']);
 
@@ -28,7 +39,8 @@ const CODE_WEB = new Set(['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.html',
  */
 export function construireContexte(racine) {
   const fichiers = [];
-  parcourir(racine, racine, fichiers);
+  const etat = { octetsLus: 0, tronqueFichiers: false, tronqueOctets: false };
+  parcourir(racine, racine, fichiers, etat);
 
   const paquet = lireJson(path.join(racine, 'package.json'));
   const manifestes = fichiers
@@ -41,18 +53,25 @@ export function construireContexte(racine) {
 
   for (const f of fichiers) f.executee = surface.has(f.chemin);
 
-  return { racine, fichiers, entrees, surface, paquet, manifestes };
+  const tronque = (etat.tronqueFichiers || etat.tronqueOctets)
+    ? { fichiers: etat.tronqueFichiers, octets: etat.tronqueOctets, maxFichiers: MAX_FICHIERS, maxOctets: MAX_OCTETS_LUS_CUMULES }
+    : null;
+
+  return { racine, fichiers, entrees, surface, paquet, manifestes, tronque };
 }
 
-function parcourir(racine, dossier, acc) {
+function parcourir(racine, dossier, acc, etat) {
+  if (etat.tronqueFichiers) return;
   let entrees;
   try { entrees = fs.readdirSync(dossier, { withFileTypes: true }); } catch { return; }
   for (const e of entrees) {
+    if (etat.tronqueFichiers) return;
     if (EXCLUS.has(e.name)) continue;
     const abs = path.join(dossier, e.name);
     if (e.isSymbolicLink()) continue;
-    if (e.isDirectory()) { parcourir(racine, abs, acc); continue; }
+    if (e.isDirectory()) { parcourir(racine, abs, acc, etat); continue; }
     if (!e.isFile()) continue;
+    if (acc.length >= MAX_FICHIERS) { etat.tronqueFichiers = true; return; }
     const rel = path.relative(racine, abs);
     const ext = path.extname(e.name).toLowerCase();
     let taille = 0;
@@ -60,15 +79,26 @@ function parcourir(racine, dossier, acc) {
     const binaire = BINAIRES.has(ext) || taille > 4 * 1024 * 1024;
     const f = { chemin: rel, ext, taille, binaire, code: CODE_WEB.has(ext), executee: false };
     if (!binaire) {
-      try {
-        f.contenu = fs.readFileSync(abs, 'utf8');
-        f.lignes = f.contenu.split('\n');
-        // Ligne « significative » : ni vide, ni commentaire seul.
-        f.locSignificatives = f.lignes.filter((l) => {
-          const t = l.trim();
-          return t && !/^(\/\/|\/\*|\*|#|<!--)/.test(t);
-        }).length;
-      } catch { f.binaire = true; }
+      if (etat.octetsLus + taille > MAX_OCTETS_LUS_CUMULES) {
+        // Plafond cumulé atteint : on garde l'entrée (taille, extension) pour
+        // l'inventaire et les axes qui n'ont pas besoin du contenu, mais on
+        // n'en lit pas le texte en mémoire — au même titre qu'un fichier
+        // binaire pour le reste de l'outil (voir `f.binaire`).
+        etat.tronqueOctets = true;
+        f.binaire = true;
+        f.contenuTronque = true;
+      } else {
+        try {
+          f.contenu = fs.readFileSync(abs, 'utf8');
+          etat.octetsLus += taille;
+          f.lignes = f.contenu.split('\n');
+          // Ligne « significative » : ni vide, ni commentaire seul.
+          f.locSignificatives = f.lignes.filter((l) => {
+            const t = l.trim();
+            return t && !/^(\/\/|\/\*|\*|#|<!--)/.test(t);
+          }).length;
+        } catch { f.binaire = true; }
+      }
     }
     acc.push(f);
   }
