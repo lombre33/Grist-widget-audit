@@ -72,6 +72,13 @@ function echapperHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 }
 
+/** Nom de fichier suggéré pour un téléchargement, dérivé du dépôt plutôt que de l'id opaque. */
+export function nomFichierSuggere(cible, extension) {
+  const segment = cible.replace(/\.git$/, '').split(/[/:]/).filter(Boolean).pop() || 'widget';
+  const nom = segment.replace(/[^a-zA-Z0-9_-]/g, '-').slice(0, 60) || 'widget';
+  return `gwaudit-${nom}.${extension}`;
+}
+
 /**
  * Tue tout l'arbre de processus issu de `enfant` (pas seulement lui) : le
  * sous-processus `node bin/gwaudit.js` que nous lançons ici lance lui-même
@@ -254,10 +261,14 @@ function pageSuivi(etat) {
   body { font-family: system-ui, sans-serif; max-width: 720px; margin: 3rem auto; padding: 0 1rem; color: #1a1a1a; }
   h1 { font-size: 1.4rem; word-break: break-all; }
   pre { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; word-break: break-word; max-height: 60vh; overflow-y: auto; }
-  a.bouton { display: inline-block; margin-top: 1rem; padding: .6rem 1.2rem; background: #1a1a1a; color: #fff; text-decoration: none; }
+  a.bouton { display: inline-block; margin-top: 1rem; margin-right: .6rem; padding: .6rem 1.2rem; background: #1a1a1a; color: #fff; text-decoration: none; }
+  a.bouton.secondaire { background: #fff; color: #1a1a1a; border: 1px solid #1a1a1a; }
+  a.lien-retour { display: inline-block; margin-bottom: 1rem; color: #555; text-decoration: none; font-size: .9rem; }
+  a.lien-retour:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
+<a class="lien-retour" href="/">← Nouvel audit</a>
 <h1>Audit de <span id="cible">${echapperHtml(etat.cible)}</span></h1>
 <p id="statut">En cours…</p>
 <pre id="journal" aria-live="polite"></pre>
@@ -282,12 +293,59 @@ function pageSuivi(etat) {
       lien.href = '/audits/${etat.id}/rapport';
       lien.textContent = "Voir le rapport d'audit";
       actions.appendChild(lien);
+      const lienMd = document.createElement('a');
+      lienMd.className = 'bouton secondaire';
+      lienMd.href = '/audits/${etat.id}/rapport.md';
+      lienMd.textContent = 'Télécharger en Markdown';
+      actions.appendChild(lienMd);
+      const lienJson = document.createElement('a');
+      lienJson.className = 'bouton secondaire';
+      lienJson.href = '/audits/${etat.id}/rapport.json';
+      lienJson.textContent = 'Télécharger en JSON';
+      actions.appendChild(lienJson);
     } else {
       statut.textContent = "Échec de l'audit — voir le journal ci-dessus.";
     }
   });
   source.onerror = () => { statut.textContent = 'Connexion perdue avec le serveur.'; };
 </script>
+</body>
+</html>`;
+}
+
+/**
+ * Page de rapport : une barre de navigation fixe (retour à l'accueil pour
+ * auditer un autre widget, téléchargements) au-dessus du rapport lui-même
+ * chargé dans un cadre — plutôt que d'injecter cette barre dans le HTML de
+ * `rapport.html`, ce qui obligerait à connaître/modifier sa structure
+ * (propriété du fil « Maquette HTML du rapport »). Le rapport reste sa
+ * propre page, servie telle quelle par /rapport-brut.
+ */
+function pageRapport(etat) {
+  return `<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Rapport — gwaudit</title>
+<style>
+  html, body { margin: 0; height: 100%; font-family: system-ui, sans-serif; }
+  .barre { display: flex; align-items: center; gap: .3rem; padding: .6rem 1rem; background: #1a1a1a; color: #fff; flex-wrap: wrap; box-sizing: border-box; }
+  .barre a { color: #fff; text-decoration: none; font-size: .85rem; padding: .35rem .7rem; border-radius: 4px; white-space: nowrap; }
+  .barre a:hover { background: rgba(255,255,255,.15); }
+  .barre a.retour { font-weight: 600; margin-right: .5rem; }
+  .barre .sep { opacity: .35; margin: 0 .2rem; }
+  iframe { width: 100%; height: calc(100% - 45px); border: 0; display: block; }
+</style>
+</head>
+<body>
+<div class="barre">
+  <a class="retour" href="/">← Nouvel audit</a>
+  <span class="sep">·</span>
+  <a href="/audits/${etat.id}/rapport.md" download>Télécharger en Markdown</a>
+  <a href="/audits/${etat.id}/rapport.json" download>Télécharger en JSON</a>
+</div>
+<iframe src="/audits/${etat.id}/rapport-brut" title="Rapport d'audit gwaudit"></iframe>
 </body>
 </html>`;
 }
@@ -385,6 +443,20 @@ export function demarrerInterface({ port = 4317, hote = process.env.GWAUDIT_INTE
       if (req.method === 'GET' && mRapport) {
         const etat = audits.get(mRapport[1]);
         if (!etat) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Audit inconnu.'); return; }
+        if (!fs.existsSync(path.join(etat.dossierSortie, 'rapport.html'))) {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end("Rapport pas (encore) disponible — voir le journal de l'audit pour la cause.");
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(pageRapport(etat));
+        return;
+      }
+
+      const mRapportBrut = url.pathname.match(/^\/audits\/([0-9a-f-]{36})\/rapport-brut$/);
+      if (req.method === 'GET' && mRapportBrut) {
+        const etat = audits.get(mRapportBrut[1]);
+        if (!etat) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Audit inconnu.'); return; }
         const cheminRapport = path.join(etat.dossierSortie, 'rapport.html');
         // Lire avant d'écrire l'en-tête : `fs.existsSync` suivi d'un
         // `readFileSync` séparé est lui-même un TOCTOU (le fichier peut
@@ -407,6 +479,29 @@ export function demarrerInterface({ port = 4317, hote = process.env.GWAUDIT_INTE
           'Content-Type': 'text/html; charset=utf-8',
           'Content-Security-Policy': "default-src 'none'; style-src 'unsafe-inline'",
           'X-Content-Type-Options': 'nosniff',
+        });
+        res.end(contenu);
+        return;
+      }
+
+      const mTelechargement = url.pathname.match(/^\/audits\/([0-9a-f-]{36})\/rapport\.(md|json)$/);
+      if (req.method === 'GET' && mTelechargement) {
+        const [, id, extension] = mTelechargement;
+        const etat = audits.get(id);
+        if (!etat) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Audit inconnu.'); return; }
+        const cheminFichier = path.join(etat.dossierSortie, `rapport.${extension}`);
+        let contenu;
+        try { contenu = fs.readFileSync(cheminFichier, 'utf8'); }
+        catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end(`Rapport .${extension} pas (encore) disponible — voir le journal de l'audit pour la cause.`);
+          return;
+        }
+        const typeContenu = extension === 'json' ? 'application/json; charset=utf-8' : 'text/markdown; charset=utf-8';
+        res.writeHead(200, {
+          'Content-Type': typeContenu,
+          'X-Content-Type-Options': 'nosniff',
+          'Content-Disposition': `attachment; filename="${nomFichierSuggere(etat.cible, extension)}"`,
         });
         res.end(contenu);
         return;

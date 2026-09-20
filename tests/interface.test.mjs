@@ -1,7 +1,16 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { demarrerInterface } from '../src/interface/serveur.js';
+import { demarrerInterface, nomFichierSuggere } from '../src/interface/serveur.js';
+
+test('nomFichierSuggere dérive un nom de fichier lisible et sûr depuis une URL de dépôt', () => {
+  assert.equal(nomFichierSuggere('https://github.com/lombre33/mon-widget.git', 'md'), 'gwaudit-mon-widget.md');
+  assert.equal(nomFichierSuggere('https://github.com/lombre33/mon-widget', 'json'), 'gwaudit-mon-widget.json');
+  assert.equal(nomFichierSuggere('git@github.com:lombre33/mon-widget.git', 'md'), 'gwaudit-mon-widget.md');
+  // Caractères hors [a-zA-Z0-9_-] neutralisés : un nom de dépôt piégé ne doit
+  // pas se retrouver tel quel dans un en-tête Content-Disposition.
+  assert.equal(nomFichierSuggere('https://github.com/x/widget"; injection', 'md'), 'gwaudit-widget---injection.md');
+});
 
 let base, serveur;
 
@@ -40,12 +49,14 @@ test('POST /audits refuse un corps vide ou une cible absente', async () => {
   assert.equal(rep.status, 400);
 });
 
-test('GET /audits/<id inconnu> et /audits/<id inconnu>/rapport renvoient 404', async () => {
+test('GET /audits/<id inconnu> et ses sous-routes de rapport renvoient toutes 404', async () => {
   const idBidon = '00000000-0000-0000-0000-000000000000';
   const rep1 = await fetch(`${base}/audits/${idBidon}`);
   assert.equal(rep1.status, 404);
-  const rep2 = await fetch(`${base}/audits/${idBidon}/rapport`);
-  assert.equal(rep2.status, 404);
+  for (const suffixe of ['rapport', 'rapport-brut', 'rapport.md', 'rapport.json']) {
+    const rep = await fetch(`${base}/audits/${idBidon}/${suffixe}`);
+    assert.equal(rep.status, 404, `/${suffixe} devrait renvoyer 404 pour un audit inconnu`);
+  }
 });
 
 test("un audit réellement lancé (rejeté par la validation SSRF de la CLI) se termine en échec, avec un journal en direct via SSE", async () => {
@@ -64,7 +75,9 @@ test("un audit réellement lancé (rejeté par la validation SSRF de la CLI) se 
 
   const repPage = await fetch(`${base}/audits/${id}`);
   assert.equal(repPage.status, 200);
-  assert.ok((await repPage.text()).includes('localhost/nonexistent-repo.git'));
+  const pageTexte = await repPage.text();
+  assert.ok(pageTexte.includes('localhost/nonexistent-repo.git'));
+  assert.ok(pageTexte.includes('Nouvel audit'), 'la page de suivi doit permettre de revenir en arrière sans attendre la fin');
 
   const repSse = await fetch(`${base}/audits/${id}/evenements`);
   assert.equal(repSse.status, 200);
@@ -85,6 +98,10 @@ test("un audit réellement lancé (rejeté par la validation SSRF de la CLI) se 
 
   const repRapport = await fetch(`${base}/audits/${id}/rapport`);
   assert.equal(repRapport.status, 404, "aucun rapport n'existe pour un audit qui a échoué avant de produire quoi que ce soit");
+  for (const suffixe of ['rapport-brut', 'rapport.md', 'rapport.json']) {
+    const rep = await fetch(`${base}/audits/${id}/${suffixe}`);
+    assert.equal(rep.status, 404, `/${suffixe} ne doit rien servir pour un audit qui a échoué avant tout rapport`);
+  }
 });
 
 test('un deuxième audit refusé (409) tant que le premier tourne encore', async () => {
