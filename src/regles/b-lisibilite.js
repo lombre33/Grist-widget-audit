@@ -25,7 +25,7 @@ export function analyserNommage(ctx) {
   const constats = [];
   const pauvres = [];
 
-  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true, ignorerVendorise: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
     walk.simple(ast, {
       VariableDeclarator(n) {
@@ -131,7 +131,7 @@ export function analyserReadme(ctx) {
 export function analyserCommentaires(ctx) {
   const constats = [];
   for (const f of ctx.fichiers) {
-    if (!f.executee || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;
+    if (!f.executee || f.vendorise || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;
     if ((f.locSignificatives ?? 0) < 200) continue;
 
     const lignesCommentees = f.lignes.filter((l) => /^\s*(\/\/|\/\*|\*)/.test(l)).length;
@@ -174,11 +174,16 @@ export function analyserSignauxGeneration(ctx) {
   ];
 
   for (const f of ctx.fichiers) {
-    if (!f.contenu || f.binaire || !['.js', '.mjs', '.html'].includes(f.ext)) continue;
+    if (!f.contenu || f.binaire || f.vendorise || !['.js', '.mjs', '.html'].includes(f.ext)) continue;
     if (f.chemin.endsWith('.md')) continue;
     for (const [re, libelle] of motifs) {
-      const n = [...f.contenu.matchAll(re)].length;
-      if (n) signaux.push({ fichier: f.chemin, libelle, occurrences: n });
+      const occurrences = [...f.contenu.matchAll(re)];
+      if (occurrences.length) {
+        signaux.push({
+          fichier: f.chemin, libelle, occurrences: occurrences.length,
+          ligne: f.contenu.slice(0, occurrences[0].index).split('\n').length,
+        });
+      }
     }
   }
 
@@ -189,7 +194,7 @@ export function analyserSignauxGeneration(ctx) {
     constats.push(constat({
       regle: 'B-IA-01', axe: 'B', severite: 'mineur', confiance: 'a_verifier',
       titre: 'Marqueurs évoquant du code généré puis peu retouché',
-      fichier: signaux[0].fichier,
+      fichier: signaux[0].fichier, ligne: signaux[0].ligne,
       constat: `${total} occurrence(s) réparties sur ${familles.size} familles de marqueurs : ${[...familles].join(' ; ')}.`,
       impact: "Le guide autorise explicitement l'aide d'un outil d'IA, mais refuse la sortie brute non relue, et demande que le contributeur puisse défendre chaque partie du code en revue. Ces marqueurs sont le signal que le relecteur regardera en priorité.",
       remediation: "Relire les fichiers concernés : supprimer les commentaires qui paraphrasent le code, garder ceux qui expliquent une intention. Aucun de ces signaux n'est disqualifiant en soi ; ce sont les endroits où la relecture humaine doit être démontrable.",
@@ -203,7 +208,7 @@ export function analyserSignauxGeneration(ctx) {
 /** Verbosité : le code est-il lisible « en une seule fois » ? */
 export function analyserVerbosite(ctx) {
   const constats = [];
-  const surface = ctx.fichiers.filter((f) => f.executee && ['.js', '.mjs'].includes(f.ext));
+  const surface = ctx.fichiers.filter((f) => f.executee && !f.vendorise && ['.js', '.mjs'].includes(f.ext));
   const loc = surface.reduce((s, f) => s + (f.locSignificatives ?? 0), 0);
   const html = ctx.fichiers.filter((f) => f.executee && ['.html', '.htm'].includes(f.ext))
     .reduce((s, f) => s + (f.locSignificatives ?? 0), 0);
@@ -227,7 +232,7 @@ export function analyserLangue(ctx) {
   const constats = [];
   let fr = 0, en = 0;
   for (const f of ctx.fichiers) {
-    if (!f.executee || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;
+    if (!f.executee || f.vendorise || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;
     for (const l of f.lignes) {
       const t = l.trim();
       if (!/^(\/\/|\*)/.test(t) || t.length < 20) continue;

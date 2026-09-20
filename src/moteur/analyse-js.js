@@ -53,9 +53,10 @@ export function parser(source) {
  * l'AST et un utilitaire `signaler(noeud, …)` qui gère le décalage de ligne
  * des scripts inline.
  */
-export function pourChaqueUniteJs(contexte, { surfaceSeulement = false } = {}, visiteur) {
+export function pourChaqueUniteJs(contexte, { surfaceSeulement = false, ignorerVendorise = false } = {}, visiteur) {
   for (const f of contexte.fichiers) {
     if (surfaceSeulement && !f.executee) continue;
+    if (ignorerVendorise && f.vendorise) continue;
     for (const u of unitesJs(f)) {
       const ast = parser(u.source);
       if (!ast) { visiteur({ unite: u, ast: null, fichier: f, ligneDe: () => null, walk }); continue; }
