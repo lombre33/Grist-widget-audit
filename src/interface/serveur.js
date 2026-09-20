@@ -367,24 +367,35 @@ const LIBELLES_SEVERITE_ROADMAP = { critique: 'Critique', majeur: 'Majeur', mine
  * forme lisible est ce qui manquait ; c'est elle qu'on écrit ici, sans
  * toucher à `src/rapport/` (propriété d'un autre fil).
  */
-function pageRoadmap(etat, roadmap) {
-  const lignes = roadmap.map((item, i) => {
-    const etiquettes = [
-      item.bloquant ? '<span class="etq etq-bloquant">Bloquant</span>' : '',
-      `<span class="etq etq-${echapperHtml(item.severite)}">${echapperHtml(LIBELLES_SEVERITE_ROADMAP[item.severite] ?? item.severite)}</span>`,
-    ].join(' ');
-    const nbFichiers = item.fichiers?.length ?? 0;
-    const portee = item.occurrences > 1
-      ? `${item.occurrences} occurrences${nbFichiers ? ` dans ${nbFichiers} fichier${nbFichiers > 1 ? 's' : ''}` : ''}`
-      : (item.fichiers?.[0] ?? '');
-    return `      <li class="etape">
-        <span class="rang">${i + 1}</span>
+// Au-delà, les étapes suivantes sont repliées (sous <details>, jamais retirées ni
+// tronquées : même bloc de données, juste pas ouvert par défaut) — sur un widget avec
+// beaucoup de constats, la question « par quoi je commence » a sa réponse tout de suite
+// à l'écran, sans faire défiler des dizaines de lignes pour la trouver.
+const SEUIL_ETAPES_VISIBLES = 8;
+
+function rendreEtapeRoadmap(item, rang) {
+  const etiquettes = [
+    item.bloquant ? '<span class="etq etq-bloquant">Bloquant</span>' : '',
+    `<span class="etq etq-${echapperHtml(item.severite)}">${echapperHtml(LIBELLES_SEVERITE_ROADMAP[item.severite] ?? item.severite)}</span>`,
+  ].join(' ');
+  const nbFichiers = item.fichiers?.length ?? 0;
+  const portee = item.occurrences > 1
+    ? `${item.occurrences} occurrences${nbFichiers ? ` dans ${nbFichiers} fichier${nbFichiers > 1 ? 's' : ''}` : ''}`
+    : (item.fichiers?.[0] ?? '');
+  return `      <li class="etape">
+        <span class="rang">${rang}</span>
         <div class="etape-corps">
           <p class="etape-titre">${etiquettes} ${echapperHtml(item.titre)}</p>
           <p class="etape-meta"><code class="regle">${echapperHtml(item.regle)}</code>${portee ? ' · ' + echapperHtml(portee) : ''}</p>
         </div>
       </li>`;
-  }).join('\n');
+}
+
+function pageRoadmap(etat, roadmap) {
+  const visibles = roadmap.slice(0, SEUIL_ETAPES_VISIBLES);
+  const repliees = roadmap.slice(SEUIL_ETAPES_VISIBLES);
+  const lignesVisibles = visibles.map((item, i) => rendreEtapeRoadmap(item, i + 1)).join('\n');
+  const lignesRepliees = repliees.map((item, i) => rendreEtapeRoadmap(item, SEUIL_ETAPES_VISIBLES + i + 1)).join('\n');
 
   return `<!doctype html>
 <html lang="fr">
@@ -414,6 +425,9 @@ function pageRoadmap(etat, roadmap) {
   .etq-majeur { background: #b36b00; }
   .etq-mineur { background: #6b6b6b; }
   .etq-info { background: #9a9a9a; }
+  details.suite { margin-top: 0; }
+  details.suite summary { cursor: pointer; padding: .9rem 0; border-top: 1px solid #e2e2e2; font-weight: 600; color: #1a1a1a; }
+  details.suite ol.feuille { margin-top: 0; }
 </style>
 </head>
 <body>
@@ -428,8 +442,14 @@ function pageRoadmap(etat, roadmap) {
 <h1>Par quoi commencer — <span>${echapperHtml(etat.cible)}</span></h1>
 <p class="aide">Classé du problème qui compte le plus pour la note — les points bloquants d'abord — au moins urgent, pas juste par gravité brute.</p>
 ${roadmap.length ? `<ol class="feuille">
-${lignes}
-    </ol>` : '<p class="aide">Rien à corriger : aucun constat sur ce widget.</p>'}
+${lignesVisibles}
+    </ol>${repliees.length ? `
+    <details class="suite">
+      <summary>Voir les ${repliees.length} étape${repliees.length > 1 ? 's' : ''} suivante${repliees.length > 1 ? 's' : ''}</summary>
+      <ol class="feuille">
+${lignesRepliees}
+      </ol>
+    </details>` : ''}` : '<p class="aide">Rien à corriger : aucun constat sur ce widget.</p>'}
 </body>
 </html>`;
 }
