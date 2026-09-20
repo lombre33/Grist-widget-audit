@@ -103,6 +103,53 @@ function envChromiumSansProxy() {
   return env;
 }
 
+/**
+ * Chemin réel du binaire Chromium à lancer : celui préinstallé de
+ * l'environnement s'il existe (évite un téléchargement réseau si la
+ * version de Playwright installée localement en attend une révision
+ * différente), sinon celui que Playwright installerait par défaut.
+ */
+function cheminChromium(chromium) {
+  const preinstalle = '/opt/pw-browsers/chromium-1194/chrome-linux/chrome';
+  return fs.existsSync(preinstalle) ? preinstalle : chromium.executablePath();
+}
+
+/**
+ * Enveloppe le binaire Chromium dans un script qui pose un plafond de temps
+ * CPU (`ulimit -t`, RLIMIT_CPU) avant de l'exécuter avec `exec` — donc sans
+ * changer de PID, si bien que tous les processus que Chromium fait naître
+ * ensuite (zygote, rendu, GPU, réseau…) héritent la même limite dès leur
+ * création, pas seulement le process principal.
+ *
+ * Une limite de MÉMOIRE (`ulimit -v`, RLIMIT_AS) a été essayée et écartée :
+ * un renderer Chromium réserve, dès son démarrage normal, un espace
+ * d'adressage virtuel de l'ordre du téraoctet (constaté ici : jusqu'à
+ * ~1,4 To de VSZ pour quelques dizaines de Mio réellement utilisés), pour
+ * des raisons internes à V8 sans rapport avec la mémoire physique
+ * consommée. Aucune valeur de `ulimit -v` n'est à la fois assez basse pour
+ * protéger la machine et assez haute pour laisser Chromium démarrer —
+ * testé ici avec une limite de 2 Gio, largement au-dessus de ce qu'un
+ * audit consomme normalement (~200 Mio résidents) : le lancement échoue
+ * immédiatement. Une vraie limite mémoire demande un plafond sur la
+ * mémoire RÉSIDENTE (cgroups), pas sur l'espace virtuel qu'un ulimit POSIX
+ * peut poser — c'est le rôle des limites au niveau conteneur prévues pour
+ * la V2 (docs/ARCHITECTURE-V2.md, §4), pas quelque chose qu'un simple
+ * réglage de lancement peut fournir ici. Le délai global déjà posé plus
+ * haut (`DELAI_GLOBAL_AXE_D_MS`) reste donc la seule protection contre un
+ * widget qui consommerait la mémoire de la machine ; ce plafond CPU est un
+ * filet complémentaire, pas un substitut.
+ */
+function construireLanceurChromium(dossierTravail, cheminReel) {
+  const limiteCpuSecondes = Math.ceil(DELAI_GLOBAL_AXE_D_MS / 1000) + 30;
+  const lanceur = path.join(dossierTravail, 'lancer-chromium.sh');
+  fs.writeFileSync(
+    lanceur,
+    `#!/bin/sh\nulimit -t ${limiteCpuSecondes} 2>/dev/null\nexec "${cheminReel}" "$@"\n`,
+    { mode: 0o755 },
+  );
+  return lanceur;
+}
+
 /** Document de test minimal, avec une charge utile d'injection dans un champ texte plausible. */
 function documentDeTest() {
   return {
@@ -196,11 +243,7 @@ export async function auditDynamique(ctx, options = {}) {
     navigateur = await chromium.launch({
       args: construireArgsChromium(),
       env: envChromiumSansProxy(),
-      // Chromium préinstallé de l'environnement : évite un téléchargement
-      // réseau si la version de Playwright installée localement en attend
-      // une révision différente (voir README de déploiement).
-      executablePath: fs.existsSync('/opt/pw-browsers/chromium-1194/chrome-linux/chrome')
-        ? '/opt/pw-browsers/chromium-1194/chrome-linux/chrome' : undefined,
+      executablePath: construireLanceurChromium(dossierTravail, cheminChromium(chromium)),
     });
     const contexte = await navigateur.newContext({ locale: 'fr-FR', viewport: { width: 1280, height: 900 } });
     page = await contexte.newPage();
