@@ -61,3 +61,10 @@ test('un axe non exécuté ne contribue aucune entrée à ordonnancer', () => {
   const items = ordonnancerCorrections(noter(constats, new Set(['D'])));
   assert.ok(items.every((i) => i.axe !== 'D'));
 });
+
+test('noter() expose lui-même la roadmap, sans appel séparé à ordonnancerCorrections', () => {
+  const constats = [c('C-X', 'C', 'majeur')];
+  const n = noter(constats, new Set(['D']));
+  assert.deepEqual(n.roadmap, ordonnancerCorrections(n));
+  assert.equal(n.roadmap[0].regle, 'C-X');
+});

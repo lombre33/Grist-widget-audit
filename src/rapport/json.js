@@ -21,5 +21,10 @@ export function genererJson({ ctx, notation, meta }) {
     axesNonExecutes: notation.axesNonExecutes,
     axesPartiels: notation.axesPartiels,
     axes,
+    // Par où commencer : liste déjà triée (bloquant, puis gain réel estimé sur
+    // le score global, la sévérité départageant), une entrée par règle
+    // déclenchée. Calculée dans le moteur (src/moteur/priorisation.js),
+    // reprise telle quelle : aucune mise en forme ni troncature ici.
+    roadmap: notation.roadmap,
   }, null, 2);
 }

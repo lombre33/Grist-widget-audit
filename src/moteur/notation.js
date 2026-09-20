@@ -10,6 +10,7 @@
  *    travail sur le reste.
  */
 import { AXES, SEVERITES, facteurOccurrences } from './modele.js';
+import { ordonnancerCorrections } from './priorisation.js';
 
 /**
  * Score d'un axe à partir de sa pénalité cumulée. En-deçà de `SEUIL_LINEAIRE`,
@@ -133,7 +134,7 @@ export function noter(constats, axesNonExecutes = new Set()) {
     motif = `⚠️ Audit partiel — couverture incomplète : ${detail}. Score calculé sans ce qui manque, à ne pas comparer à un audit complet. ${motif}`;
   }
 
-  return {
+  const resultat = {
     global,
     verdict,
     motif,
@@ -143,6 +144,12 @@ export function noter(constats, axesNonExecutes = new Set()) {
     axesNonExecutes: [...axesNonExecutes],
     axesPartiels: [...axesPartiels.keys()],
   };
+  // La roadmap se calcule sur la notation déjà figée : par où commencer,
+  // jamais un nouveau calcul de score (voir src/moteur/priorisation.js).
+  // Produite ici, dans le moteur, pour être disponible à tout consommateur
+  // (JSON, interface…) sans dupliquer le calcul ni imposer une mise en forme.
+  resultat.roadmap = ordonnancerCorrections(resultat);
+  return resultat;
 }
 
 function compter(liste) {
