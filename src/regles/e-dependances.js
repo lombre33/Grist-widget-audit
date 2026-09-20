@@ -173,6 +173,14 @@ export async function analyserPaquetNpm(ctx, options = {}) {
         constat: `\`npm audit\` n'a pas pu s'exécuter : ${r.erreur}`,
         impact: "Aucune conclusion ne peut être tirée sur les vulnérabilités publiées des dépendances. L'absence de constat dans cet axe ne vaut pas absence de vulnérabilité.",
         remediation: 'Relancer `npm audit` depuis un poste disposant d\'un accès au registre npm.',
+        // Un dépôt avec des dépendances verrouillées (`lock` vrai, sinon on
+        // n'entre même pas dans ce bloc) dont on ne peut pas dire s'il a des
+        // vulnérabilités connues est un axe E incomplet, pas un axe E propre :
+        // sans ce signal, un `npm audit` en échec silencieux se présentait
+        // comme un résultat vérifié (E=100), exactement le défaut qu'on a
+        // déjà corrigé pour l'axe D. Un dépôt sans dépendance du tout
+        // (E-DEP-03) n'entre jamais ici : `lock` y est faux.
+        mesurePartielle: true,
       }));
     } else {
       for (const [nom, av] of Object.entries(r.avis ?? {})) {

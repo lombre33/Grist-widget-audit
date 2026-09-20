@@ -66,6 +66,13 @@ let compteur = 0;
  * @param {string[]} [c.referentiels]
  * @param {'prouve'|'certain'|'probable'|'a_verifier'} [c.confiance]
  * @param {object} [c.preuve]    trace brute (requête réseau capturée, log…)
+ * @param {boolean} [c.mesurePartielle] une vérification de cet axe n'a pas pu
+ *   aboutir (ex. `npm audit` injoignable) — l'axe garde son score calculé sur
+ *   ce qu'il a pu mesurer, mais `noter()` plafonne le verdict à SOUS RÉSERVE
+ *   et le dit dans `motif`, plutôt que de laisser un score partiel se
+ *   présenter comme complet. Ne pas confondre avec un axe non exécuté
+ *   (`axesNonExecutes` dans `noter()`) : ici l'axe a bien tourné, une seule
+ *   vérification en son sein a échoué.
  */
 export function constat(c) {
   if (!SEVERITES[c.severite]) throw new Error(`Sévérité inconnue : ${c.severite}`);
@@ -86,6 +93,7 @@ export function constat(c) {
     referentiels: c.referentiels ?? [],
     confiance: c.confiance ?? 'probable',
     preuve: c.preuve ?? null,
+    mesurePartielle: Boolean(c.mesurePartielle),
   };
 }
 

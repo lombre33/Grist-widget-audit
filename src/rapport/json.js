@@ -19,6 +19,7 @@ export function genererJson({ ctx, notation, meta }) {
     verdict: notation.verdict, motif: notation.motif, scoreGlobal: notation.global,
     bloquants: notation.bloquants.map((c) => c.uid),
     axesNonExecutes: notation.axesNonExecutes,
+    axesPartiels: notation.axesPartiels,
     axes,
   }, null, 2);
 }

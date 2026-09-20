@@ -53,7 +53,7 @@ test('noterAxe ne touche aucun score déjà publié sous le seuil du plancher so
 });
 
 test('noterAxe reste distincte et cohérente au-delà de l\'ancien plancher à 0', () => {
-  const a = noterAxe(141); // axe A mesuré sur publipostageGrist
+  const a = noterAxe(141); // pénalité observée sur l'axe A de publipostageGrist avant la correction A-TEST-01/02
   const c = noterAxe(130); // axe C mesuré sur publipostageGrist
   assert.ok(a > 0 && c > 0, 'les deux doivent rester au-dessus de 0, jamais atteint exactement');
   assert.notEqual(a, c, 'deux pénalités différentes ne doivent plus rendre le même score muet');
@@ -72,4 +72,26 @@ test('les occurrences répétées d\'une même règle sont plafonnées, pas simp
   const n = noter(beaucoup, new Set());
   // Avec une pénalité linéaire non plafonnée, 50 occurrences mineures (3 pts) auraient annulé le score.
   assert.ok(n.parAxe.A.score > 0, `score attendu > 0, obtenu ${n.parAxe.A.score}`);
+});
+
+test('un constat mesurePartielle (ex. E-VULN-00) garde son axe dans la moyenne, contrairement à un axe non exécuté', () => {
+  const c = constat({ regle: 'E-VULN-00', axe: 'E', titre: 'npm audit injoignable', severite: 'info', constat: 'c', mesurePartielle: true });
+  const n = noter([c], new Set());
+  assert.notEqual(n.parAxe.E.score, null, 'l\'axe a tourné : il ne doit pas être exclu comme un axe non exécuté');
+  assert.ok(n.axesPartiels.includes('E'));
+  assert.ok(!n.axesNonExecutes.includes('E'), 'mesurePartielle et axe non exécuté sont deux mécanismes distincts');
+});
+
+test('un constat mesurePartielle plafonne le verdict à SOUS RÉSERVE et le nomme dans le motif', () => {
+  const c = constat({ regle: 'E-VULN-00', axe: 'E', titre: 'npm audit injoignable', severite: 'info', constat: 'c', mesurePartielle: true });
+  const n = noter([c], new Set());
+  assert.equal(n.verdict, 'CONFORME SOUS RÉSERVE');
+  assert.match(n.motif, /npm audit injoignable/);
+});
+
+test('E-DEP-03 (pas de package.json, rien à mesurer) ne plafonne jamais le verdict : ce n\'est pas un échec', () => {
+  const c = constat({ regle: 'E-DEP-03', axe: 'E', titre: 'Aucune dépendance déclarée', severite: 'info', constat: 'c' });
+  const n = noter([c], new Set());
+  assert.equal(n.verdict, 'CONFORME');
+  assert.equal(n.axesPartiels.length, 0, 'l\'absence de dépendances ne doit jamais faire basculer un widget par ailleurs sain');
 });
