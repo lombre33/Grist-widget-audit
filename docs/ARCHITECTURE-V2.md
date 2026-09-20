@@ -28,22 +28,23 @@ contexte de confiance. Aucun n'était un défaut de la V1 en tant que tel —
 c'était un outil qui faisait ce qu'on lui demandait, pour l'usage auquel il
 était destiné.
 
-**Statut vérifié le 2026-09-20**, deux fois, en relisant le code du dépôt
-public — d'abord au commit `b3c372f`, puis de nouveau après de nouveaux
-correctifs, au commit `1f5840d` — pas seulement rapporté. Le compte a changé
-entre les deux relectures ; ce qui suit est le second, à jour.
+**Statut vérifié le 2026-09-20**, trois fois, en relisant le code du dépôt
+public à mesure des correctifs — aux commits `b3c372f`, `1f5840d` puis
+`c31d6fb` — pas seulement rapporté. Le compte a changé à chaque relecture ;
+ce qui suit est la dernière, à jour.
 
 ### Corrigés
 
 | # | Constat (état au 2026-09-19) | Fichier | Correction vérifiée |
 |---|---|---|---|
 | 1 | `git clone` recevait l'URL soumise sans résolution d'hôte ni liste blanche — SSRF | `bin/gwaudit.js` | `resoudreCible()` appelle `validerHoteClone()` avant tout clonage : résolution DNS puis rejet des adresses privées/loopback/lien-local/métadonnées cloud, refus du `http://` non chiffré. Pas de protection anti-DNS-rebinding entre la vérification et la connexion — laissé au proxy de sortie V2 (§4). |
-| 2 | `npm audit` héritait tout `process.env` et lisait le `.npmrc` du dépôt audité | `src/regles/e-dependances.js` | `npmAudit()` copie seulement `package.json`/`package-lock.json` dans un dossier neutre, avec un environnement dédié (`HOME` isolé, `npm_config_userconfig` pointé sur un `.npmrc` vide, `npm_config_registry` figé sur `registry.npmjs.org`) : le `.npmrc` du dépôt audité n'est jamais lu. |
+| 2 | `npm audit` héritait tout `process.env` et lisait le `.npmrc` du dépôt audité | `src/regles/e-dependances.js` | `npmAudit()` copie seulement `package.json`/`package-lock.json` dans un dossier neutre, avec un environnement dédié (`HOME` isolé, `npm_config_userconfig` pointé sur un `.npmrc` vide, `npm_config_registry` figé sur `registry.npmjs.org`, proxy d'entreprise transmis explicitement) : le `.npmrc` du dépôt audité n'est jamais lu. |
 | 3 | Chromium était lancé avec `--no-sandbox` | `src/runtime/dynamique.js` | Sandbox natif actif par défaut ; `--no-sandbox` seulement si `GWAUDIT_CHROMIUM_SANS_SANDBOX=1` est positionnée explicitement. |
 | 4 | Aucun hash de commit rattaché au rapport | `bin/gwaudit.js` | `commitDepot()` (`git rev-parse HEAD`) inclus dans `meta.commit` ; identité du dépôt tirée de l'URL réelle. |
 | 8 | Le passe-droit réseau « local » ne comparait que le *hostname* | `src/runtime/dynamique.js` | Compare désormais l'origine exacte (`urlOrigine === origine`, protocole + hôte + port), pas seulement le hostname. |
 | 9 | Aucun plafond de fichiers/octets cumulés pendant l'inventaire | `src/contexte/inventaire.js` | `MAX_FICHIERS` (20 000) et `MAX_OCTETS_LUS_CUMULES` (200 Mo), avec troncature explicite plutôt que crash, signalée dans `ctx.tronque`. |
 | 10a | Aucun timeout global sur l'axe D après le chargement initial | `src/runtime/dynamique.js` | Tout le scénario (chargement + évaluations + a11y) est couru contre `DELAI_GLOBAL_AXE_D_MS` (45 s par défaut) via `avecDelai()`, qui lève le constat `D-TIMEOUT-01` en cas de dépassement. |
+| 10b | Aucune limite de temps CPU sur le processus Chromium | `src/runtime/dynamique.js` | Chromium est lancé via un script qui pose `ulimit -t` (RLIMIT_CPU) avant un `exec` (donc sans changer de PID : les processus que Chromium fait naître — zygote, rendu, GPU — héritent la même limite dès leur création), fixée à `DELAI_GLOBAL_AXE_D_MS` + 30 s. Un filet complémentaire au timeout 10a, pas un substitut. |
 | 12 | `git clone` sans timeout, dossier temporaire jamais supprimé | `bin/gwaudit.js` | `timeout: 120_000` sur le clone ; `main()` dans un `try/finally` qui purge systématiquement. |
 
 ### Atténués, mais pas structurellement fermés
@@ -67,16 +68,17 @@ compris pour du trafic que `route()` ne voit pas.
 
 | # | Constat | Fichier | Statut |
 |---|---|---|---|
-| 10b | Aucune limite CPU/mémoire sur le processus Chromium | `src/runtime/dynamique.js` | Le timeout global (10a) borne désormais la *durée*, pas la consommation de ressources pendant cette durée — reste à traiter au niveau conteneur en V2 (§4). |
+| 10c | Aucune limite de MÉMOIRE sur le processus Chromium | `src/runtime/dynamique.js` | Essayé et écarté, pas seulement pas encore fait : `ulimit -v` (RLIMIT_AS, mémoire virtuelle) est inutilisable avec Chromium, dont un renderer réserve normalement jusqu'à ~1,4 To d'espace d'adressage virtuel pour quelques dizaines de Mio réellement utilisés — une limite de 2 Gio, très au-dessus des ~200 Mio résidents d'un audit réel, empêche déjà Chromium de démarrer ; il n'y a pas de valeur intermédiaire qui fonctionne. Une vraie limite veut la mémoire **résidente**, donc des cgroups, donc la zone d'exécution V2 (§4) — un réglage de lancement ne peut structurellement pas la fournir. |
 | 11 | Aucune limite de concurrence, pas de file d'attente | — | N'a pas de sens pour un outil en ligne de commande (un `gwaudit` = un process séquentiel). Propre à l'orchestration V2 (§5), qui n'existe pas encore. |
 
-Sur les 12 écarts distincts d'origine (13 en comptant 10a/10b séparément,
-plus précis que de les garder groupés) : **8 sont corrigés, 3 sont
-atténués sans être structurellement fermés, 2 restent ouverts** — dont un
-seul (11) est réellement propre à une V2 qui n'existe pas encore. Les
-quatre autres qui restaient vrais pour l'usage normal de la V1 (2, 8, 9,
-10a) sont maintenant corrigés ; il ne reste, sur ce registre-là, que les
-limites CPU/mémoire (10b) et les trois canaux réseau atténués (5, 6, 7).
+Sur les 12 écarts distincts d'origine (14 en comptant 10a/10b/10c
+séparément, plus précis que de les garder groupés) : **9 sont corrigés, 3
+sont atténués sans être structurellement fermés, 2 restent ouverts** — et
+cette fois les deux qui restent ouverts le sont pour une bonne raison
+documentée dans le code, pas par défaut de temps : la concurrence (11) n'a
+pas de sens hors d'un service hébergé, et la limite mémoire (10c) demande
+structurellement des cgroups qu'un outil en ligne de commande ne peut pas
+s'auto-attribuer.
 
 Autrement dit, comme avant : **il n'existe aujourd'hui aucun service
 hébergé par Antoine à mettre en défaut** — la V2 n'est pas déployée, donc
@@ -90,8 +92,8 @@ ci-dessus.
 **Ce qui n'a pas besoin de changer** : les axes A, B, C et F restent de
 l'analyse statique par AST (`acorn`), qui ne fait qu'analyser du texte sans
 jamais l'exécuter — aucun de ces axes n'ouvre de surface nouvelle en V2. Le
-point dur restant est concentré dans l'axe D (navigateur : limites de
-ressources, canaux WebSocket/WebRTC/Service Worker) et dans l'orchestration
+point dur restant est concentré dans l'axe D (navigateur : limite mémoire,
+canaux WebSocket/WebRTC/Service Worker) et dans l'orchestration
 multi-utilisateurs (concurrence) que seule la V2 introduira.
 
 ## 2. Principe : deux zones de confiance étanches
@@ -192,21 +194,22 @@ Une esquisse de `docker-compose` pour cette zone est dans
 
 ## 5. File d'attente, quotas, anti-abus
 
-Ce qui reste ouvert sur ce registre (constats 10b et 11, §1) se résume à
+Ce qui reste ouvert sur ce registre (constats 10c et 11, §1) se résume à
 une seule cause commune : le code de la V1 suppose implicitement **un seul
-audit à la fois, lancé par une personne de confiance**, et n'a pas de
-notion de limite de ressources par exécution. Pour un service public, il
-faut explicitement :
+audit à la fois, lancé par une personne de confiance**, et ne peut pas
+s'auto-attribuer une vraie limite de mémoire résidente. Pour un service
+public, il faut explicitement :
 
 - un nombre maximal de jobs simultanés (aujourd'hui : aucun, puisqu'un
   `gwaudit` = un process séquentiel — voir constat 11) ;
 - un quota de soumissions par IP et/ou par compte ;
 - une taille maximale de dépôt acceptée (déjà vérifiée côté inventaire
   depuis le 2026-09-20 — constat 9, corrigé) ;
-- une limite CPU/mémoire par job au niveau conteneur (le timeout borne
-  déjà la durée depuis le 2026-09-20 — constat 10a, corrigé — mais pas la
-  consommation de ressources pendant cette durée : constat 10b, encore
-  ouvert) ;
+- une limite de mémoire résidente par job au niveau conteneur (cgroups) —
+  le temps CPU et la durée sont déjà bornés depuis le 2026-09-20 (constats
+  10a et 10b, corrigés), mais aucun réglage de lancement ne peut fournir
+  une vraie limite mémoire à Chromium (constat 10c, encore ouvert, voir
+  §1 pour pourquoi) ;
 - une purge garantie de tout l'espace de travail à la fin d'un job — le
   `tmpfs` jetable du §4 couvre ce point par construction si le conteneur
   est bien détruit après chaque job (l'équivalent local, la purge du
@@ -233,12 +236,13 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
 
 ## 7. Prochaines étapes concrètes
 
-- Fait : les constats 1, 2, 3, 4, 8, 9, 10a et 12 (§1) sont corrigés dans
-  le moteur, et les constats 5, 6 et 7 substantiellement atténués par le
-  durcissement réseau ajouté en même temps.
+- Fait : les constats 1, 2, 3, 4, 8, 9, 10a, 10b et 12 (§1) sont corrigés
+  dans le moteur, et les constats 5, 6 et 7 substantiellement atténués par
+  le durcissement réseau ajouté en même temps.
 - Reste ouvert, propre à l'architecture V2 et pas au moteur en tant que
-  tel : limite CPU/mémoire par job (constat 10b) et limite de concurrence
-  (constat 11) — voir §4 et §5.
+  tel : limite de mémoire résidente par job (constat 10c — `ulimit -v`
+  vérifié inutilisable avec Chromium, seuls des cgroups conviennent) et
+  limite de concurrence (constat 11) — voir §4 et §5.
 - Faire valider sur le VPS d'Antoine : le sandbox natif de Chromium dans
   son environnement Docker réel (§4), et l'esquisse `docker-compose`
   jointe.
