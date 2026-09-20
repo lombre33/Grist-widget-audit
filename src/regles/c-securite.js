@@ -458,6 +458,70 @@ export function analyserHtmlDangereux(ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// C-CSP-02 — CSP présente mais permissive (graduation de C-CSP-01)
+// ---------------------------------------------------------------------------
+
+/**
+ * C-CSP-01 (ci-dessus) sanctionne l'absence de CSP, mais une CSP décorative
+ * (`default-src *`) la satisfait tout aussi bien qu'une CSP stricte : défaut
+ * classique d'un contrôle de présence, qui peut être « satisfait » sans
+ * apporter de protection réelle. Deux signaux seulement, choisis pour leur
+ * faible taux de faux positif : un joker `*` non qualifié, et
+ * `'unsafe-inline'` en `script-src`. `'unsafe-eval'` n'est volontairement
+ * pas sanctionné ici : légitime pour la négociation `grain-rpc` de
+ * `grist-plugin-api.js`, le sanctionner pénaliserait le respect de
+ * l'intégration Grist officielle.
+ */
+export function analyserCspPermissive(ctx) {
+  const constats = [];
+  for (const f of ctx.fichiers) {
+    if (!f.executee || f.binaire || !ctx.entrees.includes(f.chemin)) continue;
+    const balise = f.contenu.match(/<meta[^>]+http-equiv\s*=\s*["']Content-Security-Policy["'][^>]*>/i);
+    if (!balise) continue; // absence déjà couverte par C-CSP-01
+    // Une valeur de CSP légitime contient elle-même des apostrophes ('self',
+    // 'unsafe-inline'…) : une classe de caractères `[^"']` s'arrêterait à la
+    // première d'entre elles. On capture donc jusqu'à la même citation que
+    // celle qui a ouvert l'attribut, par rétro-référence.
+    const contenuAttr = balise[0].match(/\bcontent\s*=\s*(["'])((?:(?!\1).)*)\1/i);
+    if (!contenuAttr) continue;
+
+    const directives = {};
+    for (const part of contenuAttr[2].split(';')) {
+      const tokens = part.trim().split(/\s+/).filter(Boolean);
+      if (tokens.length) directives[tokens[0].toLowerCase()] = tokens.slice(1);
+    }
+    const directiveEffective = directives['script-src'] ? 'script-src' : 'default-src';
+    const valeurs = directives[directiveEffective];
+    if (!valeurs) continue;
+
+    const ligne = numeroLigne(f.contenu, balise.index);
+    if (valeurs.includes('*')) {
+      constats.push(constat({
+        regle: 'C-CSP-02', axe: 'C', severite: 'mineur', confiance: 'certain',
+        titre: 'La CSP déclarée autorise un joker non qualifié',
+        fichier: f.chemin, ligne, extrait: balise[0],
+        constat: `La directive \`${directiveEffective}\` contient \`*\`, qui autorise le chargement de script depuis n'importe quel domaine.`,
+        impact: "Une CSP qui accepte tout domaine ne filtre rien : elle donne l'apparence d'une protection sans en apporter la moindre. Un lecteur pressé (ou un contrôle automatisé binaire) la compte comme un point acquis alors qu'elle ne bloque aucune des attaques que la CSP est censée limiter.",
+        remediation: "Remplacer le joker par la liste explicite des domaines réellement nécessaires : l'instance Grist elle-même, et les CDN documentés dans le README.",
+        referentiels: [REF_ANSSI, 'OWASP — Content Security Policy Cheat Sheet'],
+      }));
+    }
+    if (valeurs.includes("'unsafe-inline'")) {
+      constats.push(constat({
+        regle: 'C-CSP-02', axe: 'C', severite: 'mineur', confiance: 'certain',
+        titre: "La CSP déclarée autorise le script inline ('unsafe-inline')",
+        fichier: f.chemin, ligne, extrait: balise[0],
+        constat: `La directive \`${directiveEffective}\` contient \`'unsafe-inline'\`.`,
+        impact: "`'unsafe-inline'` neutralise la protection anti-XSS de la CSP : un script injecté (voir les règles C-XSS-*) s'exécute normalement, exactement comme en l'absence de CSP.",
+        remediation: "Retirer `'unsafe-inline'` et déplacer le JavaScript inline vers des fichiers externes, ou utiliser un nonce/hash par script si l'inline est indispensable.",
+        referentiels: [REF_ANSSI, 'OWASP — Content Security Policy Cheat Sheet'],
+      }));
+    }
+  }
+  return constats;
+}
+
+// ---------------------------------------------------------------------------
 // C-PM / C-STOCK / C-SECRET
 // ---------------------------------------------------------------------------
 
@@ -601,6 +665,222 @@ export function analyserAlea(ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// C-FINGERPRINT — contournement de l'audit par empreinte d'environnement
+// ---------------------------------------------------------------------------
+
+/** Un widget qui teste navigator.webdriver peut rester sage sous l'audit (Chromium automatisé de l'axe D) et se comporter différemment une fois installé chez l'agent. */
+export function analyserEmpreinteAutomatisation(ctx) {
+  const constats = [];
+  const vus = new Set();
+
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+    if (!ast) return;
+    walk.simple(ast, {
+      MemberExpression(n) {
+        const nom = nomPointe(n) || '';
+        if (!/(^|\.)navigator\.webdriver$/.test(nom)) return;
+        const cle = `${unite.chemin}:${ligneDe(n)}`;
+        if (vus.has(cle)) return;
+        vus.add(cle);
+        constats.push(constat({
+          regle: 'C-FINGERPRINT-01', axe: 'C', severite: 'majeur', confiance: 'probable',
+          titre: 'Le widget teste navigator.webdriver',
+          fichier: unite.chemin, ligne: ligneDe(n),
+          extrait: extraireSource(unite.source, n),
+          constat: "Le code lit `navigator.webdriver`, la propriété que les navigateurs pilotés par automatisation (Playwright, Puppeteer, Selenium — dont le Chromium de l'axe D de cet outil) exposent à `true`.",
+          impact: "Ce test permet au widget de distinguer un audit automatisé d'une exécution réelle chez l'agent, et donc de rester sage pendant l'audit tout en agissant différemment une fois installé : c'est un contournement direct du contrôle en condition réelle, pas seulement un défaut de qualité.",
+          remediation: "Documenter dans le README la raison précise de ce test s'il en existe une légitime (par exemple désactiver une animation coûteuse en environnement de test). En l'absence de justification écrite, le retirer : un widget Grist n'a aucune raison fonctionnelle d'adapter son comportement à la présence d'automatisation.",
+          referentiels: ['OWASP — Anti-automation / evasion techniques', 'CWE-696'],
+        }));
+      },
+    });
+  });
+
+  return constats;
+}
+
+// ---------------------------------------------------------------------------
+// C-PERSIST — persistance au-delà du retrait du widget
+// ---------------------------------------------------------------------------
+
+/** Service Worker et Cache API : deux mécanismes absents de la couverture actuelle, plus durables qu'un simple stockage local (voir C-STOCK-01). */
+export function analyserPersistanceHorsWidget(ctx) {
+  const constats = [];
+  const emplacements = [];
+
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+    if (!ast) return;
+    walk.simple(ast, {
+      CallExpression(n) {
+        const nom = nomPointe(n.callee) || '';
+        if (/serviceWorker\.register$/.test(nom)) {
+          emplacements.push({ fichier: unite.chemin, ligne: ligneDe(n), mecanisme: 'Service Worker', cible: chaineLitterale(n.arguments[0]) });
+        }
+        if (/(^|\.)caches\.open$/.test(nom)) {
+          emplacements.push({ fichier: unite.chemin, ligne: ligneDe(n), mecanisme: 'Cache API', cible: chaineLitterale(n.arguments[0]) });
+        }
+      },
+    });
+  });
+
+  if (emplacements.length) {
+    const p = emplacements[0];
+    const mecanismes = [...new Set(emplacements.map((e) => e.mecanisme))].join(' et ');
+    constats.push(constat({
+      regle: 'C-PERSIST-01', axe: 'C', severite: 'majeur', confiance: 'certain',
+      titre: `Le widget met en place une persistance qui survit à son retrait (${mecanismes})`,
+      fichier: p.fichier, ligne: p.ligne,
+      constat: `${emplacements.length} appel(s) détecté(s) enregistrant un(e) ${mecanismes.toLowerCase()}.`,
+      impact: "Un Service Worker enregistré continue de s'exécuter et peut intercepter des requêtes réseau même après que l'agent a retiré le widget du document, jusqu'à une désinscription explicite (`unregister()`) que rien ne garantit. La Cache API permet de faire survivre du code ou des données au-delà de la durée de vie affichée du widget, par un canal que l'agent ne pense pas à vider en retirant le widget de son document Grist.",
+      remediation: "Documenter dans le README la raison du Service Worker ou du cache, sa portée exacte, et le mécanisme de désinscription. Si l'usage n'est pas indispensable au fonctionnement (par exemple une simple mise en cache d'assets), le retirer : un widget Grist n'a normalement pas besoin de fonctionner hors ligne ni de persister au-delà de la session.",
+      referentiels: ['Guide de contribution Grist.Gouv — « no storage of user data outside of Grist »', 'MDN — Service Worker API', 'CWE-459'],
+      preuve: { emplacements },
+    }));
+  }
+
+  return constats;
+}
+
+// ---------------------------------------------------------------------------
+// C-PM-02 — émission de postMessage sans origine de destination précise
+// ---------------------------------------------------------------------------
+
+/** Pendant, côté émission, de C-PM-01 (qui ne couvre que l'écoute). */
+export function analyserEmissionPostMessage(ctx) {
+  const constats = [];
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+    if (!ast) return;
+    walk.simple(ast, {
+      CallExpression(n) {
+        const nom = nomPointe(n.callee) || '';
+        if (!/(^|\.)postMessage$/.test(nom)) return;
+        if (n.arguments.length < 2) return; // pas de targetOrigin renseigné : rien à évaluer ici
+        if (chaineLitterale(n.arguments[1]) !== '*') return;
+
+        constats.push(constat({
+          regle: 'C-PM-02', axe: 'C', severite: 'majeur', confiance: 'certain',
+          titre: "Émission de postMessage avec targetOrigin '*'",
+          fichier: unite.chemin, ligne: ligneDe(n),
+          extrait: extraireSource(unite.source, n),
+          constat: "Un appel `postMessage(message, '*')` envoie le message à n'importe quelle origine, quelle que soit la fenêtre effectivement destinataire.",
+          impact: "Si une autre page parvient à s'interposer dans la relation entre le widget et sa fenêtre parente (redirection, cadre imbriqué détourné), elle reçoit le message. Si celui-ci transporte une donnée du document ou un jeton, cette donnée fuit vers un tiers qui a simplement su se placer au bon endroit.",
+          remediation: "Remplacer `'*'` par l'origine exacte attendue (celle de l'instance Grist hôte), par exemple `window.parent.postMessage(message, new URL(document.referrer).origin)` après validation de cette origine.",
+          referentiels: ['CWE-346', 'OWASP — HTML5 Security Cheat Sheet'],
+        }));
+      },
+    });
+  });
+  return constats;
+}
+
+// ---------------------------------------------------------------------------
+// C-CLIP-01 — accès au presse-papiers
+// ---------------------------------------------------------------------------
+
+/** Le presse-papiers dépasse le périmètre du document Grist : c'est une donnée de l'appareil, pas du document. */
+export function analyserPressePapiers(ctx) {
+  const constats = [];
+  const vus = new Set();
+
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+    if (!ast) return;
+    walk.simple(ast, {
+      CallExpression(n) {
+        const nom = nomPointe(n.callee) || '';
+        if (!/(^|\.)clipboard\.(read|readText)$/.test(nom)) return;
+        const cle = `${unite.chemin}:${ligneDe(n)}`;
+        if (vus.has(cle)) return;
+        vus.add(cle);
+
+        constats.push(constat({
+          regle: 'C-CLIP-01', axe: 'C', severite: 'majeur', confiance: 'certain',
+          titre: 'Le widget lit le contenu du presse-papiers',
+          fichier: unite.chemin, ligne: ligneDe(n),
+          extrait: extraireSource(unite.source, n),
+          constat: `\`${nom.split('.').slice(-2).join('.')}()\` donne au widget accès au contenu actuel du presse-papiers du système.`,
+          impact: "Le presse-papiers peut contenir une donnée sans aucun rapport avec le document Grist (mot de passe copié dans un gestionnaire, extrait d'un autre document). Cet accès dépasse donc le périmètre du document que l'agent a autorisé au widget, et touche l'appareil de l'agent plutôt que ses seules données Grist.",
+          remediation: "Documenter dans le README pourquoi cette lecture est nécessaire et à quel moment elle se déclenche (normalement suite à une action explicite de l'agent, par exemple un bouton « Coller »). Si elle n'est pas indispensable, la retirer.",
+          referentiels: ['W3C — Clipboard API and events', 'RGPD art. 5 (minimisation)'],
+        }));
+      },
+    });
+  });
+
+  return constats;
+}
+
+// ---------------------------------------------------------------------------
+// C-EXFIL-05 — chargement de script par création dynamique d'un <script>
+// ---------------------------------------------------------------------------
+
+/**
+ * `analyserRessourcesExternes` ne lit que les balises `<script src>` déclarées
+ * dans le HTML. Un script créé et pointé vers une source distante depuis le
+ * JavaScript (`document.createElement('script')` puis `.src = …`) y échappe
+ * entièrement, et peut en plus être déclenché tardivement (après un délai, une
+ * interaction), hors de la fenêtre d'observation initiale de l'axe D.
+ */
+export function analyserScriptDynamique(ctx) {
+  const constats = [];
+  const vus = new Set();
+
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+    if (!ast) return;
+
+    const variablesScript = new Set();
+    walk.ancestor(ast, {
+      CallExpression(n, _state, ancetres) {
+        const nom = nomPointe(n.callee) || '';
+        if (!/(^|\.)createElement$/.test(nom)) return;
+        if ((chaineLitterale(n.arguments[0]) || '').toLowerCase() !== 'script') return;
+        const parent = ancetres[ancetres.length - 2];
+        if (parent?.type === 'VariableDeclarator' && parent.id.type === 'Identifier') variablesScript.add(parent.id.name);
+        if (parent?.type === 'AssignmentExpression' && parent.left.type === 'Identifier') variablesScript.add(parent.left.name);
+      },
+    });
+    if (!variablesScript.size) return;
+
+    walk.simple(ast, {
+      AssignmentExpression(n) {
+        if (n.left.type !== 'MemberExpression' || n.left.computed) return;
+        if (n.left.property.name !== 'src') return;
+        if (n.left.object.type !== 'Identifier' || !variablesScript.has(n.left.object.name)) return;
+
+        const valeur = chaineLitterale(n.right);
+        const dynamique = estDynamique(n.right);
+        const h = hote(valeur ?? '');
+        if (!dynamique && (estLocal(h) || estGrist(h))) return;
+
+        const cle = `${unite.chemin}:${ligneDe(n)}`;
+        if (vus.has(cle)) return;
+        vus.add(cle);
+        if (!dynamique) enregistrerDestination(ctx, h);
+
+        constats.push(constat({
+          regle: 'C-EXFIL-05', axe: 'C', severite: dynamique ? 'majeur' : 'critique', bloquant: !dynamique,
+          confiance: dynamique ? 'a_verifier' : 'certain',
+          titre: dynamique
+            ? "Élément <script> créé dynamiquement, avec une source calculée à l'exécution"
+            : `Élément <script> créé dynamiquement et pointé vers un service externe : ${h}`,
+          fichier: unite.chemin, ligne: ligneDe(n),
+          extrait: extraireSource(unite.source, n),
+          constat: dynamique
+            ? "Le code crée un élément `<script>` par `createElement('script')` puis lui assigne une source construite à l'exécution : la lecture du code seule ne permet pas de savoir quel script sera réellement chargé."
+            : `Le code crée un élément \`<script>\` par \`createElement('script')\` et l'attache à \`${h}\`, un service extérieur à l'instance Grist.`,
+          impact: "Un script inséré de cette façon échappe à l'analyse statique du HTML (qui ne lit que les balises `<script src>` déjà présentes dans le document), et peut être déclenché après un délai ou une interaction de l'agent, hors de la fenêtre d'observation d'un audit ponctuel. Une fois exécuté, ce script a tous les privilèges du widget, donc l'accès que l'agent lui a accordé au document.",
+          remediation: dynamique
+            ? "Restreindre la source à une liste blanche de constantes, et documenter dans le README la liste exhaustive des scripts chargés dynamiquement."
+            : `Déclarer ce script directement dans le HTML (\`<script src="…" integrity="…">\`) plutôt que de le créer par JavaScript, ou documenter dans le README pourquoi le chargement dynamique vers \`${h}\` est nécessaire.`,
+          referentiels: [REF_GUIDE, 'OWASP Top 10 A08:2021 — Intégrité logicielle', 'CWE-829'],
+        }));
+      },
+    });
+  });
+
+  return constats;
+}
+
+// ---------------------------------------------------------------------------
 // Utilitaires locaux
 // ---------------------------------------------------------------------------
 
@@ -618,6 +898,8 @@ function masquer(s) {
 
 export const reglesC = [
   analyserAccesGrist, analyserSortiesReseau, analyserRessourcesExternes,
-  analyserInjections, analyserHtmlDangereux, analyserPostMessage,
+  analyserInjections, analyserHtmlDangereux, analyserCspPermissive, analyserPostMessage,
   analyserStockage, analyserSecrets, analyserAlea,
+  analyserEmpreinteAutomatisation, analyserPersistanceHorsWidget,
+  analyserEmissionPostMessage, analyserPressePapiers, analyserScriptDynamique,
 ];
