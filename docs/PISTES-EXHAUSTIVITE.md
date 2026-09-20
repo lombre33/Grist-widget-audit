@@ -180,3 +180,95 @@ celle qui change le plus un verdict aujourd'hui erroné. §4 (CSP graduée)
 ensuite — referme un contournement possible d'une règle existante sans
 inventer de nouvel axe. §5 (signal CI) en complément mineur, à confirmer
 contre le guide de contribution avant de l'ajouter.
+
+## 8. Deuxième passe : regard RSSI très critique (vol de données, intrusion)
+
+Demandé par Antoine le 2026-09-20 (soir) : reprendre l'exercice avec un
+regard de RSSI qui anticipe activement le vol de données et l'intrusion,
+plutôt que la qualité générale. Deux questions de sécurité ne doivent pas
+se mélanger ici : ce que peut faire un widget malveillant aux données de
+celui qui l'installe (le sujet ci-dessous, axes C et D) ; et l'exposition
+de l'outil d'audit lui-même, qui exécute du code inconnu (déjà traitée à
+part — `docs/ARCHITECTURE-V2.md`, quatorze écarts recensés, neuf corrigés,
+trois atténués, deux ouverts sur la mémoire/la concurrence — pas repris
+ici).
+
+Le signal le plus fort déjà en place reste l'observation réseau réelle de
+l'axe D (Chromium chargé face au protocole Grist réel) : c'est lui qui a
+confirmé ce soir même les appels de `publipostage+` vers Google Fonts et
+esm.sh. Les pistes ci-dessous cherchent ce qui reste hors de son champ, pas
+à le remplacer. Chacune vérifiée dans le code du commit `6394556`/`4375b91`
+(pas seulement supposée) sauf mention contraire.
+
+1. **Interception réseau de l'axe D qui ne couvre pas les WebSocket**
+   (le plus sérieux). `src/runtime/dynamique.js` neutralise tout via
+   `contexte.route('**/*', ...)` (ligne 461) ; aucune trace de
+   `routeWebSocket`/`page.on('websocket')` dans le fichier. Une connexion
+   WebSocket directe vers un domaine externe échapperait donc à
+   l'interception : le widget exfiltrerait réellement, pas seulement
+   « tenterait », y compris pendant l'audit lui-même. À traiter en
+   priorité si confirmé — c'est une brèche dans la neutralisation, pas un
+   simple trou de couverture.
+2. **Écriture ou lecture hors du périmètre déclaré.** `docApi.applyUserActions`
+   et les appels de lecture (`fetchTable`, `getTable`...) sont déjà détectés
+   statiquement (`c-securite.js:62-64`), et `D-GRIST-01` vérifie que la
+   négociation d'accès a bien eu lieu — mais rien ne compare aujourd'hui
+   les tables/colonnes réellement touchées à l'exécution à ce que le widget
+   annonce faire. Un widget à accès `full` qui lit ou écrit dans une table
+   sans rapport avec sa fonction déclarée ne serait pas détecté. C'est
+   exactement le risque que le modèle de menace de la méthodologie
+   identifie déjà comme dominant (le widget légitime qui abuse de son
+   propre accès) — cette piste le rend mesurable plutôt que seulement
+   nommé.
+3. **Contournement de l'audit par empreinte d'environnement.** Un widget
+   qui se comporterait différemment sous Chromium automatisé (`navigator.webdriver`,
+   dimensions de fenêtre, données du scénario par défaut reconnaissables)
+   resterait sage pendant l'audit et actif une fois installé. Rien ne le
+   détecte aujourd'hui. Deux leviers : une règle statique qui signale les
+   vérifications sur `navigator.webdriver`/empreinte navigateur comme
+   suspectes ; et faire réellement varier `--scenario` d'un audit à
+   l'autre plutôt que de garder des données de test fixes et donc
+   reconnaissables.
+4. **Persistance au-delà du retrait du widget.** Aucune règle ne vise
+   `serviceWorker.register` ni `caches.open` (zéro occurrence dans
+   `src/` — vérifié). Plus grave qu'un `localStorage` déjà couvert par
+   `C-STOCK-01` : un Service Worker enregistré peut continuer de
+   s'exécuter et d'intercepter des requêtes après que le widget a été
+   retiré du document, jusqu'à désinscription explicite.
+5. **`postMessage` émis avec `targetOrigin: '*'`.** `C-PM-01` vérifie
+   l'écoute (`addEventListener('message', ...)` sans contrôle d'origine)
+   mais rien ne vérifie l'émission (zéro occurrence de `postMessage(`
+   dans `c-securite.js` — vérifié) : un widget qui émet avec `'*'`
+   plutôt qu'une origine précise peut faire fuiter son message vers
+   n'importe quel cadre qui parvient à s'interposer dans la page parente.
+6. **Chargement différé, hors de la fenêtre d'observation.** La
+   méthodologie l'assume déjà : l'axe D couvre le chargement initial et
+   une notification de changement, pas un comportement retardé
+   (`setTimeout` long, `import()` dynamique déclenché par une interaction
+   tardive). Piste distincte des règles CDN existantes (qui portent sur
+   les balises `<script>`, pas sur `import()` en cours d'exécution) :
+   signaler un `import()` dont la source distante n'apparaît dans aucune
+   balise déclarée au chargement.
+7. **Accès au presse-papiers.** `navigator.clipboard.read()`/`readText()`
+   donnerait à un widget accès à un contenu sans rapport avec le document
+   Grist (mot de passe copié ailleurs, par exemple) — risque au niveau de
+   l'appareil, pas seulement du document. Aucune règle ne le vise
+   aujourd'hui.
+
+Deux points de renfort, pas des règles nouvelles :
+- Le référentiel recommande déjà vendoring + `integrity` pour toute
+  dépendance CDN (E-DEP-01/02) — un RSSI ajouterait la raison précise :
+  un service distant peut servir un contenu différent selon l'IP/le
+  user-agent de la requête (bienveillant pour un scanner connu, actif en
+  production), ce que seul le vendoring + `integrity` ferme complètement.
+- **Divergence entre le commit audité et le code réellement servi** :
+  le rapport lie déjà le verdict à `meta.commit`, mais si l'hébergement
+  installe le widget depuis une branche suivie plutôt que ce commit
+  précis, rien ne garantit que le code exécuté chez l'agent reste celui
+  audité. C'est un point de processus d'hébergement, pas une règle de
+  l'outil — à porter dans cette discussion-là plutôt qu'ici.
+
+Filtré à dessein : une bonne part de ce qu'un RSSI généraliste demanderait
+(authentification forte, cloisonnement réseau, gestion des secrets côté
+serveur...) ne s'applique pas à un widget navigateur de quelques fichiers
+sans backend propre, et n'est pas listée.
