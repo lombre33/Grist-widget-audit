@@ -29,11 +29,21 @@
 import path from 'node:path';
 import fs from 'node:fs';
 import { execFileSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import { demarrerServeur } from './serveur.js';
 import { constat } from '../moteur/modele.js';
 
-const ICI = path.dirname(new URL(import.meta.url).pathname);
+// `new URL(import.meta.url).pathname` casse sur Windows : un chemin
+// `file:///D:/...` donne un pathname `/D:/...` (barre oblique de tête que
+// Windows ne reconnaît pas comme faisant partie de la lettre de lecteur, ce
+// qui double ensuite le lecteur une fois passé à `path.resolve()`) et ne
+// décode jamais le pourcentage-encodage (un espace dans le chemin du dépôt
+// devient littéralement `%20`) — constaté avec Antoine : `mkdtemp
+// 'D:\D:\Dev%20Grist\...'`. `fileURLToPath()` gère les deux correctement
+// sur toutes les plateformes ; `bin/gwaudit.js` l'utilisait déjà pour son
+// propre `RACINE_OUTIL`, seul ce fichier avait l'ancien motif.
+const ICI = path.dirname(fileURLToPath(import.meta.url));
 const RACINE_OUTIL = path.resolve(ICI, '../..');
 
 const CHARGE_XSS = '<img src=x onerror="window.parent.__poc_xss_exec=(window.parent.__poc_xss_exec||0)+1">';
@@ -333,53 +343,33 @@ export async function auditDynamique(ctx, options = {}) {
     };
   }
 
-  const dossierTravail = fs.mkdtempSync(path.join(RACINE_OUTIL, '.tmp-'));
   const constats = [];
   const brut = { requetes: [], requetesLocales: [], substitutionApiGrist: [], consoles: [], erreursPage: [], journalHote: null, a11y: null };
-  let navigateur, page, arreterServeur, serveurChromium;
+  let navigateur, page, arreterServeur, serveurChromium, dossierTravail;
 
   try {
+    dossierTravail = fs.mkdtempSync(path.join(RACINE_OUTIL, '.tmp-'));
     const harnaisRacine = await construireHarnais(dossierTravail);
     const { origine, fermer } = await demarrerServeur({ widgetRacine: ctx.racine, harnaisRacine });
     arreterServeur = fermer;
 
-    try {
-      const cheminReel = cheminChromium(chromium);
-      if (process.platform === 'win32') {
-        // Pas de wrapper transparent possible ici (voir imposerPlafondCpuWindows) :
-        // `launchServer()` expose le PID réel, contrairement à `launch()`.
-        serveurChromium = await chromium.launchServer({ args: construireArgsChromium(), env: envChromiumSansProxy(), executablePath: cheminReel });
-        try {
-          imposerPlafondCpuWindows(dossierTravail, serveurChromium.process().pid, limiteCpuSecondes());
-        } catch (e) {
-          console.error(`⚠ Plafond CPU inactif pour ce lancement de Chromium (Windows) : ${String(e?.message ?? e).split('\n')[0]}`);
-        }
-        navigateur = await chromium.connect(serveurChromium.wsEndpoint());
-      } else {
-        navigateur = await chromium.launch({
-          args: construireArgsChromium(),
-          env: envChromiumSansProxy(),
-          executablePath: construireLanceurChromium(dossierTravail, cheminReel),
-        });
+    const cheminReel = cheminChromium(chromium);
+    if (process.platform === 'win32') {
+      // Pas de wrapper transparent possible ici (voir imposerPlafondCpuWindows) :
+      // `launchServer()` expose le PID réel, contrairement à `launch()`.
+      serveurChromium = await chromium.launchServer({ args: construireArgsChromium(), env: envChromiumSansProxy(), executablePath: cheminReel });
+      try {
+        imposerPlafondCpuWindows(dossierTravail, serveurChromium.process().pid, limiteCpuSecondes());
+      } catch (e) {
+        console.error(`⚠ Plafond CPU inactif pour ce lancement de Chromium (Windows) : ${String(e?.message ?? e).split('\n')[0]}`);
       }
-    } catch (e) {
-      // Playwright installé mais aucun Chromium exécutable trouvé (`npx
-      // playwright install chromium` jamais lancé, ou échoué) : même
-      // traitement que Playwright totalement absent plus haut, pas un
-      // plantage brutal de tout l'outil (constaté : sans ce garde-fou,
-      // l'erreur brute de Playwright remonte jusqu'à `main()` et fait sortir
-      // gwaudit en code 3, y compris pour les axes A/B/C/E/F déjà calculés).
-      return {
-        constats: [constat({
-          regle: 'D-INDISPONIBLE', axe: 'D', severite: 'info', confiance: 'certain',
-          titre: 'Analyse dynamique non exécutée : aucun Chromium exécutable trouvé',
-          constat: `Le lancement du navigateur a échoué : ${String(e?.message ?? e).split('\n')[0]}`,
-          impact: "Les constats de l'axe D (comportement réel du widget : réseau, XSS à l'exécution, accessibilité rendue) ne peuvent pas être produits. Ce n'est pas une absence de risque, c'est une absence de mesure.",
-          remediation: 'Lancer `npx playwright install chromium` (voir README), ou relancer avec `--sans-dynamique` pour ignorer cet axe.',
-        })],
-        brut: null,
-        nonExecute: true,
-      };
+      navigateur = await chromium.connect(serveurChromium.wsEndpoint());
+    } else {
+      navigateur = await chromium.launch({
+        args: construireArgsChromium(),
+        env: envChromiumSansProxy(),
+        executablePath: construireLanceurChromium(dossierTravail, cheminReel),
+      });
     }
     const contexte = await navigateur.newContext({ locale: 'fr-FR', viewport: { width: 1280, height: 900 } });
     page = await contexte.newPage();
@@ -499,6 +489,25 @@ export async function auditDynamique(ctx, options = {}) {
     constats.push(...constatsConsole(brut.consoles, brut.erreursPage, brut.requetes.length));
     constats.push(...constatsNegociationAcces(brut.journalHote));
 
+  } catch (e) {
+    // Filet générique : n'importe quelle erreur inattendue de l'axe D
+    // (Chromium introuvable, dossier temporaire non créable, hôte de test
+    // qui ne démarre pas…) dégrade cet axe en un simple constat au lieu de
+    // faire sortir tout l'outil en erreur (code 3) — les cinq autres axes
+    // n'ont rien à voir avec Chromium et ne doivent pas perdre leur rapport
+    // pour autant. Constaté avec un vrai échec (chemin de dossier temporaire
+    // invalide sous Windows) qui remontait jusqu'ici avant ce garde-fou.
+    return {
+      constats: [constat({
+        regle: 'D-INDISPONIBLE', axe: 'D', severite: 'info', confiance: 'certain',
+        titre: "Analyse dynamique non exécutée : l'axe D a échoué",
+        constat: `${String(e?.message ?? e).split('\n')[0]}`,
+        impact: "Les constats de l'axe D (comportement réel du widget : réseau, XSS à l'exécution, accessibilité rendue) ne peuvent pas être produits. Ce n'est pas une absence de risque, c'est une absence de mesure.",
+        remediation: "Voir le message ci-dessus pour la cause. Si Chromium n'est pas installé : `npx playwright install chromium`. Sinon, relancer avec `--sans-dynamique` pour ignorer cet axe en attendant.",
+      })],
+      brut: null,
+      nonExecute: true,
+    };
   } finally {
     await page?.close().catch(() => {});
     await navigateur?.close().catch(() => {});
@@ -508,7 +517,7 @@ export async function auditDynamique(ctx, options = {}) {
     // CPU) se termine bien.
     await serveurChromium?.close().catch(() => {});
     await arreterServeur?.().catch(() => {});
-    fs.rmSync(dossierTravail, { recursive: true, force: true });
+    if (dossierTravail) fs.rmSync(dossierTravail, { recursive: true, force: true });
   }
 
   return { constats, brut };
