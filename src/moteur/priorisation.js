@@ -31,6 +31,12 @@ export function ordonnancerCorrections(notation) {
   for (const axe of axesNotes) {
     for (const d of axe.detailPenalites) {
       const constatsRegle = axe.constats.filter((c) => c.regle === d.regle);
+      // Le représentant du groupe doit être le pire cas, pas le premier
+      // fichier rencontré dans l'ordre de parcours — un tirage au sort de cet
+      // ordre n'a pas de raison de refléter la gravité. À sévérité égale (cas
+      // le plus fréquent, la sévérité étant déjà uniforme par règle), l'ordre
+      // de parcours départage, ce qui reste stable et déterministe.
+      const pire = [...constatsRegle].sort((a, b) => SEVERITES[b.severite].rang - SEVERITES[a.severite].rang)[0];
       const scoreSansCetteRegle = noterAxe(Math.max(0, axe.penaliteBrute - d.penalite));
       const gainAxe = scoreSansCetteRegle - axe.score;
       items.push({
@@ -41,10 +47,36 @@ export function ordonnancerCorrections(notation) {
         occurrences: d.occurrences,
         bloquant: constatsRegle.some((c) => c.bloquant),
         fichiers: [...new Set(constatsRegle.map((c) => c.fichier).filter(Boolean))],
-        titre: constatsRegle[0]?.titre ?? d.regle,
+        // Le titre d'un constat individuel embarque parfois une mesure propre
+        // à cette seule occurrence (ex. A-FONC-02 : « Complexité cyclomatique
+        // de 62 »). Affiché à côté du décompte d'occurrences du groupe (« 68
+        // occurrences »), les deux nombres se lisent à tort comme une seule
+        // série. Qualifier explicitement évite l'ambiguïté sans changer le
+        // titre lui-même.
+        titre: (pire?.titre ?? d.regle) + (d.occurrences > 1 ? ' (pire cas)' : ''),
         gainGlobalEstime: Math.round(((gainAxe * axe.poids) / poidsTotal) * 10) / 10,
         effortEstime: null, // pas encore de données : à charge du consommateur d'afficher « non estimé »
+        hotes: [...new Set(constatsRegle.flatMap(hotesDe))],
+        concerneAussi: [],
       });
+    }
+  }
+
+  // Passe purement additive, après coup : deux étapes qui citent le même
+  // hôte externe parlent probablement de la même dépendance (ex. vendoriser
+  // une police corrige à la fois la requête réseau, le README qui ne la
+  // documente pas, et le service non souverain). On le DIT — « concerne
+  // aussi » — sans jamais promettre que corriger l'une élimine les autres :
+  // ce n'est pas garanti en général (documenter un service ne le rend pas
+  // souverain). Ne change ni le tri ni aucun score, uniquement une
+  // métadonnée en plus sur des entrées déjà calculées.
+  for (let i = 0; i < items.length; i++) {
+    for (let j = i + 1; j < items.length; j++) {
+      const partages = items[i].hotes.filter((h) => items[j].hotes.includes(h));
+      for (const hote of partages) {
+        items[i].concerneAussi.push({ regle: items[j].regle, axe: items[j].axe, hote });
+        items[j].concerneAussi.push({ regle: items[i].regle, axe: items[i].axe, hote });
+      }
     }
   }
 
@@ -56,4 +88,20 @@ export function ordonnancerCorrections(notation) {
   );
 
   return items;
+}
+
+/**
+ * Hôte(s) externe(s) qu'un constat identifie explicitement, quand la règle
+ * qui l'a produit l'expose. Deux formes coexistent selon que la règle pousse
+ * un constat par hôte (`preuve.hote`, ex. F-SOUV-01, D-RESEAU-01) ou un seul
+ * constat pour plusieurs hôtes (`preuve.hotes`, ex. B-DOC-04). Ni l'un ni
+ * l'autre n'est garanti présent : une règle qui n'identifie pas d'hôte
+ * précis ne contribue simplement à aucun regroupement.
+ */
+function hotesDe(constat) {
+  const p = constat.preuve;
+  if (!p) return [];
+  if (typeof p.hote === 'string') return [p.hote];
+  if (Array.isArray(p.hotes)) return p.hotes;
+  return [];
 }

@@ -68,3 +68,50 @@ test('noter() expose lui-même la roadmap, sans appel séparé à ordonnancerCor
   assert.deepEqual(n.roadmap, ordonnancerCorrections(n));
   assert.equal(n.roadmap[0].regle, 'C-X');
 });
+
+test('le représentant d\'un groupe est le pire cas (sévérité la plus haute), pas le premier fichier rencontré', () => {
+  const constats = [
+    c('A-FONC-02', 'A', 'mineur', { fichier: 'a.js', titre: 'Complexité cyclomatique de 12 : petiteFonction' }),
+    c('A-FONC-02', 'A', 'majeur', { fichier: 'b.js', titre: 'Complexité cyclomatique de 87 : grosseFonction' }),
+    c('A-FONC-02', 'A', 'mineur', { fichier: 'c.js', titre: 'Complexité cyclomatique de 15 : autreFonction' }),
+  ];
+  const items = ordonnancerCorrections(noter(constats, new Set(['D'])));
+  const item = items.find((i) => i.regle === 'A-FONC-02');
+  assert.match(item.titre, /87 : grosseFonction/, 'le pire cas (majeur, 87) doit représenter le groupe, pas le premier (mineur, 12)');
+});
+
+test('le titre du groupe est qualifié « (pire cas) » dès que plusieurs occurrences existent, jamais pour une occurrence unique', () => {
+  const plusieurs = [
+    c('A-FONC-02', 'A', 'majeur', { fichier: 'a.js', titre: 'Complexité cyclomatique de 62 : f' }),
+    c('A-FONC-02', 'A', 'majeur', { fichier: 'b.js', titre: 'Complexité cyclomatique de 40 : g' }),
+  ];
+  const unique = [c('C-X', 'C', 'majeur', { titre: 'Un seul constat' })];
+  const items = ordonnancerCorrections(noter([...plusieurs, ...unique], new Set(['D'])));
+  assert.match(items.find((i) => i.regle === 'A-FONC-02').titre, /\(pire cas\)$/);
+  assert.doesNotMatch(items.find((i) => i.regle === 'C-X').titre, /\(pire cas\)/, 'une occurrence unique ne doit jamais porter cette qualification, elle n\'a rien à désambiguïser');
+});
+
+test('deux règles qui citent le même hôte externe (preuve.hote / preuve.hotes) sont annotées « concerne aussi », sans se fondre en une seule entrée', () => {
+  const constats = [
+    c('F-SOUV-01', 'F', 'majeur', { fichier: 'app.js', preuve: { hotes: ['fonts.googleapis.com'] } }),
+    c('B-DOC-04', 'B', 'majeur', { fichier: 'README.md', preuve: { hotes: ['fonts.googleapis.com', 'esm.sh'] } }),
+    c('D-RESEAU-01', 'D', 'critique', { bloquant: true, preuve: { hote: 'fonts.googleapis.com' } }),
+    c('A-DUP-01', 'A', 'mineur'), // ne cite aucun hôte : ne doit jamais apparaître dans une annotation
+  ];
+  const items = ordonnancerCorrections(noter(constats, new Set()));
+  assert.equal(items.length, 4, 'toujours une entrée par règle : l\'annotation ne fond jamais deux étapes en une');
+
+  const souv = items.find((i) => i.regle === 'F-SOUV-01');
+  const doc = items.find((i) => i.regle === 'B-DOC-04');
+  const reseau = items.find((i) => i.regle === 'D-RESEAU-01');
+  const dup = items.find((i) => i.regle === 'A-DUP-01');
+
+  assert.deepEqual(new Set(souv.concerneAussi.map((x) => x.regle)), new Set(['B-DOC-04', 'D-RESEAU-01']));
+  assert.deepEqual(new Set(doc.concerneAussi.map((x) => x.regle)), new Set(['F-SOUV-01', 'D-RESEAU-01']));
+  assert.ok(souv.concerneAussi.every((x) => x.hote === 'fonts.googleapis.com'));
+  assert.deepEqual(dup.concerneAussi, [], 'une règle sans hôte identifié ne doit jamais recevoir d\'annotation');
+
+  // Métadonnée pure : ni le tri (bloquant D-RESEAU-01 toujours en tête) ni
+  // les scores ne doivent en dépendre.
+  assert.equal(items[0].regle, 'D-RESEAU-01');
+});

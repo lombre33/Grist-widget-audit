@@ -58,7 +58,12 @@ export function analyserSouverainete(ctx) {
       impact: `Le widget est affiché dans le navigateur d'agents publics, sur une instance souveraine. Ici, ${t.motif}. Sur une instance DINUM ou ANCT, ce flux devra être justifié ou supprimé avant mise en production.`,
       remediation: "Internaliser la ressource : embarquer les polices dans le dépôt, remplacer une mesure d'audience par une solution auto-hébergée (Matomo, ou l'offre mutualisée de l'État), supprimer les traceurs.",
       referentiels: ['RGPD art. 44 et suivants (transferts hors UE)', 'Doctrine « Cloud au centre » (circulaire du 31 mai 2023)', 'Référentiel général de sécurité'],
-      preuve: { emplacements: t.emplacements },
+      // `t.nom` est un libellé humain (« Google Fonts »), pas l'hôte littéral :
+      // `hotes` porte le(s) hôte(s) réels vus dans le code (`emplacements[].hote`),
+      // pour permettre à la roadmap de rapprocher ce constat d'un autre qui cite
+      // le même hôte (ex. B-DOC-04 sur un service non documenté), sans dépendre
+      // du libellé qui, lui, ne coïncide avec aucune autre règle.
+      preuve: { emplacements: t.emplacements, hotes: [...new Set(t.emplacements.map((e) => e.hote))] },
     }));
   }
   return constats;
