@@ -1,0 +1,39 @@
+# Instance Grist réelle pour la validation manuelle d'un widget audité.
+#
+# gwaudit (axe D) simule un hôte Grist minimal pour ses vérifications
+# automatisées, avec le vrai protocole RPC — mais pas de vraie instance :
+# ce fichier en fournit une, pour l'étape que l'automatisation ne remplace
+# pas : ouvrir le widget dans un vrai Grist, l'installer sur un vrai
+# document, cliquer dessus.
+#
+# Usage :
+#   cd docker && docker compose up -d
+#   → ouvrir http://localhost:8484, créer un document, ajouter un widget
+#     personnalisé avec pour URL : http://localhost:8585/index.html
+#     (le widget audité, servi par le second service ci-dessous)
+#
+# GRIST_WIDGET_DIR (variable d'environnement ou fichier .env à côté de ce
+# fichier) pointe vers le dossier du widget à tester en conditions réelles.
+services:
+  grist:
+    image: gristlabs/grist:latest
+    ports:
+      - "8484:8484"
+    volumes:
+      - ${PERSIST_DIR:-./persist}/grist:/persist
+    environment:
+      # Autorise Grist à charger un widget servi en HTTP sur le réseau local
+      # (localhost) : nécessaire uniquement pour ce test manuel, jamais en
+      # production.
+      - GRIST_WIDGET_LIST_URL=
+      - APP_HOME_URL=http://localhost:8484
+
+  widget-a-tester:
+    image: node:22-alpine
+    working_dir: /widget
+    volumes:
+      - ${GRIST_WIDGET_DIR:-../fixtures/widget-exemple}:/widget:ro
+    ports:
+      - "8585:8585"
+    command: >
+      npx --yes http-server -p 8585 --cors -c-1 .

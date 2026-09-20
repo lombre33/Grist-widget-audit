@@ -1,0 +1,60 @@
+# Esquisse — zone d'exécution durcie pour l'audit V2 (voir docs/ARCHITECTURE-V2.md).
+#
+# NON DÉPLOYÉ, NON TESTÉ ICI : comme pour docker-compose.yml (instance
+# Grist réelle), la politique réseau de cet environnement cloud empêche de
+# valider quoi que ce soit de conteneurisé — à essayer sur le VPS d'Antoine,
+# en particulier le point le plus incertain : le sandbox natif de Chromium
+# dans un conteneur Docker classique (voir la remarque dans le service
+# execution-audit ci-dessous).
+#
+# Ce fichier illustre les contraintes d'isolation, pas une solution clé en
+# main : "build: ./execution" et l'image de egress-proxy restent à écrire.
+services:
+  execution-audit:
+    build: ./execution   # Dockerfile : Node + gwaudit + Chromium, à écrire
+    # Un conteneur = un seul job d'audit. L'orchestrateur (file d'attente,
+    # hors de ce fichier) le démarre pour un job précis et le détruit
+    # ensuite — ne jamais le laisser tourner pour un deuxième job.
+    read_only: true
+    tmpfs:
+      - /tmp:size=512m,mode=1777   # tout le travail d'un job (clone, inventaire, harnais) tient ici, purgé avec le conteneur
+    user: "10001:10001"             # jamais root
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    # Pas de cap_add ici par défaut. Le sandbox natif de Chromium avec de
+    # vrais namespaces utilisateur ne devrait pas exiger de capacité
+    # élevée : si le Docker du VPS l'impose quand même, c'est le signal
+    # qu'il faut une deuxième couche d'isolation indépendante de Chromium
+    # (conteneur jetable + réseau fermé ci-dessous, voire une microVM plus
+    # tard) plutôt que de céder et remettre --no-sandbox.
+    pids_limit: 128
+    mem_limit: 768m
+    cpus: "1.0"
+    networks:
+      - reseau-ferme   # pas de route par défaut vers Internet
+    environment:
+      - HOME=/tmp
+    # Volontairement aucune variable héritée du service "site" (secrets,
+    # clés API, identifiants base de données) : ce conteneur ne doit rien
+    # détenir qui ait de la valeur en dehors du job qu'il traite.
+
+  egress-proxy:
+    # Placeholder : proxy de sortie à liste blanche (github.com, gitlab.com,
+    # registry.npmjs.org…), pour les deux seules étapes qui ont besoin
+    # d'une vraie sortie réseau (clonage git, npm audit — voir
+    # docs/ARCHITECTURE-V2.md §4). Doit refaire sa propre résolution DNS et
+    # rejeter les plages privées/loopback/link-local : ne pas se reposer
+    # uniquement sur la validation applicative de gwaudit.
+    # Non implémenté ici — à choisir (ex. tinyproxy/squid + ACL, ou un
+    # petit proxy dédié) et configurer sur le VPS d'Antoine.
+    image: à-définir
+    networks:
+      - reseau-ferme
+      - reseau-sortie-controlee
+
+networks:
+  reseau-ferme:
+    internal: true   # aucune route par défaut vers l'extérieur : seul egress-proxy franchit la frontière
+  reseau-sortie-controlee:

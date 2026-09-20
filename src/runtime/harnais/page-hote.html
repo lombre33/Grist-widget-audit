@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Hôte de test — audit dynamique de widget Grist</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #fff; }
+  iframe { width: 100%; height: 100%; border: 0; display: block; }
+</style>
+</head>
+<body>
+<iframe id="widget" title="widget audité"></iframe>
+<script src="/harnais/hote.js"></script>
+<script>
+  // `__CONFIG_DOC__` et `__WIDGET_URL__` sont injectés par Playwright via
+  // page.addInitScript() avant la navigation : c'est le « document Grist »
+  // minimal servi au widget, avec sa charge utile de test XSS incluse.
+  (async () => {
+    const iframe = document.getElementById('widget');
+    // L'hôte doit être branché AVANT de fixer `src` : `grist.ready()` peut
+    // s'exécuter de façon synchrone pendant le chargement du widget, avant
+    // même que l'événement `load` de l'iframe ne se déclenche côté parent.
+    // Attacher l'écouteur après coup manquerait la poignée de main.
+    const hote = Harnais.creerHoteGrist(iframe, window.__CONFIG_DOC__, window.__REGLAGE__ || {});
+    window.__hote = hote;
+    const pret = new Promise((resolve) => { iframe.addEventListener('load', resolve, { once: true }); });
+    iframe.src = window.__WIDGET_URL__;
+    await pret;
+
+    await hote.demarrer();
+    await new Promise((r) => setTimeout(r, 900));
+    await hote.notifierChangement();
+    await new Promise((r) => setTimeout(r, 900));
+    window.__hoteJournal = hote.journal;
+    window.__hotePret = true;
+  })().catch((e) => { window.__hoteErreur = String(e && e.stack || e); window.__hotePret = true; });
+</script>
+</body>
+</html>
