@@ -37,6 +37,7 @@ export function creerHoteGrist(iframe, doc, reglage = {}) {
   });
 
   let options = doc.options ? { ...doc.options } : null;
+  const tablesAppats = doc.tablesAppats ?? [];
 
   const enregistrer = (nomInterface, methodes) => {
     const enveloppe = {};
@@ -54,15 +55,46 @@ export function creerHoteGrist(iframe, doc, reglage = {}) {
         }
       };
     }
-    rpc.registerImpl(nomInterface, enveloppe);
+    // `grist-plugin-api.js` obtient `docApi` via `rpc.getStub("GristDocAPI@grist", ...)` :
+    // le suffixe `@grist` fait porter chaque appel avec `mdest: 'grist'`, ce
+    // qui fait passer grain-rpc par `this._forwarders` plutôt que par
+    // `this._implMap` (voir node_modules/grain-rpc/dist/lib/rpc.js,
+    // `_onMessageCall` : `call.mdest` déclenché en priorité sur `call.iface`).
+    // `registerImpl('GristDocAPI@grist', …)` n'était donc jamais atteint —
+    // silencieux, puisque l'échec ne remonte que dans `journal.erreursRpc`,
+    // jamais en constat : `docApi.fetchTable`, `listTables`,
+    // `applyUserActions` et `getAccessToken`, appelés directement par un
+    // widget (pas seulement via `grist.ready()`), échouaient tous avec
+    // `RPC_UNKNOWN_FORWARD_DEST` sans que rien ne le signale. Trouvé en
+    // câblant la table appât (elle en dépend directement). Un forwarder
+    // vers un objet local qui appelle l'enveloppe directement (même invocation
+    // que `registerImpl` ferait) résout ce cas à un seul saut, sans avoir à
+    // simuler le relais à trois entités que ce suffixe sert dans le vrai Grist.
+    const idx = nomInterface.indexOf('@');
+    if (idx === -1) {
+      rpc.registerImpl(nomInterface, enveloppe);
+    } else {
+      const destination = nomInterface.slice(idx + 1);
+      rpc.registerForwarder(destination, {
+        forwardCall: (c) => enveloppe[c.meth](...c.args),
+        forwardMessage: () => {},
+      });
+    }
   };
 
   const colonnesActuelles = () => ({ id: doc.colonnes.id ?? doc.colonnes.id, ...doc.colonnes });
 
   enregistrer('GristDocAPI@grist', {
     async getDocName() { return doc.nom ?? 'Document de test'; },
-    async listTables() { return [doc.tableId]; },
-    async fetchTable(tableId) { return colonnesActuelles(); },
+    // Une table appât est bien listée (`full` révèle tout le document dans
+    // le vrai Grist aussi) : ce n'est pas l'énumération qui est le signal,
+    // c'est la lecture d'une table qu'aucune interface ni déclaration du
+    // widget ne justifiait — voir TABLE_APPAT_ID dans dynamique.js.
+    async listTables() { return [doc.tableId, ...tablesAppats.map((t) => t.tableId)]; },
+    async fetchTable(tableId) {
+      const appat = tablesAppats.find((t) => t.tableId === tableId);
+      return appat ? { id: appat.colonnes.id ?? [], ...appat.colonnes } : colonnesActuelles();
+    },
     async applyUserActions(actions) {
       journal.actionsAppliquees = (journal.actionsAppliquees ?? []).concat(actions);
       return { retValues: actions.map(() => null) };

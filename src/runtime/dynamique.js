@@ -50,6 +50,22 @@ const RACINE_OUTIL = path.resolve(ICI, '../..');
 const CHARGE_XSS = '<img src=x onerror="window.parent.__poc_xss_exec=(window.parent.__poc_xss_exec||0)+1">';
 
 /**
+ * Identifiant d'une table « appât » du document de test : jamais montrée à
+ * l'interface, jamais référencée par les colonnes que `grist.ready()`
+ * déclare attendre, jamais la table sélectionnée (`GristView`). Un widget
+ * honnête n'a aucune raison de la découvrir ; un widget qui la lit
+ * (`fetchTable`/`applyUserActions` avec cet identifiant dans le journal RPC)
+ * a nécessairement énuméré aveuglément tout le document plutôt que de se
+ * limiter à ce que sa fonction déclarée justifie — c'est le signal, pas une
+ * interprétation dessus. Exporté en constante pour que la règle de
+ * détection (ailleurs) l'importe au lieu de dupliquer la chaîne : un
+ * renommage ici ne doit jamais pouvoir désynchroniser silencieusement les
+ * deux. Nom volontairement improbable pour qu'aucun widget réel ne puisse
+ * le porter par coïncidence.
+ */
+export const TABLE_APPAT_ID = 'GwauditAppat_NeJamaisReferencer_8f2c14';
+
+/**
  * Délai global du scénario joué dans le navigateur (chargement + évaluations
  * + a11y). Les timeouts déjà posés sur `goto` et `waitForFunction` ne
  * couvrent qu'eux-mêmes : un widget qui bloque le thread principal *après*
@@ -291,6 +307,26 @@ function imposerPlafondCpuWindows(dossierTravail, pid, secondes) {
  * reçoit donc toujours sa propre colonne de sonde, en plus des siennes,
  * quelle que soit la forme fournie.
  */
+/**
+ * Table appât : jamais la table sélectionnée, jamais annoncée par un nom de
+ * colonne attendu — voir TABLE_APPAT_ID ci-dessus pour le raisonnement.
+ * Une fonction plutôt qu'une constante gelée : chaque audit doit repartir
+ * d'un tableau de valeurs neuf, jamais partagé par référence entre deux
+ * exécutions.
+ */
+function tableAppat() {
+  return {
+    tableId: TABLE_APPAT_ID,
+    colonnes: {
+      id: [1, 2],
+      Libelle: [
+        "Cette table n'est montrée à aucun widget honnête",
+        'Sa lecture prouve une énumération du document au-delà du périmètre déclaré',
+      ],
+    },
+  };
+}
+
 export function documentDeTest(scenario) {
   if (!scenario) {
     return {
@@ -303,6 +339,7 @@ export function documentDeTest(scenario) {
         Montant: [125.5, 42, 0],
         Commentaire: ['RAS', CHARGE_XSS, 'Dossier clos'],
       },
+      tablesAppats: [tableAppat()],
     };
   }
   const nbLignes = Math.max(1, ...Object.values(scenario.colonnes).map((c) => (Array.isArray(c) ? c.length : 1)));
@@ -313,6 +350,7 @@ export function documentDeTest(scenario) {
       ...scenario.colonnes,
       _GwauditSondeXss: Array.from({ length: nbLignes }, () => CHARGE_XSS),
     },
+    tablesAppats: [tableAppat()],
   };
 }
 
