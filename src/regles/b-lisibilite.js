@@ -106,6 +106,24 @@ export function analyserReadme(ctx) {
       referentiels: ['Guide de contribution Grist.Gouv — Code review process / Security'],
     }));
   }
+
+  // Le guide l'interdit explicitement : « Safe: no requests to undocumented
+  // external services ». L'axe C relève les hôtes externes réellement
+  // contactés (ctx.destinationsExternes) ; on vérifie ici qu'ils sont au
+  // moins nommés dans le README, sans juger si la justification est bonne.
+  const destinations = [...(ctx.destinationsExternes ?? [])];
+  const nonDocumentees = destinations.filter((h) => !texte.includes(h.toLowerCase()));
+  if (nonDocumentees.length) {
+    constats.push(constat({
+      regle: 'B-DOC-04', axe: 'B', severite: 'majeur', confiance: 'certain',
+      titre: `Service(s) externe(s) contacté(s) sans mention dans le README (${nonDocumentees.join(', ')})`,
+      fichier: readme.chemin,
+      constat: `Le code contacte ${nonDocumentees.length} hôte(s) externe(s) qu'aucun passage du README ne nomme : ${nonDocumentees.join(', ')}.`,
+      impact: "Sans cette mention, ni l'agent qui installe le widget ni le relecteur sécurité ne peuvent savoir que ce flux existe sans lire tout le code source.",
+      remediation: `Ajouter au README, pour chacun, ce qui lui est envoyé et pourquoi : ${nonDocumentees.join(', ')}.`,
+      referentiels: ['Guide de contribution Grist.Gouv — « Safe: no requests to undocumented external services »'],
+    }));
+  }
   return constats;
 }
 

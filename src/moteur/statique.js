@@ -11,7 +11,9 @@ import { reglesF } from '../regles/f-conformite.js';
 
 export async function analyseStatique(ctx, options = {}) {
   const constats = [];
-  for (const regle of [...reglesA, ...reglesB, ...reglesC, ...reglesF]) {
+  // C avant B : B-DOC-03/04 lisent ctx.usagesGrist et ctx.destinationsExternes,
+  // que seul l'axe C renseigne (voir analyserAccesGrist / analyserSortiesReseau).
+  for (const regle of [...reglesA, ...reglesC, ...reglesB, ...reglesF]) {
     constats.push(...regle(ctx));
   }
   for (const regle of reglesE) {
