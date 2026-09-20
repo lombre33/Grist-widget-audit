@@ -293,6 +293,11 @@ function pageSuivi(etat) {
       lien.href = '/audits/${etat.id}/rapport';
       lien.textContent = "Voir le rapport d'audit";
       actions.appendChild(lien);
+      const lienRoadmap = document.createElement('a');
+      lienRoadmap.className = 'bouton secondaire';
+      lienRoadmap.href = '/audits/${etat.id}/roadmap';
+      lienRoadmap.textContent = 'Par quoi commencer';
+      actions.appendChild(lienRoadmap);
       const lienMd = document.createElement('a');
       lienMd.className = 'bouton secondaire';
       lienMd.href = '/audits/${etat.id}/rapport.md';
@@ -342,10 +347,89 @@ function pageRapport(etat) {
 <div class="barre">
   <a class="retour" href="/">← Nouvel audit</a>
   <span class="sep">·</span>
+  <a href="/audits/${etat.id}/roadmap">Par quoi commencer</a>
+  <span class="sep">·</span>
   <a href="/audits/${etat.id}/rapport.md" download>Télécharger en Markdown</a>
   <a href="/audits/${etat.id}/rapport.json" download>Télécharger en JSON</a>
 </div>
 <iframe src="/audits/${etat.id}/rapport-brut" title="Rapport d'audit gwaudit"></iframe>
+</body>
+</html>`;
+}
+
+const LIBELLES_SEVERITE_ROADMAP = { critique: 'Critique', majeur: 'Majeur', mineur: 'Mineur', info: 'Info' };
+
+/**
+ * « Feuille de route » : le moteur (`noter()`, propriété du fil du
+ * protocole) calcule déjà l'ordre — bloquants d'abord, puis par gain
+ * réel estimé sur le score global — et l'expose tel quel sous
+ * `rapport.json`.roadmap, sans mise en forme ni troncature. La mise en
+ * forme lisible est ce qui manquait ; c'est elle qu'on écrit ici, sans
+ * toucher à `src/rapport/` (propriété d'un autre fil).
+ */
+function pageRoadmap(etat, roadmap) {
+  const lignes = roadmap.map((item, i) => {
+    const etiquettes = [
+      item.bloquant ? '<span class="etq etq-bloquant">Bloquant</span>' : '',
+      `<span class="etq etq-${echapperHtml(item.severite)}">${echapperHtml(LIBELLES_SEVERITE_ROADMAP[item.severite] ?? item.severite)}</span>`,
+    ].join(' ');
+    const nbFichiers = item.fichiers?.length ?? 0;
+    const portee = item.occurrences > 1
+      ? `${item.occurrences} occurrences${nbFichiers ? ` dans ${nbFichiers} fichier${nbFichiers > 1 ? 's' : ''}` : ''}`
+      : (item.fichiers?.[0] ?? '');
+    return `      <li class="etape">
+        <span class="rang">${i + 1}</span>
+        <div class="etape-corps">
+          <p class="etape-titre">${etiquettes} ${echapperHtml(item.titre)}</p>
+          <p class="etape-meta"><code class="regle">${echapperHtml(item.regle)}</code>${portee ? ' · ' + echapperHtml(portee) : ''}</p>
+        </div>
+      </li>`;
+  }).join('\n');
+
+  return `<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Par quoi commencer — gwaudit</title>
+<style>
+  body { font-family: system-ui, sans-serif; max-width: 760px; margin: 0 auto; padding: 0 1rem 3rem; color: #1a1a1a; }
+  .barre { display: flex; align-items: center; gap: .3rem; padding: .8rem 0; flex-wrap: wrap; }
+  .barre a { color: #1a1a1a; text-decoration: none; font-size: .85rem; padding: .35rem .3rem; }
+  .barre a.retour { font-weight: 600; }
+  .barre .sep { opacity: .35; margin: 0 .2rem; }
+  h1 { font-size: 1.4rem; word-break: break-all; }
+  p.aide { color: #555; font-size: .9rem; }
+  ol.feuille { list-style: none; margin: 1.5rem 0 0; padding: 0; }
+  li.etape { display: flex; gap: .8rem; padding: .9rem 0; border-top: 1px solid #e2e2e2; }
+  li.etape:first-child { border-top: none; }
+  .rang { flex: none; width: 1.8rem; height: 1.8rem; border-radius: 50%; background: #1a1a1a; color: #fff; font-size: .85rem; font-weight: 600; display: flex; align-items: center; justify-content: center; }
+  .etape-corps { min-width: 0; }
+  .etape-titre { margin: 0 0 .25rem; font-weight: 500; }
+  .etape-meta { margin: 0; font-size: .8rem; color: #666; }
+  .etape-meta code.regle { background: #f4f4f4; border-radius: 4px; padding: 1px 5px; }
+  .etq { display: inline-block; font-size: .7rem; font-weight: 700; letter-spacing: .02em; text-transform: uppercase; border-radius: 4px; padding: 1px 6px; margin-right: .3rem; color: #fff; white-space: nowrap; }
+  .etq-bloquant { background: #b00020; }
+  .etq-critique { background: #b00020; }
+  .etq-majeur { background: #b36b00; }
+  .etq-mineur { background: #6b6b6b; }
+  .etq-info { background: #9a9a9a; }
+</style>
+</head>
+<body>
+<div class="barre">
+  <a class="retour" href="/">← Nouvel audit</a>
+  <span class="sep">·</span>
+  <a href="/audits/${etat.id}/rapport">Voir le rapport complet</a>
+  <span class="sep">·</span>
+  <a href="/audits/${etat.id}/rapport.md" download>Télécharger en Markdown</a>
+  <a href="/audits/${etat.id}/rapport.json" download>Télécharger en JSON</a>
+</div>
+<h1>Par quoi commencer — <span>${echapperHtml(etat.cible)}</span></h1>
+<p class="aide">Classé du problème qui compte le plus pour la note — les points bloquants d'abord — au moins urgent, pas juste par gravité brute.</p>
+${roadmap.length ? `<ol class="feuille">
+${lignes}
+    </ol>` : '<p class="aide">Rien à corriger : aucun constat sur ce widget.</p>'}
 </body>
 </html>`;
 }
@@ -504,6 +588,22 @@ export function demarrerInterface({ port = 4317, hote = process.env.GWAUDIT_INTE
           'Content-Disposition': `attachment; filename="${nomFichierSuggere(etat.cible, extension)}"`,
         });
         res.end(contenu);
+        return;
+      }
+
+      const mRoadmap = url.pathname.match(/^\/audits\/([0-9a-f-]{36})\/roadmap$/);
+      if (req.method === 'GET' && mRoadmap) {
+        const etat = audits.get(mRoadmap[1]);
+        if (!etat) { res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' }); res.end('Audit inconnu.'); return; }
+        let roadmap;
+        try { roadmap = JSON.parse(fs.readFileSync(path.join(etat.dossierSortie, 'rapport.json'), 'utf8')).roadmap ?? []; }
+        catch {
+          res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end("Feuille de route pas (encore) disponible — voir le journal de l'audit pour la cause.");
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.end(pageRoadmap(etat, roadmap));
         return;
       }
 

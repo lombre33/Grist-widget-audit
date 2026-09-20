@@ -53,7 +53,7 @@ test('GET /audits/<id inconnu> et ses sous-routes de rapport renvoient toutes 40
   const idBidon = '00000000-0000-0000-0000-000000000000';
   const rep1 = await fetch(`${base}/audits/${idBidon}`);
   assert.equal(rep1.status, 404);
-  for (const suffixe of ['rapport', 'rapport-brut', 'rapport.md', 'rapport.json']) {
+  for (const suffixe of ['rapport', 'rapport-brut', 'rapport.md', 'rapport.json', 'roadmap']) {
     const rep = await fetch(`${base}/audits/${idBidon}/${suffixe}`);
     assert.equal(rep.status, 404, `/${suffixe} devrait renvoyer 404 pour un audit inconnu`);
   }
@@ -98,7 +98,7 @@ test("un audit réellement lancé (rejeté par la validation SSRF de la CLI) se 
 
   const repRapport = await fetch(`${base}/audits/${id}/rapport`);
   assert.equal(repRapport.status, 404, "aucun rapport n'existe pour un audit qui a échoué avant de produire quoi que ce soit");
-  for (const suffixe of ['rapport-brut', 'rapport.md', 'rapport.json']) {
+  for (const suffixe of ['rapport-brut', 'rapport.md', 'rapport.json', 'roadmap']) {
     const rep = await fetch(`${base}/audits/${id}/${suffixe}`);
     assert.equal(rep.status, 404, `/${suffixe} ne doit rien servir pour un audit qui a échoué avant tout rapport`);
   }
