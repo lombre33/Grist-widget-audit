@@ -746,28 +746,44 @@ export function analyserPersistanceHorsWidget(ctx) {
 // ---------------------------------------------------------------------------
 
 /**
- * Pendant, côté émission, de C-PM-01 (qui ne couvre que l'écoute).
+ * Un relais générique de transport (le `grain-rpc` de `grist-plugin-api.js`,
+ * mais aussi tout protocole RPC similaire) prend la forme
+ * `(msg) => cible.postMessage(msg, '*')` : le message envoyé est exactement,
+ * sans transformation, un paramètre reçu tel quel de la fonction qui
+ * l'englobe — cette fonction ne construit ni ne choisit aucune donnée, elle
+ * relaie un envelope opaque produit ailleurs. Une fuite réelle, elle,
+ * construit ou sélectionne au point d'appel la donnée envoyée (`{secret:
+ * x}`, `document.cookie`, une valeur extraite du DOM…) : elle ne se
+ * contente jamais de relayer un paramètre reçu tel quel.
  *
- * `grist-plugin-api.js`, l'API officielle vendorisée par tout widget Grist,
- * utilise elle-même `window.parent.postMessage(msg, '*')` comme transport de
- * son propre protocole RPC (`grain-rpc`) — un mécanisme fixe, identique dans
- * chaque widget, que l'auteur du widget n'écrit pas et ne peut pas changer.
- * Le signaler produirait un constat non actionnable sur tout widget qui
- * respecte l'intégration officielle, exactement le fichier `fixtures/
- * widget-exemple` donné en modèle : on l'exempte donc, comme C-EXFIL-04 le
- * fait déjà pour ce même fichier sur un autre constat.
+ * On reconnaît ce motif plutôt qu'un nom de fichier précis
+ * (`grist-plugin-api.js`) : contrairement à une exclusion par chemin, il
+ * survit à un renommage, une minification ou un empaquetage dans un plus
+ * gros fichier — le cas courant d'une vraie intégration, pas l'exception.
  */
+function estRelaisTransparent(argMessage, ancetres) {
+  if (argMessage?.type !== 'Identifier') return false;
+  for (let i = ancetres.length - 2; i >= 0; i--) {
+    const a = ancetres[i];
+    if (a.type === 'FunctionExpression' || a.type === 'ArrowFunctionExpression' || a.type === 'FunctionDeclaration') {
+      return a.params.some((p) => p.type === 'Identifier' && p.name === argMessage.name);
+    }
+  }
+  return false;
+}
+
+/** Pendant, côté émission, de C-PM-01 (qui ne couvre que l'écoute). */
 export function analyserEmissionPostMessage(ctx) {
   const constats = [];
   pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
-    if (/(^|\/)grist-plugin-api\.js$/i.test(unite.chemin)) return;
-    walk.simple(ast, {
-      CallExpression(n) {
+    walk.ancestor(ast, {
+      CallExpression(n, _state, ancetres) {
         const nom = nomPointe(n.callee) || '';
         if (!/(^|\.)postMessage$/.test(nom)) return;
         if (n.arguments.length < 2) return; // pas de targetOrigin renseigné : rien à évaluer ici
         if (chaineLitterale(n.arguments[1]) !== '*') return;
+        if (estRelaisTransparent(n.arguments[0], ancetres)) return;
 
         constats.push(constat({
           regle: 'C-PM-02', axe: 'C', severite: 'majeur', confiance: 'certain',

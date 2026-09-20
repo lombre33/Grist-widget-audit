@@ -65,10 +65,25 @@ test("C-PM-02 ne se déclenche pas quand l'origine est explicite", () => {
   assert.equal(constats.filter((x) => x.regle === 'C-PM-02').length, 0);
 });
 
-test("C-PM-02 exempte grist-plugin-api.js, dont le transport RPC officiel utilise '*'", () => {
-  const ctx = { fichiers: [fichier('grist-plugin-api.js', "window.parent.postMessage(msg, '*');")] };
+test("C-PM-02 exempte un relais transparent (le message est un paramètre reçu tel quel), quel que soit le fichier", () => {
+  // Motif réel de grist-plugin-api.js (rpc.setSendMessage) : reconnu par la
+  // FORME de l'appel, pas par le nom du fichier — voir bundle.js ci-dessous.
+  const ctx = { fichiers: [fichier('bundle.js', "rpc.setSendMessage((msg) => window.parent.postMessage(msg, '*'));")] };
   const constats = analyserEmissionPostMessage(ctx);
   assert.equal(constats.filter((x) => x.regle === 'C-PM-02').length, 0);
+});
+
+test("C-PM-02 se déclenche quand même dans un fichier nommé grist-plugin-api.js si la donnée est construite au point d'appel", () => {
+  // Le nom du fichier ne doit jouer aucun rôle : seule la forme de l'appel compte.
+  const ctx = { fichiers: [fichier('grist-plugin-api.js', "window.parent.postMessage({vole: document.cookie}, '*');")] };
+  const constats = analyserEmissionPostMessage(ctx);
+  assert.equal(constats.filter((x) => x.regle === 'C-PM-02').length, 1);
+});
+
+test("C-PM-02 se déclenche si le message relayé n'est pas le paramètre de la fonction englobante", () => {
+  const ctx = { fichiers: [fichier('app.js', "function relayer(msg) { const vole = lireDocument(); window.parent.postMessage(vole, '*'); }")] };
+  const constats = analyserEmissionPostMessage(ctx);
+  assert.equal(constats.filter((x) => x.regle === 'C-PM-02').length, 1);
 });
 
 test('C-CLIP-01 détecte la lecture du presse-papiers', () => {
