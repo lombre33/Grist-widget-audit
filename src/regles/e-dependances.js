@@ -22,6 +22,15 @@ import { constat } from '../moteur/modele.js';
 
 const execFileAsync = promisify(execFile);
 
+/**
+ * `npm` est un script (`npm.cmd`), pas un binaire, sous Windows. `execFile`
+ * refuse de le lancer sans passer par un shell depuis Node 18.20.2 / 20.12.2
+ * (CVE-2024-27980) : sans ce contournement, l'appel échoue systématiquement
+ * sur ce système d'exploitation. Résoudre le nom exact évite d'avoir à passer
+ * `shell: true` (et donc la responsabilité d'échapper des arguments).
+ */
+const NPM_BIN = process.platform === 'win32' ? 'npm.cmd' : 'npm';
+
 const CDN_CONNUS = /(cdn\.jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare\.com|code\.jquery\.com|ajax\.googleapis\.com|esm\.sh|skypack\.dev|jspm\.io|cdn\.skypack\.dev)/i;
 
 /** Anneau 1 : code tiers chargé depuis un domaine distant au moment de l'exécution. */
@@ -242,7 +251,7 @@ async function npmAudit(racine) {
       ),
     };
 
-    const { stdout } = await execFileAsync('npm', ['audit', '--json', '--audit-level=info', '--registry', 'https://registry.npmjs.org/'], {
+    const { stdout } = await execFileAsync(NPM_BIN, ['audit', '--json', '--audit-level=info', '--registry', 'https://registry.npmjs.org/'], {
       cwd: dossierIsole, timeout: 120000, maxBuffer: 32 * 1024 * 1024, env: envIsole,
     }).catch((e) => ({ stdout: e.stdout || '' }));   // npm audit sort en code ≠ 0 dès qu'il trouve quelque chose
     if (!stdout.trim()) return { erreur: 'sortie vide' };
