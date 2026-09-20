@@ -34,6 +34,7 @@ import { fileURLToPath } from 'node:url';
 import * as esbuild from 'esbuild';
 import { demarrerServeur } from './serveur.js';
 import { constat } from '../moteur/modele.js';
+import { analyserAccesAppat } from '../regles/d-perimetre.js';
 
 // `new URL(import.meta.url).pathname` casse sur Windows : un chemin
 // `file:///D:/...` donne un pathname `/D:/...` (barre oblique de tête que
@@ -631,9 +632,10 @@ export async function auditDynamique(ctx, options = {}) {
 
     constats.push(...constatsReseau(brut.requetes, brut.substitutionApiGrist));
     constats.push(...constatsXss(brut.xssExecutes));
-    constats.push(...constatsA11y(brut.a11y));
+    constats.push(...constatsA11y(brut.a11y, brut.a11yErreur));
     constats.push(...constatsConsole(brut.consoles, brut.erreursPage, brut.requetes.length));
     constats.push(...constatsNegociationAcces(brut.journalHote));
+    constats.push(...analyserAccesAppat(brut.journalHote));
 
   } catch (e) {
     // Filet générique : n'importe quelle erreur inattendue de l'axe D
@@ -717,8 +719,26 @@ function constatsXss(nb) {
   })];
 }
 
-function constatsA11y(violations) {
-  if (violations == null) return [];
+export function constatsA11y(violations, erreur) {
+  if (violations == null) {
+    // `erreur` vient du catch qui entoure l'injection/l'exécution d'axe-core
+    // (CSP qui bloque addScriptTag, exception JS…) : jusqu'ici capturée dans
+    // `brut.a11yErreur` puis jamais lue, ce qui laissait un rapport sans le
+    // moindre constat d'accessibilité se présenter comme s'il n'y avait rien
+    // à signaler plutôt que comme une mesure qui n'a pas eu lieu — même
+    // défaut que E-VULN-00 pour `npm audit` en échec.
+    if (erreur) {
+      return [constat({
+        regle: 'D-RGAA-INDISPONIBLE', axe: 'F', severite: 'info', confiance: 'certain',
+        titre: "Vérification d'accessibilité non aboutie",
+        constat: `axe-core n'a pas pu être exécuté sur le widget : ${erreur}`,
+        impact: "Aucune conclusion ne peut être tirée sur l'accessibilité du widget pour ce scénario. L'absence de constat D-RGAA/F-RGAA dans ce rapport ne vaut pas absence de violation.",
+        remediation: "Vérifier qu'une CSP éventuelle du widget n'empêche pas le chargement d'un script same-origin supplémentaire (voir C-CSP-01/02), puis relancer l'audit.",
+        mesurePartielle: true,
+      })];
+    }
+    return [];
+  }
   if (!violations.length) {
     return [constat({
       regle: 'D-RGAA-00', axe: 'F', severite: 'info', confiance: 'prouve',
@@ -778,7 +798,7 @@ function constatsConsole(consoles, erreursPage, nbRequetesNeutralisees) {
   return constats;
 }
 
-function constatsNegociationAcces(journal) {
+export function constatsNegociationAcces(journal) {
   if (!journal) return [];
   const constats = [];
   if (!journal.configureRecu) {
@@ -788,6 +808,23 @@ function constatsNegociationAcces(journal) {
       constat: "Aucun appel à CustomSectionAPI.configure() n'a été reçu par l'hôte de test — c'est l'appel que produit grist.ready().",
       impact: "Si ce constat se confirme dans une vraie instance Grist, l'agent n'a jamais vu l'écran de consentement décrivant l'accès demandé par le widget.",
       remediation: 'Vérifier que grist.ready() est bien atteint sans exception avant ce point (voir D-ERR-00 et D-CONSOLE-01 si présents).',
+    }));
+  }
+  // `journal.erreursRpc` vient du warn() de grain-rpc (méthode ou interface
+  // inconnue, arguments invalides, destination de forwarding inconnue…) :
+  // jusqu'ici capturé puis jamais lu, ce qui laissait un canal RPC en échec
+  // partiel se présenter comme un axe D intégralement mesuré — même défaut
+  // que E-VULN-00 pour `npm audit` en échec. Un appel qui échoue ainsi n'a
+  // produit aucun des constats (D-PERIMETRE-01, D-GRIST-01…) qui dépendent
+  // de ce qu'il aurait dû exécuter côté hôte.
+  if (journal.erreursRpc?.length) {
+    constats.push(constat({
+      regle: 'D-GRIST-02', axe: 'D', severite: 'info', confiance: 'certain',
+      titre: 'Un ou plusieurs appels RPC du widget ont échoué pendant le scénario de test',
+      constat: `${journal.erreursRpc.length} erreur(s) rapportée(s) par le canal RPC : ${journal.erreursRpc.slice(0, 5).join(' ; ')}`,
+      impact: "Les vérifications de l'axe D qui dépendent de l'appel en échec (négociation d'accès, table appât, etc.) n'ont pas pu s'exécuter pour cet appel précis. Leur absence de constat ne vaut pas absence de comportement à risque.",
+      remediation: "Vérifier que l'hôte de test implémente bien l'interface que le widget appelle (voir src/runtime/harnais/hote.js) avant de conclure quoi que ce soit sur ce point.",
+      mesurePartielle: true,
     }));
   }
   return constats;
