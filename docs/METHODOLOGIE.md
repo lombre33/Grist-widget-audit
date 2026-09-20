@@ -96,12 +96,21 @@ vraie instance Grist, qui reste nécessaire avant toute mise en production.
 ### Sécurité de l'audit lui-même
 
 Aucune requête sortante n'est laissée aboutir vers un domaine tiers réel.
-Chaque requête réseau du widget est interceptée (`context.route`) ; celles
+Chaque requête HTTP du widget est interceptée (`context.route`) ; celles
 qui visent l'origine locale du harnais passent normalement, les autres sont
 enregistrées (URL, méthode, corps si présent) puis court-circuitées par une
-réponse neutre. **Un widget qui exfiltre réellement des données ne les fait
-jamais sortir pendant l'audit** — le rapport dit ce qui a été *tenté*, pas
-ce qui a été *transmis*.
+réponse neutre. Le canal WebSocket échappe à cette interception HTTP ;
+Chromium est lancé avec des règles de résolution réseau qui bloquent déjà
+une cible externe réelle par ce canal, nom d'hôte ou IP littérale, mais
+laissent passer `127.0.0.1`/`localhost` sans la vérification d'origine
+exacte que `context.route` applique au HTTP. `context.routeWebSocket`
+comble ce point précis (une connexion WebSocket vers un autre port local
+aurait pu réellement atteindre un autre service du même poste, sans qu'une
+seule trace n'en reste dans le rapport) et donne en même temps au rapport
+la visibilité qui manquait sur toute tentative WebSocket, quelle que soit
+sa destination. **Un widget qui exfiltre réellement des données ne les
+fait jamais sortir pendant l'audit** — le rapport dit ce qui a été *tenté*,
+pas ce qui a été *transmis*.
 
 ### Ce qui est vérifié, avec preuve d'exécution
 

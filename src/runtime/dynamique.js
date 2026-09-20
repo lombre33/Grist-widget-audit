@@ -491,6 +491,34 @@ export async function auditDynamique(ctx, options = {}) {
       return route.fulfill({ status: 204, body: '' });
     });
 
+    // Le canal WebSocket échappe entièrement à `context.route()` ci-dessus,
+    // qui n'intercepte que le trafic HTTP. `--host-resolver-rules` bloque
+    // déjà une connexion WebSocket vers un domaine tiers réel, nom d'hôte
+    // ou IP littérale (vérifié à l'exécution, voir docs/ARCHITECTURE-V2.md
+    // §1 constat 5 — WebSocket passe par le même résolveur que le trafic
+    // HTTP(S), contrairement à WebRTC) : le vrai trou n'est pas
+    // l'exfiltration externe, mais (1) l'absence totale de trace dans le
+    // rapport d'une tentative pourtant bloquée, et (2) le passe-droit
+    // `127.0.0.1`/`localhost` (exclu du MAP par nécessité, pour le hôte de
+    // test lui-même) qui n'a ici aucune vérification d'origine exacte
+    // équivalente à celle de `context.route()` — un widget pourrait
+    // atteindre un autre service local du même poste par ce biais. Une
+    // route WebSocket enregistrée ne se connecte par défaut jamais au vrai
+    // serveur tant que `connectToServer()` n'est pas appelé : ne jamais
+    // l'appeler suffit à fermer ce dernier trou et à donner au rapport la
+    // trace qui manquait, pour toute destination sans distinction.
+    await contexte.routeWebSocket('**/*', (ws) => {
+      const url = ws.url();
+      let h;
+      try { h = new URL(url).hostname; } catch { h = null; }
+      brut.requetes.push({
+        url, methode: 'WEBSOCKET', hote: h,
+        ressourceType: 'websocket',
+        corps: null,
+      });
+      ws.close({ code: 1008, reason: 'Connexion réseau neutralisée par l’audit' });
+    });
+
     const contenuEntree = ctx.fichiers.find((f) => f.chemin === entree)?.contenu ?? '';
     const scriptGrist = urlScriptGrist(contenuEntree);
 
