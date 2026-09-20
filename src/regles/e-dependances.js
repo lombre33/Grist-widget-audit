@@ -275,7 +275,7 @@ async function npmAudit(racine) {
 /** Licence du dépôt : condition d'un fork par l'équipe Grist.Gouv. */
 export function analyserLicence(ctx) {
   const constats = [];
-  const licence = ctx.fichiers.find((f) => /^(LICEN[SC]E|COPYING)(\.[a-z]+)?$/i.test(path.basename(f.chemin)) && !f.chemin.includes(path.sep));
+  const licence = ctx.fichiers.find((f) => /^(LICEN[SC]E|COPYING)(\.[a-z]+)?$/i.test(path.basename(f.chemin)) && !f.chemin.includes('/'));
   if (!licence) {
     constats.push(constat({
       regle: 'E-LIC-01', axe: 'E', severite: 'majeur', bloquant: true, confiance: 'certain',
