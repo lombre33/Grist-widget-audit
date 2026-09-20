@@ -65,6 +65,12 @@ test("C-PM-02 ne se déclenche pas quand l'origine est explicite", () => {
   assert.equal(constats.filter((x) => x.regle === 'C-PM-02').length, 0);
 });
 
+test("C-PM-02 exempte grist-plugin-api.js, dont le transport RPC officiel utilise '*'", () => {
+  const ctx = { fichiers: [fichier('grist-plugin-api.js', "window.parent.postMessage(msg, '*');")] };
+  const constats = analyserEmissionPostMessage(ctx);
+  assert.equal(constats.filter((x) => x.regle === 'C-PM-02').length, 0);
+});
+
 test('C-CLIP-01 détecte la lecture du presse-papiers', () => {
   const ctx = { fichiers: [fichier('app.js', 'navigator.clipboard.readText().then((t) => envoyer(t));')] };
   const constats = analyserPressePapiers(ctx);

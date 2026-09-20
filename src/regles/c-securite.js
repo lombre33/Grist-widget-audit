@@ -745,11 +745,23 @@ export function analyserPersistanceHorsWidget(ctx) {
 // C-PM-02 — émission de postMessage sans origine de destination précise
 // ---------------------------------------------------------------------------
 
-/** Pendant, côté émission, de C-PM-01 (qui ne couvre que l'écoute). */
+/**
+ * Pendant, côté émission, de C-PM-01 (qui ne couvre que l'écoute).
+ *
+ * `grist-plugin-api.js`, l'API officielle vendorisée par tout widget Grist,
+ * utilise elle-même `window.parent.postMessage(msg, '*')` comme transport de
+ * son propre protocole RPC (`grain-rpc`) — un mécanisme fixe, identique dans
+ * chaque widget, que l'auteur du widget n'écrit pas et ne peut pas changer.
+ * Le signaler produirait un constat non actionnable sur tout widget qui
+ * respecte l'intégration officielle, exactement le fichier `fixtures/
+ * widget-exemple` donné en modèle : on l'exempte donc, comme C-EXFIL-04 le
+ * fait déjà pour ce même fichier sur un autre constat.
+ */
 export function analyserEmissionPostMessage(ctx) {
   const constats = [];
   pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
+    if (/(^|\/)grist-plugin-api\.js$/i.test(unite.chemin)) return;
     walk.simple(ast, {
       CallExpression(n) {
         const nom = nomPointe(n.callee) || '';
