@@ -51,6 +51,16 @@ test('A-TEST-01/02 combinés : le dossier dev-tests/ complet de publipostageGris
   assert.ok(constats.find((c) => c.regle === 'A-TEST-03'), 'doit au contraire signaler positivement les tests présents');
 });
 
+test('A-TEST-01 : dev-tests\\scenario-01.js (séparateur natif Windows, comme le rendrait path.relative() sous win32) est reconnu', () => {
+  // ctx.fichiers[].chemin n'est jamais normalisé en '/' (voir
+  // src/contexte/inventaire.js) : sous Windows il porte le séparateur natif
+  // '\'. Un motif qui n'accepterait que '/' comme frontière repasserait à
+  // côté du même dossier réel sur cette seule plateforme.
+  const ctx = { fichiers: [fichier('dev-tests\\scenario-01.js', 'test();')] };
+  const constats = analyserTests(ctx);
+  assert.ok(!constats.find((c) => c.regle === 'A-TEST-01'), 'doit être reconnu quel que soit le séparateur de chemin');
+});
+
 test('A-TEST-01 : ne doit toujours pas reconnaître un fichier sans rapport ("latest.js", "contest.js") comme test', () => {
   const ctx = { fichiers: [fichier('src/latest.js', ''), fichier('src/contest.js', '')] };
   const constats = analyserTests(ctx);

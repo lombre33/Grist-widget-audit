@@ -274,11 +274,16 @@ export function analyserDuplication(ctx) {
 /** Présence et nature des tests, exigence explicite du guide. */
 // `(^|\/)(tests?...)\/ ` exigeait la limite de segment juste avant, donc
 // ratait `dev-tests/` (le `dev-` est collé, pas séparé par `/`) : un vrai
-// dossier de tests substantiel se voyait déclaré absent. `[/_-]` élargit la
-// frontière acceptée à `-`/`_` en plus de `/`, ce qui attrape `dev-tests/`,
-// `test-utils/`, `unit_tests/` sans capturer `latest.js` ou `contest.js` (le
-// caractère juste avant `test` y est une lettre, pas une frontière).
-const CHEMIN_TEST_UNITAIRE = /(^|[/_-])tests?([/_-]|$)/i;
+// dossier de tests substantiel se voyait déclaré absent. `[/\\_-]` élargit
+// la frontière acceptée à `-`/`_`/`\` en plus de `/`, ce qui attrape
+// `dev-tests/`, `test-utils/`, `unit_tests/` sans capturer `latest.js` ou
+// `contest.js` (le caractère juste avant `test` y est une lettre, pas une
+// frontière). Le `\` compte : `ctx.fichiers[].chemin` vient de
+// `path.relative()` (src/contexte/inventaire.js), qui rend un séparateur
+// natif — donc `\` sous Windows, jamais normalisé en `/`. Un motif qui
+// n'accepte que `/` repasserait à côté du même `dev-tests\...` sur cette
+// plateforme, exactement le bug qu'on corrige ici.
+const CHEMIN_TEST_UNITAIRE = /(^|[/\\_-])tests?([/\\_-]|$)/i;
 // Même défaut côté e2e : `require('/opt/.../playwright')` ne matche ni
 // `require(['"]puppeteer` ni `from ['"]playwright`, alors que c'est
 // exactement la preuve qu'un vrai Chromium est piloté. On élargit à
