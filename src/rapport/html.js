@@ -40,6 +40,8 @@ ${css()}
     </div>
   </header>
 
+  ${blocMotif(notation)}
+
   <p class="avertissement">Rapport à valeur de première analyse : il éclaire une revue humaine, il ne la remplace pas. Méthodologie complète dans <code>docs/METHODOLOGIE.md</code>.</p>
 
   ${notation.bloquants.length ? blocBloquants(notation.bloquants) : ''}
@@ -80,6 +82,19 @@ ${css()}
 // ---------------------------------------------------------------------------
 // Fragments
 // ---------------------------------------------------------------------------
+
+/**
+ * Motif du verdict, produit par le moteur de notation (notation.motif) : on
+ * ne fait qu'afficher ce texte, jamais le reparser. Quand un ou plusieurs axes
+ * n'ont pas tourné (notation.axesNonExecutes), le moteur préfixe déjà ce motif
+ * d'un avertissement d'audit partiel — on se contente ici de lui donner assez
+ * de poids visuel, juste sous la carte verdict, pour qu'on ne puisse pas lire
+ * le score sans voir qu'il est incomplet.
+ */
+function blocMotif(notation) {
+  const partiel = notation.axesNonExecutes.length > 0;
+  return `<p class="motif-verdict${partiel ? ' motif-partiel' : ''}">${echapper(notation.motif)}</p>`;
+}
 
 function blocBloquants(bloquants) {
   return `
@@ -291,6 +306,9 @@ a{color:inherit;}
 
 .avertissement{font-size:13.5px; color:var(--text-muted); margin:16px 0 28px; padding-left:12px; border-left:3px solid var(--border);}
 .avertissement code{font-size:12.5px; background:var(--surface-2); padding:1px 5px; border-radius:4px;}
+
+.motif-verdict{font-size:13.5px; color:var(--text-2); margin:14px 0 0; line-height:1.5;}
+.motif-verdict.motif-partiel{background:var(--attention-bg); border:1px solid var(--attention); border-radius:12px; padding:12px 18px; margin-top:16px; font-size:14px; font-weight:600; color:var(--text); line-height:1.5;}
 
 .alerte-bloquants{background:var(--critique-bg); border:1px solid var(--critique); border-radius:14px; padding:18px 22px; margin-bottom:28px;}
 .alerte-bloquants h2{font-size:17px; margin:0 0 6px; color:var(--critique);}
