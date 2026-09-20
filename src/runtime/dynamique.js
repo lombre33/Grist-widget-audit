@@ -139,7 +139,21 @@ function cheminChromium(chromium) {
     }
     return impose;
   }
-  return chromium.executablePath();
+  const chemin = chromium.executablePath();
+  // `chromium.executablePath()` renvoie le chemin attendu SANS vérifier
+  // qu'il existe : sur un environnement où un autre Chromium a été
+  // pré-installé sous une révision différente de celle que ce
+  // `playwright-core` attend (constaté : révision 1194 présente, révision
+  // 1243 attendue), ce chemin ne mène nulle part. Sans ce contrôle,
+  // l'erreur ne remonte qu'au moment de `launch()`, sous une forme
+  // beaucoup plus vague (« Target page, context or browser has been
+  // closed ») une fois passée par le script wrapper (`construireLanceurChromium`)
+  // — lui-même bien réel, ce qui masque à Playwright l'absence du binaire
+  // qu'il enveloppe. Un échec ici, avant tout lancement, est immédiat et lisible.
+  if (!fs.existsSync(chemin)) {
+    throw new Error(`Aucun Chromium trouvé à l'emplacement attendu par Playwright (${chemin}). Si un autre Chromium est déjà présent ailleurs sur cette machine (révision différente de celle installée par \`npx playwright install chromium\`), pointer dessus avec la variable d'environnement GWAUDIT_CHROMIUM_PATH. Sinon : \`npx playwright install chromium\`.`);
+  }
+  return chemin;
 }
 
 /** Plafond de temps CPU appliqué à Chromium — même valeur sur les deux plateformes (voir les deux fonctions ci-dessous). */

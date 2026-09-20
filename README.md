@@ -44,6 +44,22 @@ protection précise n'a pas pu s'activer pour cette exécution (l'audit
 continue normalement, sans ce filet) — un signalement (issue) est
 bienvenu dans ce cas.
 
+### Chromium déjà présent, mais sous une autre révision (`GWAUDIT_CHROMIUM_PATH`)
+
+Playwright attend une révision précise de Chromium (celle que
+`npx playwright install chromium` installe). Si un Chromium est déjà
+présent ailleurs sur la machine — cas de certains environnements de
+développement cloud, où un Chromium est pré-installé pour d'autres usages
+sous une révision différente — `gwaudit` ne le trouve pas automatiquement
+et l'axe D échoue (message `Executable doesn't exist at ...`, ou le
+message plus vague `Target page, context or browser has been closed` si
+l'échec survient après le lancement plutôt qu'avant). Pointer explicitement
+dessus avec la variable d'environnement `GWAUDIT_CHROMIUM_PATH` :
+
+```bash
+GWAUDIT_CHROMIUM_PATH=/chemin/vers/chromium node bin/gwaudit.js /chemin/vers/mon-widget
+```
+
 ### Installation globale (commande `gwaudit` disponible partout)
 
 Depuis une copie clonée du dépôt :
