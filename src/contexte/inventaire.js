@@ -51,7 +51,10 @@ export function construireContexte(racine) {
   const entrees = trouverPointsDEntree(racine, fichiers, manifestes);
   const surface = calculerSurface(racine, fichiers, entrees);
 
-  for (const f of fichiers) f.executee = surface.has(f.chemin);
+  for (const f of fichiers) {
+    f.executee = surface.has(f.chemin);
+    f.vendorise = estVendorise(f);
+  }
 
   const tronque = (etat.tronqueFichiers || etat.tronqueOctets)
     ? { fichiers: etat.tronqueFichiers, octets: etat.tronqueOctets, maxFichiers: MAX_FICHIERS, maxOctets: MAX_OCTETS_LUS_CUMULES }
@@ -169,6 +172,37 @@ function referencesSortantes(f) {
     for (const m of c.matchAll(/\bimport\s*\(\s*["']([^"']+)["']/g)) refs.push(m[1]);
   }
   return refs;
+}
+
+/**
+ * Signature des utilitaires que les empaqueteurs (esbuild, webpack, rollup…)
+ * injectent en tête de bundle pour polyfiller `Object.defineProperty` et le
+ * système de modules. Un contributeur n'écrit jamais `__defProp` ou
+ * `__commonJS` à la main : leur présence identifie un fichier généré par un
+ * outil de build, quels que soient sa mise en forme et son emplacement —
+ * contrairement à la longueur de ligne, qui ne détecte que la minification
+ * et manque un bundle simplement compilé (indenté, non minifié).
+ */
+const SIGNATURE_BUNDLEUR = /\b(__defProp|__getOwnPropNames|__getOwnPropDesc|__getProtoOf|__commonJS|__esModule|__toESM|__webpack_require__|webpackBootstrap)\b/;
+
+/**
+ * Fichier qui présente les caractéristiques d'une bibliothèque tierce
+ * recopiée dans le dépôt (bundlée ou minifiée), au sens de la règle E-DEP-02 :
+ * chemin `vendor/`, `libs/`, `third-party/`, suffixe `.min.js`, ligne
+ * moyenne très longue (minification), ou signature d'empaqueteur.
+ *
+ * Point de vérité unique : les axes A et B s'appuient sur `f.vendorise`
+ * pour ne pas juger la qualité et la lisibilité d'un code que le
+ * contributeur n'a pas écrit — les axes C, D et E continuent de l'évaluer
+ * pleinement, la surface de sécurité et le risque de dépendance restant
+ * entiers quelle que soit l'origine du fichier.
+ */
+export function estVendorise(f) {
+  if (f.binaire || !f.contenu || !['.js', '.mjs'].includes(f.ext)) return false;
+  return /(^|\/)(vendor|libs?|third[-_]party|assets\/js\/lib)\//i.test(f.chemin) ||
+    /\.min\.js$/.test(f.chemin) ||
+    ((f.locSignificatives ?? 0) > 300 && (f.taille / Math.max(1, f.lignes.length)) > 200) ||
+    ((f.locSignificatives ?? 0) > 300 && SIGNATURE_BUNDLEUR.test(f.contenu.slice(0, 5000)));
 }
 
 function lireJson(abs) {

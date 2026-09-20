@@ -65,14 +65,18 @@ export function analyserDependancesDistantes(ctx) {
   return constats;
 }
 
-/** Anneau 2 : code tiers recopié dans le dépôt, sans traçabilité. */
+/**
+ * Anneau 2 : code tiers recopié dans le dépôt, sans traçabilité.
+ *
+ * La détection (`f.vendorise`) est calculée une seule fois par fichier dans
+ * `construireContexte` — c'est aussi elle que les axes A et B consultent
+ * pour ne pas juger la qualité et la lisibilité d'un code que le
+ * contributeur n'a pas écrit (voir `estVendorise` dans
+ * `src/contexte/inventaire.js`). Un seul mécanisme de détection, deux usages.
+ */
 export function analyserDependancesEmbarquees(ctx) {
   const constats = [];
-  const suspects = ctx.fichiers.filter((f) =>
-    ['.js', '.mjs'].includes(f.ext) && !f.binaire && f.contenu &&
-    (/(^|\/)(vendor|libs?|third[-_]party|assets\/js\/lib)\//i.test(f.chemin) ||
-     /\.min\.js$/.test(f.chemin) ||
-     (f.locSignificatives > 300 && ligneMoyenne(f) > 200)));
+  const suspects = ctx.fichiers.filter((f) => f.vendorise);
 
   for (const f of suspects) {
     const version = (f.contenu.slice(0, 2000).match(/v?\d+\.\d+\.\d+/) || [])[0];
@@ -83,7 +87,7 @@ export function analyserDependancesEmbarquees(ctx) {
       titre: `Bibliothèque tierce embarquée : ${f.chemin}${version ? ` (version ${version})` : ' (version non identifiée)'}`,
       fichier: f.chemin,
       constat: `Fichier de ${Math.round(f.taille / 1024)} Ko qui présente les caractéristiques d'un code tiers recopié${version ? '' : ', sans numéro de version repérable dans l\'en-tête'}${licence ? '' : ', sans en-tête de licence'}.`,
-      impact: "Embarquer une bibliothèque est la bonne pratique pour un widget — mais sans version ni origine notées, personne ne peut savoir si elle est affectée par une vulnérabilité publiée, ni la mettre à jour en connaissance de cause.",
+      impact: "Embarquer une bibliothèque est la bonne pratique pour un widget — mais sans version ni origine notées, personne ne peut savoir si elle est affectée par une vulnérabilité publiée, ni la mettre à jour en connaissance de cause. Ce fichier est par ailleurs exclu des axes A (qualité) et B (lisibilité) : ils jugent la façon dont le contributeur écrit son propre code, pas le contenu d'une bibliothèque tierce qu'il n'a pas écrite. Il reste pleinement évalué en sécurité (axe C), en condition réelle (axe D) et pour le risque de dépendance (ici, axe E).",
       remediation: "Conserver l'en-tête d'origine du fichier (nom, version, licence, URL de provenance), ou tenir un fichier `vendor/SOURCES.md` listant chaque bibliothèque, sa version et la date de récupération.",
       referentiels: ['ANSSI — Maîtrise du code tiers', 'Décret n° 2021-1559 (code source et transparence)'],
     }));
@@ -287,7 +291,6 @@ export function analyserLicence(ctx) {
 }
 
 function hote(url) { try { return new URL(url).hostname; } catch { return url; } }
-function ligneMoyenne(f) { return f.taille / Math.max(1, f.lignes.length); }
 
 export const reglesE = [
   analyserDependancesDistantes, analyserDependancesEmbarquees,

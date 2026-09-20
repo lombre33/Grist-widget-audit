@@ -26,7 +26,7 @@ const SEUILS = {
 export function analyserTailleFichiers(ctx) {
   const constats = [];
   const gros = ctx.fichiers
-    .filter((f) => f.executee && ['.js', '.mjs'].includes(f.ext) && (f.locSignificatives ?? 0) > SEUILS.fichierLong)
+    .filter((f) => f.executee && !f.vendorise && ['.js', '.mjs'].includes(f.ext) && (f.locSignificatives ?? 0) > SEUILS.fichierLong)
     .sort((a, b) => b.locSignificatives - a.locSignificatives);
 
   for (const f of gros) {
@@ -48,7 +48,7 @@ export function analyserTailleFichiers(ctx) {
 export function analyserFonctions(ctx) {
   const constats = [];
 
-  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true, ignorerVendorise: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
     const visiter = (n) => {
       const debut = n.loc?.start?.line, fin = n.loc?.end?.line;
@@ -135,7 +135,7 @@ function mesurer(noeud, walk) {
 /** Gestion d'erreur silencieuse : `catch` vide ou qui avale l'erreur. */
 export function analyserGestionErreurs(ctx) {
   const constats = [];
-  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true, ignorerVendorise: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
     walk.simple(ast, {
       CatchClause(n) {
@@ -163,7 +163,7 @@ export function analyserTracesDev(ctx) {
   const consoles = [];
   const marqueurs = [];
 
-  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true, ignorerVendorise: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
     walk.simple(ast, {
       CallExpression(n) {
@@ -185,7 +185,7 @@ export function analyserTracesDev(ctx) {
   });
 
   for (const f of ctx.fichiers) {
-    if (!f.contenu || f.binaire) continue;
+    if (!f.contenu || f.binaire || f.vendorise) continue;
     for (const m of f.contenu.matchAll(/\b(TODO|FIXME|XXX|HACK|À FAIRE|BUG)\b[ :]/g)) {
       marqueurs.push({ fichier: f.chemin, ligne: f.contenu.slice(0, m.index).split('\n').length, type: m[1] });
     }
@@ -224,7 +224,7 @@ export function analyserDuplication(ctx) {
   const empreintes = new Map();
 
   for (const f of ctx.fichiers) {
-    if (!f.contenu || f.binaire || !['.js', '.mjs'].includes(f.ext)) continue;
+    if (!f.contenu || f.binaire || f.vendorise || !['.js', '.mjs'].includes(f.ext)) continue;
     const lignes = f.lignes
       .map((l, i) => ({ i: i + 1, t: l.trim() }))
       .filter((l) => l.t && !/^(\/\/|\/\*|\*)/.test(l.t));
@@ -318,7 +318,7 @@ export function analyserPratiques(ctx) {
   const laches = [];
   const vars = [];
 
-  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true, ignorerVendorise: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
     walk.simple(ast, {
       BinaryExpression(n) {
@@ -371,7 +371,7 @@ export function analyserCodeInatteignable(ctx) {
   const constats = [];
   const trouvailles = [];
 
-  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true, ignorerVendorise: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
     const verifierListe = (liste) => {
       if (!Array.isArray(liste)) return;
