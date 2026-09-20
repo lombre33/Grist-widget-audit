@@ -180,12 +180,14 @@ publiquement (plusieurs utilisateurs, code non fiable) demande l'isolation
 que la V2 est censée fournir autour de cette même interface — ne pas la
 lier à une interface réseau publique telle quelle.
 
-Le code (chemins, arrêt du sous-processus au timeout, choix du port) est
-écrit pour être portable, mais ce mode précis n'a pas encore été lancé sur
-une machine Windows réelle avant publication — voir § Windows ci-dessus
-pour le même avertissement sur l'axe D. Si quelque chose s'y comporte
-autrement (port, pare-feu, arrêt de Chromium au bout de 5 minutes), un
-signalement (issue) est bienvenu.
+Lancée avec succès sous Windows 11 (parcours complet : démarrage,
+formulaire, clonage, audit, page de rapport) — aucune invite de pare-feu au
+démarrage, `127.0.0.1` ne semble donc pas en déclencher. Reste non vérifié
+sur Windows : le rattrapage au bout de 5 minutes (`taskkill /T /F` pour
+arrêter Chromium si l'audit traîne) n'a encore été exercé sur aucune
+machine Windows réelle, cette exécution s'étant terminée normalement avant
+le délai. Un signalement (issue) est bienvenu si ce cas se présente et se
+comporte autrement.
 
 ## Ce que l'outil vérifie
 
