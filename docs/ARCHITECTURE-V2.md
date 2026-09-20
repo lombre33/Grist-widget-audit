@@ -28,58 +28,71 @@ contexte de confiance. Aucun n'était un défaut de la V1 en tant que tel —
 c'était un outil qui faisait ce qu'on lui demandait, pour l'usage auquel il
 était destiné.
 
-**Statut vérifié le 2026-09-20** en relisant le code du dépôt public
-(commit `b3c372f`), pas seulement rapporté :
+**Statut vérifié le 2026-09-20**, deux fois, en relisant le code du dépôt
+public — d'abord au commit `b3c372f`, puis de nouveau après de nouveaux
+correctifs, au commit `1f5840d` — pas seulement rapporté. Le compte a changé
+entre les deux relectures ; ce qui suit est le second, à jour.
 
-### Corrigés depuis, dans le moteur
+### Corrigés
 
 | # | Constat (état au 2026-09-19) | Fichier | Correction vérifiée |
 |---|---|---|---|
-| 1 | `git clone` recevait l'URL soumise sans résolution d'hôte ni liste blanche : une cible interne (`127.0.0.1`, réseau Docker interne, `169.254.169.254`…) passait le test et déclenchait une requête sortante réelle — SSRF | `bin/gwaudit.js` | `resoudreCible()` appelle désormais `validerHoteClone()` avant tout clonage : résolution DNS puis rejet des adresses privées/loopback/lien-local/métadonnées cloud, et refus explicite du `http://` non chiffré. Limite que le code documente lui-même : pas de protection anti-DNS-rebinding entre cette vérification et la connexion que `git` ouvre ensuite — volontairement laissée à la charge d'un proxy de sortie dédié en V2 (§4), l'usage V1 local ne l'exigeant pas. |
-| 3 | Chromium était lancé avec `--no-sandbox` | `src/runtime/dynamique.js` | Le sandbox natif de Chromium est actif par défaut ; `--no-sandbox` ne s'applique plus que si `GWAUDIT_CHROMIUM_SANS_SANDBOX=1` est explicitement positionnée. En V2, s'assurer que cette variable n'est jamais définie dans la zone d'exécution reste une vérification opérationnelle à faire (§4). |
-| 4 | Aucun hash de commit ni identité stable n'était attaché au rapport (l'identifiant retenu était le nom du dossier de clone temporaire) | `bin/gwaudit.js` | `main()` calcule `git rev-parse HEAD` (`commitDepot()`) et l'inclut dans `meta.commit` ; l'identité du dépôt vient de l'URL réelle (`identiteDepuisUrl()`), plus du dossier temporaire. Le rattachement `(URL, commit)` proposé au §3 pour le cache/l'invalidation V2 peut s'appuyer dessus directement. |
-| 12 | `git clone` n'avait ni timeout ni plafond de taille, et le dossier temporaire n'était jamais supprimé | `bin/gwaudit.js` | `execFileSync('git', ['clone', …], { timeout: 120_000 })`, et tout `main()` est maintenant dans un `try/finally` qui purge le clone (`fs.rmSync`) en succès comme en erreur ; la levée d'exception pendant le clone lui-même est aussi nettoyée explicitement. |
+| 1 | `git clone` recevait l'URL soumise sans résolution d'hôte ni liste blanche — SSRF | `bin/gwaudit.js` | `resoudreCible()` appelle `validerHoteClone()` avant tout clonage : résolution DNS puis rejet des adresses privées/loopback/lien-local/métadonnées cloud, refus du `http://` non chiffré. Pas de protection anti-DNS-rebinding entre la vérification et la connexion — laissé au proxy de sortie V2 (§4). |
+| 2 | `npm audit` héritait tout `process.env` et lisait le `.npmrc` du dépôt audité | `src/regles/e-dependances.js` | `npmAudit()` copie seulement `package.json`/`package-lock.json` dans un dossier neutre, avec un environnement dédié (`HOME` isolé, `npm_config_userconfig` pointé sur un `.npmrc` vide, `npm_config_registry` figé sur `registry.npmjs.org`) : le `.npmrc` du dépôt audité n'est jamais lu. |
+| 3 | Chromium était lancé avec `--no-sandbox` | `src/runtime/dynamique.js` | Sandbox natif actif par défaut ; `--no-sandbox` seulement si `GWAUDIT_CHROMIUM_SANS_SANDBOX=1` est positionnée explicitement. |
+| 4 | Aucun hash de commit rattaché au rapport | `bin/gwaudit.js` | `commitDepot()` (`git rev-parse HEAD`) inclus dans `meta.commit` ; identité du dépôt tirée de l'URL réelle. |
+| 8 | Le passe-droit réseau « local » ne comparait que le *hostname* | `src/runtime/dynamique.js` | Compare désormais l'origine exacte (`urlOrigine === origine`, protocole + hôte + port), pas seulement le hostname. |
+| 9 | Aucun plafond de fichiers/octets cumulés pendant l'inventaire | `src/contexte/inventaire.js` | `MAX_FICHIERS` (20 000) et `MAX_OCTETS_LUS_CUMULES` (200 Mo), avec troncature explicite plutôt que crash, signalée dans `ctx.tronque`. |
+| 10a | Aucun timeout global sur l'axe D après le chargement initial | `src/runtime/dynamique.js` | Tout le scénario (chargement + évaluations + a11y) est couru contre `DELAI_GLOBAL_AXE_D_MS` (45 s par défaut) via `avecDelai()`, qui lève le constat `D-TIMEOUT-01` en cas de dépassement. |
+| 12 | `git clone` sans timeout, dossier temporaire jamais supprimé | `bin/gwaudit.js` | `timeout: 120_000` sur le clone ; `main()` dans un `try/finally` qui purge systématiquement. |
 
-### Encore ouverts — et déjà vrais pour l'usage normal de la V1, pas seulement pour une future V2
+### Atténués, mais pas structurellement fermés
 
-Le vrai usage de `gwaudit` n'est pas de s'auditer soi-même : c'est de faire
-tourner l'axe D (navigateur, actif par défaut) et l'axe E (`npm audit`) sur
-un widget qu'on n'a **pas** écrit, pour décider de lui faire confiance —
-exactement ce qu'Antoine a fait avec ses deux dépôts de calibrage, et ce
-que quiconque clone ce dépôt public peut faire dès aujourd'hui sur un
-widget de son choix. Ces écarts s'appliquent donc déjà à cet usage local,
-pas seulement à une V2 hébergée qui n'existe pas encore :
+Ces trois-là gardent la même limite qu'avant au niveau de l'API Playwright
+(`context.route()` ne les voit toujours pas), mais une nouvelle couche
+ajoutée en même temps que le reste réduit le risque réel en pratique :
+`chromium.launch()` reçoit désormais `--host-resolver-rules=MAP *
+0.0.0.0,EXCLUDE 127.0.0.1,EXCLUDE localhost` et `--proxy-server=direct://`
+(avec les variables `*_PROXY` retirées de l'environnement du process
+Chromium), qui coupent la résolution de tout nom de domaine réel — y
+compris pour du trafic que `route()` ne voit pas.
 
-| # | Constat | Fichier | Conséquence aujourd'hui | Conséquence en V2 |
-|---|---|---|---|---|
-| 2 | `npm audit` hérite tout `process.env` et lit le `.npmrc` du dépôt audité (clé `registry` interpolable) | `src/regles/e-dependances.js` (`npmAudit`) | Un widget hostile audité en local peut rediriger le trafic `npm audit` de la machine de l'auditeur, voire y faire fuiter des variables d'environnement | Même risque, mais côté serveur, avec les identifiants du service |
-| 5 | `contexte.route('**/*', …)` ne couvre pas les WebSocket | `src/runtime/dynamique.js` | Un widget audité peut ouvrir une connexion WebSocket réelle pendant l'audit, hors de la neutralisation que le fichier documente | Idem, à l'échelle de tout ce que le service audite |
-| 6 | WebRTC est hors de portée de `route()` | `src/runtime/dynamique.js` | Idem, par ICE/STUN/TURN/DataChannel | Idem |
-| 7 | `newContext()` laisse `serviceWorkers` à `allow` | `src/runtime/dynamique.js` | Un widget peut enregistrer un Service Worker dont les requêtes échappent potentiellement à `route()` | Idem |
-| 8 | Le passe-droit réseau « local » ne compare que le *hostname*, pas l'origine complète du harnais | `src/runtime/dynamique.js` | Risque limité en local (peu de services tiers sur `127.0.0.1` d'un poste de dev) | Plus net sur un serveur partagé, où d'autres services peuvent écouter en loopback |
-| 9 | Aucun plafond de fichiers/taille cumulée en mémoire pendant l'inventaire | `src/contexte/inventaire.js` | Un dépôt hostile peut ralentir/geler la machine de l'auditeur (auto-DoS) | Un seul dépôt peut geler un worker partagé par tous les utilisateurs |
-| 10 | Aucun timeout global sur l'axe D après le chargement initial, aucune limite CPU/mémoire sur Chromium | `src/runtime/dynamique.js` | Idem : un widget qui boucle bloque l'audit local jusqu'à intervention manuelle | Idem, sur l'infrastructure du service |
-| 11 | Aucune limite de concurrence, pas de file d'attente | *(n'a pas de sens pour un outil en ligne de commande — un `gwaudit` = un process, un utilisateur, séquentiel par construction)* | — | Propre à la V2 : c'est l'orchestration par file d'attente du §5 qui l'introduit, elle n'existe pas encore |
+| # | Constat | Ce que la nouvelle couche change | Ce qui reste ouvert |
+|---|---|---|---|
+| 5 | WebSocket hors de portée de `route()` | Une connexion vers un nom d'hôte réel échoue désormais (résolution DNS coupée) | Aucune protection dédiée si Playwright ajoute un jour `routeWebSocket()` au harnais — repose entièrement sur le blocage réseau |
+| 6 | WebRTC hors de portée de `route()` | Idem pour un serveur STUN/TURN désigné par nom d'hôte | Une cible WebRTC désignée par adresse IP littérale contourne ce blocage : aucune politique Chromium ne désactive WebRTC lui-même |
+| 7 | `serviceWorkers` laissé à `allow` | Les requêtes d'un Service Worker vers un nom d'hôte réel échouent aussi désormais | L'enregistrement du Service Worker lui-même reste possible (`newContext()` ne passe toujours pas `serviceWorkers: 'block'`) |
 
-Autrement dit : **il n'existe aujourd'hui aucun service hébergé par
-Antoine à mettre en défaut** — la V2 n'est pas déployée, donc aucun des
-points ci-dessus n'est une faille exploitable en production. Mais ce ne
-sont pas non plus des limites purement théoriques réservées à un futur
-hypothétique : ce sont des comportements réels du code publié, aujourd'hui,
-que toute personne qui exécute `gwaudit --dynamique` (actif par défaut)
-sur un widget auquel elle ne fait pas encore confiance expose sa propre
-machine — Antoine y compris, dans l'usage même que la V1 est censée
-couvrir. Rien n'empêche de corriger certains de ces points (8, 9, 10 en
-particulier, qui ne coûtent rien en usage local légitime) indépendamment du
-calendrier de la V2 ; ce n'est cependant pas à ce document de le décider,
-c'est au fil qui possède le moteur.
+### Encore ouverts
+
+| # | Constat | Fichier | Statut |
+|---|---|---|---|
+| 10b | Aucune limite CPU/mémoire sur le processus Chromium | `src/runtime/dynamique.js` | Le timeout global (10a) borne désormais la *durée*, pas la consommation de ressources pendant cette durée — reste à traiter au niveau conteneur en V2 (§4). |
+| 11 | Aucune limite de concurrence, pas de file d'attente | — | N'a pas de sens pour un outil en ligne de commande (un `gwaudit` = un process séquentiel). Propre à l'orchestration V2 (§5), qui n'existe pas encore. |
+
+Sur les 12 écarts distincts d'origine (13 en comptant 10a/10b séparément,
+plus précis que de les garder groupés) : **8 sont corrigés, 3 sont
+atténués sans être structurellement fermés, 2 restent ouverts** — dont un
+seul (11) est réellement propre à une V2 qui n'existe pas encore. Les
+quatre autres qui restaient vrais pour l'usage normal de la V1 (2, 8, 9,
+10a) sont maintenant corrigés ; il ne reste, sur ce registre-là, que les
+limites CPU/mémoire (10b) et les trois canaux réseau atténués (5, 6, 7).
+
+Autrement dit, comme avant : **il n'existe aujourd'hui aucun service
+hébergé par Antoine à mettre en défaut** — la V2 n'est pas déployée, donc
+rien ci-dessus n'est une faille exploitable en production. Ce sont des
+comportements réels du code publié, que toute personne qui exécute
+`gwaudit --dynamique` (actif par défaut) sur un widget auquel elle ne fait
+pas encore confiance expose à sa propre machine — dans l'usage même que la
+V1 est censée couvrir, désormais nettement réduit par les correctifs
+ci-dessus.
 
 **Ce qui n'a pas besoin de changer** : les axes A, B, C et F restent de
 l'analyse statique par AST (`acorn`), qui ne fait qu'analyser du texte sans
 jamais l'exécuter — aucun de ces axes n'ouvre de surface nouvelle en V2. Le
-point dur est entièrement concentré dans ce qui *exécute* du code non
-maîtrisé : l'axe D (navigateur) et les deux endroits qui parlent réseau en
-dehors du navigateur (clonage git, `npm audit`).
+point dur restant est concentré dans l'axe D (navigateur : limites de
+ressources, canaux WebSocket/WebRTC/Service Worker) et dans l'orchestration
+multi-utilisateurs (concurrence) que seule la V2 introduira.
 
 ## 2. Principe : deux zones de confiance étanches
 
@@ -179,20 +192,25 @@ Une esquisse de `docker-compose` pour cette zone est dans
 
 ## 5. File d'attente, quotas, anti-abus
 
-Constats 9 à 12 ci-dessus se résument à une seule cause commune : le code
-de la V1 suppose implicitement **un seul audit à la fois, lancé par une
-personne de confiance**. Pour un service public, il faut explicitement :
+Ce qui reste ouvert sur ce registre (constats 10b et 11, §1) se résume à
+une seule cause commune : le code de la V1 suppose implicitement **un seul
+audit à la fois, lancé par une personne de confiance**, et n'a pas de
+notion de limite de ressources par exécution. Pour un service public, il
+faut explicitement :
 
-- un nombre maximal de jobs simultanés (aujourd'hui : aucune limite) ;
+- un nombre maximal de jobs simultanés (aujourd'hui : aucun, puisqu'un
+  `gwaudit` = un process séquentiel — voir constat 11) ;
 - un quota de soumissions par IP et/ou par compte ;
-- une taille maximale de dépôt acceptée, vérifiée avant et pendant le
-  clonage (aujourd'hui : aucune) ;
-- un timeout dur par job, qui tue le conteneur entier au-delà (aujourd'hui :
-  seuls deux appels Playwright sur toute la chaîne ont un timeout) ;
-- une purge garantie de tout l'espace de travail à la fin d'un job, y
-  compris en cas d'erreur (aujourd'hui : le dossier de clone n'est jamais
-  supprimé) — le `tmpfs` jetable du §4 couvre déjà ce point par
-  construction si le conteneur est bien détruit après chaque job.
+- une taille maximale de dépôt acceptée (déjà vérifiée côté inventaire
+  depuis le 2026-09-20 — constat 9, corrigé) ;
+- une limite CPU/mémoire par job au niveau conteneur (le timeout borne
+  déjà la durée depuis le 2026-09-20 — constat 10a, corrigé — mais pas la
+  consommation de ressources pendant cette durée : constat 10b, encore
+  ouvert) ;
+- une purge garantie de tout l'espace de travail à la fin d'un job — le
+  `tmpfs` jetable du §4 couvre ce point par construction si le conteneur
+  est bien détruit après chaque job (l'équivalent local, la purge du
+  dossier de clone, est corrigé depuis le 2026-09-20 — constat 12).
 
 Une conséquence positive à ne pas manquer : indexer les résultats par
 `(URL, commit SHA)` (§3) permet aussi un **cache** — une soumission déjà
@@ -215,13 +233,12 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
 
 ## 7. Prochaines étapes concrètes
 
-- Fait : les constats 1, 3, 4 et 12 (SSRF sur le clonage, `--no-sandbox`,
-  rattachement du commit au rapport, dossiers temporaires jamais purgés)
-  sont corrigés dans le moteur — voir §1.
-- Reste à trancher, côté fil moteur : corriger ou non, indépendamment du
-  calendrier V2, les constats 8, 9 et 10 (§1) — ils réduisent un risque
-  qui existe déjà pour l'usage local normal de `gwaudit`, sans coût
-  fonctionnel apparent.
+- Fait : les constats 1, 2, 3, 4, 8, 9, 10a et 12 (§1) sont corrigés dans
+  le moteur, et les constats 5, 6 et 7 substantiellement atténués par le
+  durcissement réseau ajouté en même temps.
+- Reste ouvert, propre à l'architecture V2 et pas au moteur en tant que
+  tel : limite CPU/mémoire par job (constat 10b) et limite de concurrence
+  (constat 11) — voir §4 et §5.
 - Faire valider sur le VPS d'Antoine : le sandbox natif de Chromium dans
   son environnement Docker réel (§4), et l'esquisse `docker-compose`
   jointe.
