@@ -86,12 +86,32 @@ test("C-PM-02 se déclenche si le message relayé n'est pas le paramètre de la 
   assert.equal(constats.filter((x) => x.regle === 'C-PM-02').length, 1);
 });
 
-test('C-CLIP-01 détecte la lecture du presse-papiers', () => {
+test("C-CLIP-01 détecte la lecture du presse-papiers sans geste identifiable (majeur, certain)", () => {
   const ctx = { fichiers: [fichier('app.js', 'navigator.clipboard.readText().then((t) => envoyer(t));')] };
   const constats = analyserPressePapiers(ctx);
   const c = constats.find((x) => x.regle === 'C-CLIP-01');
   assert.ok(c);
   assertTroisChoses(c);
+  assert.equal(c.severite, 'majeur');
+  assert.equal(c.confiance, 'certain');
+});
+
+test("C-CLIP-01 rétrograde en mineur quand la lecture est derrière un addEventListener('click', ...)", () => {
+  const contenu = "bouton.addEventListener('click', () => { navigator.clipboard.readText().then((t) => coller(t)); });";
+  const ctx = { fichiers: [fichier('app.js', contenu)] };
+  const constats = analyserPressePapiers(ctx);
+  const c = constats.find((x) => x.regle === 'C-CLIP-01');
+  assert.ok(c);
+  assert.equal(c.severite, 'mineur');
+  assert.equal(c.confiance, 'probable');
+});
+
+test("C-CLIP-01 rétrograde en mineur quand la lecture est dans un gestionnaire assigné à onclick", () => {
+  const contenu = "bouton.onclick = function () { navigator.clipboard.readText().then((t) => coller(t)); };";
+  const ctx = { fichiers: [fichier('app.js', contenu)] };
+  const constats = analyserPressePapiers(ctx);
+  const c = constats.find((x) => x.regle === 'C-CLIP-01');
+  assert.equal(c.severite, 'mineur');
 });
 
 test('C-EXFIL-05 détecte un <script> créé dynamiquement vers un hôte externe littéral (bloquant)', () => {
@@ -134,6 +154,33 @@ test("C-EXFIL-05 ne se déclenche pas pour un script pointé en local ou vers l'
   const ctx = { fichiers: [fichier('app.js', contenu)] };
   const constats = analyserScriptDynamique(ctx);
   assert.equal(constats.filter((x) => x.regle === 'C-EXFIL-05').length, 0);
+});
+
+test("C-EXFIL-05 devient non bloquant quand un attribut integrity est assigné sur le même élément (majeur, comme C-EXFIL-03)", () => {
+  const contenu = [
+    "const s = document.createElement('script');",
+    "s.src = 'https://cdn.exemple.example/lib.js';",
+    "s.integrity = 'sha384-abc';",
+    'document.body.appendChild(s);',
+  ].join('\n');
+  const ctx = { fichiers: [fichier('app.js', contenu)] };
+  const constats = analyserScriptDynamique(ctx);
+  const c = constats.find((x) => x.regle === 'C-EXFIL-05');
+  assert.ok(c);
+  assert.equal(c.bloquant, false, "protégé par integrity : ne doit plus, à lui seul, forcer NON CONFORME");
+  assert.equal(c.severite, 'critique', "reste critique : la sévérité ne doit pas dépendre du style d'écriture, comme C-EXFIL-03");
+});
+
+test("C-EXFIL-05 assignation de integrity avant .src (ordre indifférent)", () => {
+  const contenu = [
+    "const s = document.createElement('script');",
+    "s.integrity = 'sha384-abc';",
+    "s.src = 'https://cdn.exemple.example/lib.js';",
+  ].join('\n');
+  const ctx = { fichiers: [fichier('app.js', contenu)] };
+  const constats = analyserScriptDynamique(ctx);
+  const c = constats.find((x) => x.regle === 'C-EXFIL-05');
+  assert.equal(c.bloquant, false);
 });
 
 test("C-EXFIL-05 ne confond pas une simple image .src avec un script créé dynamiquement", () => {
@@ -192,4 +239,16 @@ test("C-EXFIL-06 ne se déclenche pas sur un import() littéral (déjà couvert 
   const ctx = { fichiers: [fichier('app.js', "import('./local.js');")] };
   const constats = analyserImportDynamique(ctx);
   assert.equal(constats.filter((x) => x.regle === 'C-EXFIL-06').length, 0);
+});
+
+test("C-EXFIL-06 ne se déclenche pas sur le découpage de code local recommandé (template littéral en chemin relatif)", () => {
+  const ctx = { fichiers: [fichier('app.js', "async function charger(langue) { await import(`./locales/${langue}.js`); }")] };
+  const constats = analyserImportDynamique(ctx);
+  assert.equal(constats.filter((x) => x.regle === 'C-EXFIL-06').length, 0);
+});
+
+test("C-EXFIL-06 se déclenche quand même sur un template littéral qui ne commence pas par un chemin relatif certain", () => {
+  const ctx = { fichiers: [fichier('app.js', "async function charger(base) { await import(`${base}/module.js`); }")] };
+  const constats = analyserImportDynamique(ctx);
+  assert.equal(constats.filter((x) => x.regle === 'C-EXFIL-06').length, 1);
 });

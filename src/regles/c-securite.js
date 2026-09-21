@@ -806,28 +806,64 @@ export function analyserEmissionPostMessage(ctx) {
 // ---------------------------------------------------------------------------
 
 /** Le presse-papiers dépasse le périmètre du document Grist : c'est une donnée de l'appareil, pas du document. */
+// Une lecture du presse-papiers derrière un geste explicite de l'agent (clic
+// sur un bouton « Coller », touche dédiée) est le cas d'usage recommandé de
+// l'API — c'est même sa seule utilisation raisonnable côté widget. Une
+// lecture qui ne dépend d'aucune interaction (au chargement, sur une minuterie,
+// en réaction à un événement Grist) n'a pas cette excuse : elle peut aspirer
+// le presse-papiers sans qu'aucune action de l'agent ne l'ait déclenchée.
+const EVENEMENTS_GESTE = /^(click|pointerdown|pointerup|mousedown|mouseup|touchstart|touchend|keydown|keyup)$/i;
+const PROPRIETES_GESTE = /^on(click|pointerdown|pointerup|mousedown|mouseup|touchstart|touchend|keydown|keyup)$/i;
+
+function estDansGestionnaireInteraction(ancetres) {
+  for (let i = ancetres.length - 2; i >= 0; i--) {
+    const a = ancetres[i];
+    if (a.type !== 'FunctionExpression' && a.type !== 'ArrowFunctionExpression' && a.type !== 'FunctionDeclaration') continue;
+    const parent = ancetres[i - 1];
+    if (!parent) return false;
+    if (parent.type === 'CallExpression') {
+      const nom = nomPointe(parent.callee) || '';
+      if (/(^|\.)addEventListener$/.test(nom) && EVENEMENTS_GESTE.test(chaineLitterale(parent.arguments[1]) || chaineLitterale(parent.arguments[0]) || '')) return true;
+    }
+    if (parent.type === 'AssignmentExpression' && parent.left.type === 'MemberExpression' && !parent.left.computed
+        && PROPRIETES_GESTE.test(parent.left.property.name || '')) return true;
+    return false; // la première fonction englobante trouvée tranche la question
+  }
+  return false;
+}
+
 export function analyserPressePapiers(ctx) {
   const constats = [];
   const vus = new Set();
 
   pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
-    walk.simple(ast, {
-      CallExpression(n) {
+    walk.ancestor(ast, {
+      CallExpression(n, _state, ancetres) {
         const nom = nomPointe(n.callee) || '';
         if (!/(^|\.)clipboard\.(read|readText)$/.test(nom)) return;
         const cle = `${unite.chemin}:${ligneDe(n)}`;
         if (vus.has(cle)) return;
         vus.add(cle);
 
+        const gate = estDansGestionnaireInteraction(ancetres);
+        const appel = nom.split('.').slice(-2).join('.');
+
         constats.push(constat({
-          regle: 'C-CLIP-01', axe: 'C', severite: 'majeur', confiance: 'certain',
-          titre: 'Le widget lit le contenu du presse-papiers',
+          regle: 'C-CLIP-01', axe: 'C',
+          severite: gate ? 'mineur' : 'majeur', confiance: gate ? 'probable' : 'certain',
+          titre: gate
+            ? 'Le widget lit le presse-papiers derrière un geste explicite de l\'agent'
+            : 'Le widget lit le presse-papiers sans geste explicite identifiable',
           fichier: unite.chemin, ligne: ligneDe(n),
           extrait: extraireSource(unite.source, n),
-          constat: `\`${nom.split('.').slice(-2).join('.')}()\` donne au widget accès au contenu actuel du presse-papiers du système.`,
+          constat: gate
+            ? `\`${appel}()\` est appelé depuis un gestionnaire d'événement d'interaction (clic, touche, pointeur) : la forme correspond à un bouton « Coller » ou équivalent.`
+            : `\`${appel}()\` donne au widget accès au contenu actuel du presse-papiers du système, sans qu'aucun gestionnaire d'événement d'interaction n'encadre cet appel dans le code environnant.`,
           impact: "Le presse-papiers peut contenir une donnée sans aucun rapport avec le document Grist (mot de passe copié dans un gestionnaire, extrait d'un autre document). Cet accès dépasse donc le périmètre du document que l'agent a autorisé au widget, et touche l'appareil de l'agent plutôt que ses seules données Grist.",
-          remediation: "Documenter dans le README pourquoi cette lecture est nécessaire et à quel moment elle se déclenche (normalement suite à une action explicite de l'agent, par exemple un bouton « Coller »). Si elle n'est pas indispensable, la retirer.",
+          remediation: gate
+            ? "Vérifier que cette lecture reste ponctuelle (déclenchée par l'action, pas répétée en arrière-plan) et documenter-la brièvement dans le README (ex. « bouton Coller »)."
+            : "Documenter dans le README pourquoi cette lecture est nécessaire et à quel moment elle se déclenche. Si elle n'est pas liée à une action explicite de l'agent (bouton « Coller » ou équivalent), la restreindre à ce cas.",
           referentiels: ['W3C — Clipboard API and events', 'RGPD art. 5 (minimisation)'],
         }));
       },
@@ -868,6 +904,21 @@ export function analyserScriptDynamique(ctx) {
     });
     if (!variablesScript.size) return;
 
+    // Un `integrity` assigné sur le même élément — avant ou après `.src`, peu
+    // importe l'ordre — est le même signal d'atténuation que C-EXFIL-03
+    // reconnaît déjà pour une balise <script integrity="…"> statique : la
+    // sévérité ne doit pas dépendre du style d'écriture (URL en constante ou
+    // en littéral) mais de cette propriété de sécurité réelle.
+    const variablesAvecIntegrite = new Set();
+    walk.simple(ast, {
+      AssignmentExpression(n) {
+        if (n.left.type !== 'MemberExpression' || n.left.computed) return;
+        if (n.left.property.name !== 'integrity') return;
+        if (n.left.object.type !== 'Identifier' || !variablesScript.has(n.left.object.name)) return;
+        variablesAvecIntegrite.add(n.left.object.name);
+      },
+    });
+
     walk.simple(ast, {
       AssignmentExpression(n) {
         if (n.left.type !== 'MemberExpression' || n.left.computed) return;
@@ -884,21 +935,25 @@ export function analyserScriptDynamique(ctx) {
         vus.add(cle);
         if (!dynamique) enregistrerDestination(ctx, h);
 
+        const protege = !dynamique && variablesAvecIntegrite.has(n.left.object.name);
+
         constats.push(constat({
-          regle: 'C-EXFIL-05', axe: 'C', severite: dynamique ? 'majeur' : 'critique', bloquant: !dynamique,
+          regle: 'C-EXFIL-05', axe: 'C', severite: dynamique ? 'majeur' : 'critique', bloquant: !dynamique && !protege,
           confiance: dynamique ? 'a_verifier' : 'certain',
           titre: dynamique
             ? "Élément <script> créé dynamiquement, avec une source calculée à l'exécution"
-            : `Élément <script> créé dynamiquement et pointé vers un service externe : ${h}`,
+            : `Élément <script> créé dynamiquement et pointé vers un service externe : ${h}${protege ? ' (intégrité vérifiée)' : ''}`,
           fichier: unite.chemin, ligne: ligneDe(n),
           extrait: extraireSource(unite.source, n),
           constat: dynamique
             ? "Le code crée un élément `<script>` par `createElement('script')` puis lui assigne une source construite à l'exécution : la lecture du code seule ne permet pas de savoir quel script sera réellement chargé."
-            : `Le code crée un élément \`<script>\` par \`createElement('script')\` et l'attache à \`${h}\`, un service extérieur à l'instance Grist.`,
+            : `Le code crée un élément \`<script>\` par \`createElement('script')\` et l'attache à \`${h}\`, un service extérieur à l'instance Grist${protege ? ', avec un attribut `integrity` assigné sur le même élément' : ' sans contrôle d\'intégrité (`integrity`)'}.`,
           impact: "Un script inséré de cette façon échappe à l'analyse statique du HTML (qui ne lit que les balises `<script src>` déjà présentes dans le document), et peut être déclenché après un délai ou une interaction de l'agent, hors de la fenêtre d'observation d'un audit ponctuel. Une fois exécuté, ce script a tous les privilèges du widget, donc l'accès que l'agent lui a accordé au document.",
           remediation: dynamique
             ? "Restreindre la source à une liste blanche de constantes, et documenter dans le README la liste exhaustive des scripts chargés dynamiquement."
-            : `Déclarer ce script directement dans le HTML (\`<script src="…" integrity="…">\`) plutôt que de le créer par JavaScript, ou documenter dans le README pourquoi le chargement dynamique vers \`${h}\` est nécessaire.`,
+            : protege
+              ? `Ce chargement vérifie déjà l'intégrité du script récupéré depuis \`${h}\` : il suffit de documenter ce choix dans le README.`
+              : `Ajouter un attribut \`integrity\` (et \`crossorigin\`) sur l'élément avant de l'attacher au document, ou déclarer ce script directement dans le HTML (\`<script src="…" integrity="…">\`), ou documenter dans le README pourquoi le chargement dynamique vers \`${h}\` est nécessaire.`,
           referentiels: [REF_GUIDE, 'OWASP Top 10 A08:2021 — Intégrité logicielle', 'CWE-829'],
         }));
       },
@@ -921,6 +976,23 @@ export function analyserScriptDynamique(ctx) {
  * différé (déclenché après un délai ou une interaction) que la méthodologie
  * identifie comme hors de la fenêtre d'observation d'un audit ponctuel.
  */
+/**
+ * `import(`./chemin/${variable}.js`)` — un template littéral dont la partie
+ * fixe commence par `./` ou `../` et dont aucun segment fixe ne contient
+ * `http(s):` ni `//` — est le découpage de code recommandé par les bundlers
+ * (webpack, Vite) pour le chargement à la demande : le chemin est local par
+ * construction, seul le nom de fichier varie. Ne s'applique qu'aux
+ * `TemplateLiteral` : une source `Identifier`/`CallExpression` ne porte
+ * aucune partie littérale sur laquelle raisonner et reste signalée.
+ */
+function indiceLocalCertain(noeud) {
+  if (noeud.type !== 'TemplateLiteral') return false;
+  const premier = noeud.quasis[0]?.value.cooked ?? '';
+  if (!/^\.\.?\//.test(premier)) return false;
+  const texteFixe = noeud.quasis.map((q) => q.value.cooked ?? '').join('');
+  return !/https?:|\/\//i.test(texteFixe);
+}
+
 export function analyserImportDynamique(ctx) {
   const constats = [];
   const vus = new Set();
@@ -931,6 +1003,7 @@ export function analyserImportDynamique(ctx) {
       ImportExpression(n) {
         if (chaineLitterale(n.source) !== null) return;         // littéral : déjà couvert par C-EXFIL-01
         if (!estDynamique(n.source)) return;                     // ni littéral ni dynamique reconnu (rare) : rien à affirmer
+        if (indiceLocalCertain(n.source)) return;                // découpage de code local recommandé : pas un signal
 
         const cle = `${unite.chemin}:${ligneDe(n)}`;
         if (vus.has(cle)) return;
