@@ -13,6 +13,7 @@
  * D'où l'ordre des priorités : sortie de données > privilège excessif >
  * injection > stockage hors Grist > le reste.
  */
+import path from 'node:path';
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique } from '../moteur/analyse-js.js';
 
@@ -555,6 +556,14 @@ export function analyserPostMessage(ctx) {
   return constats;
 }
 
+/** Vrai si le README à la racine mentionne au moins un des mécanismes donnés (présence, pas qualité — même principe que B-DOC-04). */
+function readmeMentionneMecanisme(ctx, mecanismes) {
+  const readme = ctx.fichiers?.find((f) => /^readme(\.md|\.txt)?$/i.test(path.basename(f.chemin)) && !f.chemin.includes('/'));
+  if (!readme) return false;
+  const texte = readme.contenu.toLowerCase();
+  return mecanismes.some((m) => texte.includes(m.toLowerCase()));
+}
+
 /** Stockage persistant hors de Grist. */
 export function analyserStockage(ctx) {
   const constats = [];
@@ -579,17 +588,27 @@ export function analyserStockage(ctx) {
 
   if (emplacements.length) {
     const p = emplacements[0];
-    const mecanismes = [...new Set(emplacements.map((e) => e.mecanisme))].join(', ');
+    const mecanismesUniques = [...new Set(emplacements.map((e) => e.mecanisme))];
+    const mecanismes = mecanismesUniques.join(', ');
     const cles = [...new Set(emplacements.map((e) => e.cle).filter(Boolean))];
+    // Le mécanisme lui-même étant nommé dans le README (même grossièrement,
+    // sans juger si la justification est bonne — même principe que
+    // B-DOC-04), le lecteur sait déjà que ce stockage existe : ce que la
+    // règle demande dans sa propre remédiation pour le cas « préférence
+    // d'affichage ». Le constat reste (le mécanisme mérite d'être vérifié à
+    // chaque évolution), mais à titre d'information plutôt que de majeur.
+    const documente = readmeMentionneMecanisme(ctx, mecanismesUniques);
     constats.push(constat({
-      regle: 'C-STOCK-01', axe: 'C', severite: 'majeur', confiance: 'certain',
+      regle: 'C-STOCK-01', axe: 'C', severite: documente ? 'mineur' : 'majeur', confiance: 'certain',
       titre: `Données conservées hors de Grist (${mecanismes})`,
       fichier: p.fichier, ligne: p.ligne,
       constat: `${emplacements.length} écriture(s) de stockage persistant détectée(s)${cles.length ? ` — clés : ${cles.slice(0, 8).join(', ')}` : ''}.`,
       impact: "Le guide de contribution demande qu'aucune donnée utilisateur ne soit stockée hors de Grist. Les données écrites ici survivent à la fermeture du document, échappent aux droits d'accès Grist, ne sont pas couvertes par les sauvegardes, et ne disparaissent pas quand l'agent perd l'accès au document. Si elles contiennent des données personnelles, cela constitue un traitement non déclaré.",
-      remediation: "Distinguer les deux cas. Préférences d'affichage (thème, colonne triée) : acceptable, à documenter dans le README. Contenu issu du document : à replacer dans une table Grist, ou à ne pas persister du tout.",
+      remediation: documente
+        ? "Le mécanisme est déjà nommé dans le README : vérifier que les clés effectivement écrites correspondent bien à ce qui y est décrit (préférence d'affichage) et non à du contenu issu du document."
+        : "Distinguer les deux cas. Préférences d'affichage (thème, colonne triée) : acceptable, à documenter dans le README. Contenu issu du document : à replacer dans une table Grist, ou à ne pas persister du tout.",
       referentiels: ['Guide de contribution Grist.Gouv — « no storage of user data outside of Grist »', 'RGPD art. 5'],
-      preuve: { emplacements },
+      preuve: { emplacements, documente },
     }));
   }
   return constats;

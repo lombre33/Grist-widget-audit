@@ -38,14 +38,31 @@ export function unitesJs(fichier) {
   return unites;
 }
 
-/** Parse une unité. Renvoie null si le code est syntaxiquement invalide (TS, JSX exotique…). */
+/**
+ * Parse une unité. Renvoie null si le code est syntaxiquement invalide (TS,
+ * JSX exotique…). Les commentaires sont collectés à part (`ast.commentaires`,
+ * `{debut, fin}` en décalage de caractères) : acorn ne les rattache à aucun
+ * nœud par défaut, or au moins une règle (A-ERR-01) a besoin de savoir si une
+ * portée de code est commentée sans se soucier de la syntaxe qu'elle contient.
+ */
 export function parser(source) {
   for (const sourceType of ['module', 'script']) {
     try {
-      return parse(source, { ecmaVersion: 'latest', sourceType, locations: true, allowHashBang: true });
+      const commentaires = [];
+      const ast = parse(source, {
+        ecmaVersion: 'latest', sourceType, locations: true, allowHashBang: true,
+        onComment: (_bloc, _texte, debut, fin) => commentaires.push({ debut, fin }),
+      });
+      ast.commentaires = commentaires;
+      return ast;
     } catch { /* on tente l'autre mode */ }
   }
   return null;
+}
+
+/** Vrai si au moins un commentaire est entièrement contenu dans la portée du nœud donné. */
+export function aCommentaireDansPortee(ast, noeud) {
+  return (ast?.commentaires ?? []).some((c) => c.debut >= noeud.start && c.fin <= noeud.end);
 }
 
 /**

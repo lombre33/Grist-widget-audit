@@ -9,7 +9,7 @@
  */
 import path from 'node:path';
 import { constat } from '../moteur/modele.js';
-import { pourChaqueUniteJs, nomPointe } from '../moteur/analyse-js.js';
+import { pourChaqueUniteJs, nomPointe, aCommentaireDansPortee } from '../moteur/analyse-js.js';
 
 const SEUILS = {
   fichierLong: 600,        // lignes significatives
@@ -140,7 +140,13 @@ export function analyserGestionErreurs(ctx) {
     walk.simple(ast, {
       CatchClause(n) {
         const corps = n.body.body;
-        if (corps.length === 0) {
+        // Un corps vide MAIS commenté est un repli documenté (ex. stockage
+        // best-effort dans un contexte où l'échec est attendu et sans
+        // conséquence), pas une erreur avalée en silence : le commentaire
+        // porte l'explication que la règle cherche à imposer. acorn ne
+        // rattache aucun commentaire aux nœuds par défaut, d'où le passage
+        // par `ast.commentaires` (voir `aCommentaireDansPortee`).
+        if (corps.length === 0 && !aCommentaireDansPortee(ast, n.body)) {
           constats.push(constat({
             regle: 'A-ERR-01', axe: 'A', severite: 'majeur', confiance: 'certain',
             titre: 'Bloc catch vide : une erreur est avalée sans trace',
