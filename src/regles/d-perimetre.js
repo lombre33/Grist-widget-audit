@@ -53,15 +53,21 @@ const FRAGMENTS_LECTURE_ETENDUE = [
   "l'ensemble du document",
   "l'ensemble des tables",
   "l'ensemble du classeur",
+  "l'ensemble des données",
   "l'intégralité du document",
   "l'intégralité des tables",
+  "l'intégralité des données",
   'tout le document',
   'toutes les tables',
+  'toutes les données',
   'chaque table',
   'entire document',
+  'entire dataset',
   'all tables',
+  'all the tables',
   'every table',
   'whole document',
+  'all data',
 ];
 
 /**
