@@ -635,7 +635,7 @@ export async function auditDynamique(ctx, options = {}) {
     constats.push(...constatsA11y(brut.a11y, brut.a11yErreur));
     constats.push(...constatsConsole(brut.consoles, brut.erreursPage, brut.requetes.length));
     constats.push(...constatsNegociationAcces(brut.journalHote));
-    constats.push(...analyserAccesAppat(brut.journalHote));
+    constats.push(...analyserAccesAppat(brut.journalHote, ctx));
 
   } catch (e) {
     // Filet générique : n'importe quelle erreur inattendue de l'axe D
