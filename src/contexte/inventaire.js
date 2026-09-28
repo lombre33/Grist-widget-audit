@@ -184,6 +184,16 @@ function referencesSortantes(f) {
   if (['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'].includes(f.ext)) {
     for (const m of c.matchAll(/\bfrom\s+["']([^"']+)["']/g)) refs.push(m[1]);
     for (const m of c.matchAll(/\bimport\s*\(\s*["']([^"']+)["']/g)) refs.push(m[1]);
+    // `new Worker('./worker.js')` / `new SharedWorker(...)` : un fichier de
+    // worker n'est référencé par aucun <script> ni import ES, mais il est
+    // pleinement exécuté dans le navigateur de l'agent dès que ce constructeur
+    // tourne. Sans cette ligne, son contenu (un `importScripts()` vers un
+    // domaine externe, par exemple — voir C-EXFIL-01/02) n'est jamais vu par
+    // aucune règle : il n'entre jamais dans `surface`, quel que soit l'appel
+    // qu'il contient. Seule une source littérale locale est suivie ici ; une
+    // URL absolue (http(s):, data:) est déjà écartée plus bas par le même
+    // filtre que pour les autres références.
+    for (const m of c.matchAll(/\bnew\s+(?:Worker|SharedWorker)\s*\(\s*["']([^"']+)["']/g)) refs.push(m[1]);
   }
   return refs;
 }

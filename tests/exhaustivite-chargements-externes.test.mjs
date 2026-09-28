@@ -1,8 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import path from 'node:path';
+import fs from 'node:fs';
+import os from 'node:os';
 import { extraireImportMaps } from '../src/moteur/analyse-js.js';
-import { analyserRessourcesExternes, analyserWorkerExterne, analyserSortiesReseau } from '../src/regles/c-securite.js';
+import { analyserRessourcesExternes, analyserSortiesReseau } from '../src/regles/c-securite.js';
 import { analyserDependancesDistantes } from '../src/regles/e-dependances.js';
+import { construireContexte } from '../src/contexte/inventaire.js';
 
 /**
  * Demande d'Antoine (2026-09-28, relayée depuis le fil du prompt d'audit
@@ -13,13 +17,35 @@ import { analyserDependancesDistantes } from '../src/regles/e-dependances.js';
  * nu — invisible à E-DEP-01 (qui ne lisait que `<script src>`) comme à
  * C-EXFIL-03 (même limite) et à toute règle basée sur l'AST JS (le JSON d'une
  * import map n'est jamais un `unitesJs`). Ajouté aussi : `<object>`/`<embed>`
- * (mineur, même traitement que `<img>`), et une règle dédiée C-EXFIL-07 pour
- * `Worker`/`SharedWorker` chargés depuis un service externe, qui n'ont — à
- * la différence d'un `<script>` — aucun mécanisme d'intégrité natif.
+ * (mineur, même traitement que `<img>`).
+ *
+ * Une piste explorée puis abandonnée après vérification par l'exécution (vraie
+ * Chromium, voir la conversation) : une règle dédiée pour un
+ * `Worker`/`SharedWorker` construit avec une URL externe. En réalité,
+ * `new Worker(url-externe)` / `new SharedWorker(url-externe)` lève toujours
+ * une `SecurityError` synchrone, y compris avec `type: 'module'` et des
+ * en-têtes CORS permissifs — ce n'est pas un vecteur, c'est du code cassé.
+ * Le vrai trou était ailleurs : `referencesSortantes()` (dans
+ * `src/contexte/inventaire.js`) ne suivait jamais un
+ * `new Worker('./local.js')`, donc le fichier du worker n'entrait jamais
+ * dans la surface exécutée — son contenu (un `importScripts()` vers
+ * l'extérieur, par exemple, qui lui s'exécute bien sans CORS) échappait
+ * silencieusement à toutes les règles de l'axe C, quel que soit le domaine
+ * visé. C'est ce trou-là qui est corrigé ci-dessous.
  */
 
 function fichier(chemin, contenu, extra = {}) {
   return { chemin, contenu, lignes: contenu.split('\n'), ext: chemin.slice(chemin.lastIndexOf('.')), binaire: false, executee: true, vendorise: false, ...extra };
+}
+
+function depotTemporaire(fichiers) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-worker-surface-'));
+  for (const [rel, contenu] of Object.entries(fichiers)) {
+    const abs = path.join(dir, rel);
+    fs.mkdirSync(path.dirname(abs), { recursive: true });
+    fs.writeFileSync(abs, contenu);
+  }
+  return dir;
 }
 
 function importmap(objet) {
@@ -158,47 +184,66 @@ test('<object>/<embed> locaux ne déclenchent rien (comportement attendu, comme 
 });
 
 // ---------------------------------------------------------------------------
-// C-EXFIL-07 : Worker / SharedWorker externe
+// Surface exécutée : new Worker('./local.js') / new SharedWorker(...)
 // ---------------------------------------------------------------------------
 
-test('C-EXFIL-07 : new Worker(url externe littéral) est critique et bloquant', () => {
-  const ctx = { fichiers: [fichier('app.js', "const w = new Worker('https://exemple.tiers/worker.js');")] };
-  const c = analyserWorkerExterne(ctx).find((x) => x.regle === 'C-EXFIL-07');
-  assert.ok(c);
-  assert.equal(c.severite, 'critique');
-  assert.equal(c.bloquant, true);
-  assert.equal(c.confiance, 'certain');
+test("un new Worker('./chemin/local.js') fait entrer le fichier du worker dans la surface exécutée", () => {
+  const dir = depotTemporaire({
+    'index.html': '<script src="app.js"></script>',
+    'app.js': "const w = new Worker('./worker.js');",
+    'worker.js': "importScripts('https://exemple.tiers/lib.js');",
+  });
+  try {
+    const ctx = construireContexte(dir);
+    assert.ok(ctx.surface.has('worker.js'), "avant ce correctif, worker.js n'entrait jamais dans la surface — son contenu était invisible à l'axe C");
+    const worker = ctx.fichiers.find((f) => f.chemin === 'worker.js');
+    assert.equal(worker.executee, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
-test('C-EXFIL-07 : new SharedWorker(url externe littéral) est également détecté', () => {
-  const ctx = { fichiers: [fichier('app.js', "const w = new SharedWorker('https://exemple.tiers/worker.js');")] };
-  const c = analyserWorkerExterne(ctx).find((x) => x.regle === 'C-EXFIL-07');
-  assert.ok(c);
-  assert.equal(c.severite, 'critique');
+test("un new SharedWorker('./chemin/local.js') fait aussi entrer le fichier dans la surface exécutée", () => {
+  const dir = depotTemporaire({
+    'index.html': '<script src="app.js"></script>',
+    'app.js': "const w = new SharedWorker('./partage.js');",
+    'partage.js': '',
+  });
+  try {
+    const ctx = construireContexte(dir);
+    assert.ok(ctx.surface.has('partage.js'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
-test('C-EXFIL-07 : new Worker(chemin local) ne déclenche rien', () => {
-  const ctx = { fichiers: [fichier('app.js', "const w = new Worker('./worker.js');")] };
-  assert.equal(analyserWorkerExterne(ctx).filter((x) => x.regle === 'C-EXFIL-07').length, 0);
+test('une fois dans la surface, le contenu du worker est audité comme le reste : importScripts() externe déclenche C-EXFIL-01', () => {
+  const dir = depotTemporaire({
+    'index.html': '<script src="app.js"></script>',
+    'app.js': "const w = new Worker('./worker.js');",
+    'worker.js': "importScripts('https://exemple.tiers/lib.js');",
+  });
+  try {
+    const ctx = construireContexte(dir);
+    const constats = analyserSortiesReseau(ctx);
+    const c = constats.find((x) => x.regle === 'C-EXFIL-01' && x.fichier === 'worker.js');
+    assert.ok(c, "importScripts() vers un domaine externe, dans un fichier de worker atteint uniquement via new Worker(), doit maintenant être vu");
+    assert.equal(c.severite, 'critique');
+    assert.equal(c.bloquant, true);
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
-test('C-EXFIL-07 : new Worker(url calculée à l\'exécution) est majeur, non bloquant, à vérifier', () => {
-  const ctx = { fichiers: [fichier('app.js', 'const w = new Worker(source);')] };
-  const c = analyserWorkerExterne(ctx).find((x) => x.regle === 'C-EXFIL-07');
-  assert.ok(c);
-  assert.equal(c.severite, 'majeur');
-  assert.equal(c.bloquant, false);
-  assert.equal(c.confiance, 'a_verifier');
-});
-
-test('C-EXFIL-07 : aucun mécanisme d\'intégrité n\'existe pour Worker — pas de branche "protégé" dans la remédiation', () => {
-  const ctx = { fichiers: [fichier('app.js', "const w = new Worker('https://exemple.tiers/worker.js');")] };
-  const c = analyserWorkerExterne(ctx).find((x) => x.regle === 'C-EXFIL-07');
-  assert.ok(!/int[ée]grit[ée]\s*=|attribut.*int[ée]grit[ée].*d[ée]j[àa]/i.test(c.remediation), 'la remédiation ne doit jamais suggérer un attribut integrity, qui n\'existe pas pour ce constructeur');
-});
-
-test('Worker/SharedWorker externe n\'est pas doublement compté par C-EXFIL-01/02 (analyserSortiesReseau)', () => {
-  const ctx = { fichiers: [fichier('app.js', "const w = new Worker('https://exemple.tiers/worker.js');")] };
-  const constats = analyserSortiesReseau(ctx);
-  assert.equal(constats.length, 0, 'analyserSortiesReseau ne connaît pas Worker/SharedWorker : pas de double comptage avec C-EXFIL-07');
+test("new Worker(url http(s) absolue) ne fait entrer aucun fichier dans la surface (impossible à suivre, et sans objet : voir plus haut)", () => {
+  const dir = depotTemporaire({
+    'index.html': '<script src="app.js"></script>',
+    'app.js': "const w = new Worker('https://exemple.tiers/worker.js');",
+  });
+  try {
+    const ctx = construireContexte(dir);
+    assert.equal(ctx.surface.size, 2, 'seuls index.html et app.js : aucune tentative de résoudre une URL absolue comme fichier local');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
