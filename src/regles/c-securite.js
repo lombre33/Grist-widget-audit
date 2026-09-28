@@ -317,6 +317,28 @@ export function analyserRessourcesExternes(ctx) {
 
 const SINKS_HTML = /(innerHTML|outerHTML|insertAdjacentHTML|srcdoc)$/;
 
+/**
+ * Vrai si la source passée à `new Worker(...)`/`new SharedWorker(...)` est du
+ * code assemblé en chaîne dans le dépôt lui-même, plutôt qu'un chemin de
+ * fichier : une URL `data:` littérale, ou `URL.createObjectURL(new Blob([…]))`
+ * dont au moins un élément du tableau est un littéral (pas une variable —
+ * un `Blob` construit depuis le texte d'une réponse réseau reste couvert par
+ * C-EXFIL-01/02 au moment de la requête, pas ici). Vérifié par l'exécution
+ * (vraie Chromium) : un `importScripts()` vers un domaine externe, sans
+ * aucun en-tête CORS, s'exécute aussi bien depuis un worker `blob:` que
+ * depuis un worker `data:` — ce n'est pas un cas théorique.
+ */
+function sourceWorkerCodeInline(arg) {
+  if (!arg) return false;
+  const lit = chaineLitterale(arg);
+  if (lit !== null) return /^data:/i.test(lit.trim());
+  if (arg.type !== 'CallExpression' || (nomPointe(arg.callee) || '') !== 'URL.createObjectURL') return false;
+  const blob = arg.arguments[0];
+  if (!blob || blob.type !== 'NewExpression' || (nomPointe(blob.callee) || '') !== 'Blob') return false;
+  const tableau = blob.arguments[0];
+  return !!tableau && tableau.type === 'ArrayExpression' && tableau.elements.some((el) => el && chaineLitterale(el) !== null);
+}
+
 export function analyserInjections(ctx) {
   const constats = [];
   // Les affectations de HTML *constant* ne sont pas un risque d'injection : on
@@ -422,6 +444,18 @@ export function analyserInjections(ctx) {
             constat: '`new Function(...)` compile une chaîne en fonction exécutable.',
             impact: "Équivalent fonctionnel d'`eval()` : exécution de code arbitraire avec l'accès du widget au document.",
             remediation: "Supprimer cet usage.",
+            referentiels: ['CWE-95', REF_ANSSI],
+          }));
+        }
+
+        if (/^(Worker|SharedWorker)$/.test(nomPointe(n.callee) ?? '') && sourceWorkerCodeInline(n.arguments[0])) {
+          constats.push(constat({
+            regle: 'C-XSS-07', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
+            titre: `${n.callee.name} construit depuis du code assemblé en chaîne dans le dépôt`,
+            fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+            constat: `Le code exécuté par ce ${n.callee.name} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé.`,
+            impact: "Équivalent fonctionnel d'eval() : ce code s'exécute avec les privilèges réseau du widget dès la construction du worker, et rien de son contenu — par exemple un appel vers un domaine externe — n'est lu par l'analyse statique, qui ne lit que des fichiers. Couper ou encoder cette chaîne (concaténation, atob) rend d'ailleurs inopérante toute recherche de motif dans le texte, ce qui exclut par principe une vérification automatique du contenu plutôt que de la construction elle-même.",
+            remediation: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${n.callee.name}('./chemin/local.js')\` : il redevient un fichier du dépôt, lisible et audité comme le reste du widget.`,
             referentiels: ['CWE-95', REF_ANSSI],
           }));
         }
