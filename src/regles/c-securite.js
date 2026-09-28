@@ -418,13 +418,19 @@ function decoderDataLitteral(lit) {
 }
 
 function extraireCodeLitteralWorker(arg) {
-  const lit = chaineLitterale(arg);
+  // `plierLitteraux` (pas seulement `chaineLitterale`) : une URL data:/blob:
+  // ou un élément de tableau assemblés par concaténation de CONSTANTES
+  // (`'data:...,' + '...'`, `Blob(['a' + 'b'])`) sont tout aussi littéraux
+  // qu'écrits en une seule chaîne — sans ce repli, ce cas précis retombait
+  // à tort dans le texte « calculé à l'exécution : rien n'est lu », alors
+  // qu'il n'y a rien de calculé (relevé par la coordination le 2026-09-28).
+  const lit = plierLitteraux(arg);
   if (lit !== null) return decoderDataLitteral(lit);
 
   if (arg.type === 'CallExpression' && nomFinal(arg.callee) === 'createObjectURL') {
     const blob = arg.arguments[0];
     if (blob?.type === 'NewExpression' && nomFinal(blob.callee) === 'Blob' && blob.arguments[0]?.type === 'ArrayExpression') {
-      const morceaux = blob.arguments[0].elements.map((el) => chaineLitterale(el));
+      const morceaux = blob.arguments[0].elements.map((el) => plierLitteraux(el));
       if (morceaux.length && morceaux.every((m) => m !== null)) return morceaux.join('');
     }
   }
@@ -497,27 +503,125 @@ function decoderAtobLitteral(noeud) {
 }
 
 /**
- * Vrai si `noeud` est manifestement une fonction : littéralement une
- * fonction fléchée/expression, ou un identifiant qui résout — dans la MÊME
- * unité — vers une déclaration de fonction ou une variable initialisée par
- * une fonction. C'est la seule forme sûre pour `setTimeout`/`setInterval` :
- * on ne signale JAMAIS ce cas, quel que soit le nom, pour ne pas noyer le
- * motif `setTimeout(callback, delai)` — de très loin le plus fréquent — sous
- * du bruit.
+ * Cherche, du site d'appel vers l'extérieur, la fonction (fléchée ou
+ * classique) la plus proche qui déclare un paramètre appelé `nom`. La
+ * portée JS veut qu'un tel paramètre masque toute déclaration homonyme plus
+ * large (une fonction ou une variable du même nom ailleurs dans le
+ * fichier) : sans ce garde-fou, un paramètre `cb` qui masque une
+ * `function cb() {}` sans rapport passait à tort pour résolu — relevé par
+ * la coordination le 2026-09-28. `ancetres` vient de `walk.ancestor` sur le
+ * site d'appel (le nœud lui-même en dernier élément). Retourne la fonction,
+ * la position du paramètre et le nœud parent de cette fonction (pour
+ * reconnaître un exécuteur de `new Promise(...)`), ou `null` si aucune
+ * fonction ancêtre ne déclare ce nom en paramètre.
  */
-function estFonctionResolue(noeud, ast, walkAcorn) {
-  if (!noeud) return false;
-  if (noeud.type === 'ArrowFunctionExpression' || noeud.type === 'FunctionExpression') return true;
-  if (noeud.type !== 'Identifier') return false;
+function trouverParametreEnglobant(nom, ancetres) {
+  for (let i = ancetres.length - 2; i >= 0; i--) {
+    const n = ancetres[i];
+    if (n.type === 'ArrowFunctionExpression' || n.type === 'FunctionExpression' || n.type === 'FunctionDeclaration') {
+      const index = n.params.findIndex((p) => p.type === 'Identifier' && p.name === nom);
+      if (index !== -1) return { fonction: n, index, parent: ancetres[i - 1] ?? null };
+    }
+  }
+  return null;
+}
+
+/**
+ * Vrai si `fonction` est l'exécuteur passé DIRECTEMENT à `new Promise(...)`
+ * et `index` désigne son premier (`resolve`) ou second (`reject`)
+ * paramètre : le langage GARANTIT que ce sont des fonctions au moment de
+ * l'appel, quel que soit leur nom — le seul cas où l'analyse peut être
+ * catégorique sans lire une déclaration plus haut dans la portée.
+ * `setTimeout(resolve, délai)` dans un exécuteur de Promise est l'idiome
+ * d'attente le plus courant en JS : le signaler comme non résolu noierait
+ * la quasi-totalité du code honnête sous du bruit (mesuré par la
+ * coordination le 2026-09-28 : widget-exemple axe C 95→83, global 92→89
+ * pour ce seul motif, sans lui la moindre trace de contenu caché).
+ */
+function estExecuteurPromise(fonction, parent, index) {
+  return index <= 1 && parent?.type === 'NewExpression' && nomFinal(parent.callee) === 'Promise' && parent.arguments[0] === fonction;
+}
+
+/**
+ * Recherche globale (tout le fichier, sans analyse de portée) d'une
+ * fonction déclarée ou assignée à ce nom — l'approximation déjà en place
+ * avant cette révision, pour le motif `function nom() {}` référencé
+ * ailleurs, ou `const nom = () => {}` passée à un autre appel. N'est
+ * appelée qu'une fois écarté le cas d'un paramètre qui masque ce nom (voir
+ * `trouverParametreEnglobant`) : une approximation qui ignore la portée
+ * exacte reste un angle mort plus sûr qu'un faux positif sur ce motif très
+ * répandu, mais elle ne doit jamais l'emporter sur un masquage avéré.
+ */
+function resoudreFonctionGlobale(nom, ast, walkAcorn) {
   let trouve = false;
   walkAcorn.simple(ast, {
-    FunctionDeclaration(n) { if (n.id?.name === noeud.name) trouve = true; },
+    FunctionDeclaration(n) { if (n.id?.name === nom) trouve = true; },
     VariableDeclarator(n) {
-      if (n.id.type === 'Identifier' && n.id.name === noeud.name &&
+      if (n.id.type === 'Identifier' && n.id.name === nom &&
           (n.init?.type === 'ArrowFunctionExpression' || n.init?.type === 'FunctionExpression')) trouve = true;
     },
   });
   return trouve;
+}
+
+/**
+ * Résout un identifiant vers une chaîne littérale déclarée dans le MÊME
+ * fichier (`const x = "…"`, y compris une concaténation de constantes qui
+ * se replie via `plierLitteraux`) : un contenu caché derrière un nom de
+ * variable n'est pas moins un littéral qu'écrit en place, il doit être
+ * audité pareil — sans ce cas, `const code = "…"; eval(code)` (ou
+ * `setTimeout(code, …)`) restait à tort « calculé à l'exécution », alors
+ * que son contenu est parfaitement lisible (relevé par la coordination le
+ * 2026-09-28). Approximation assumée comme le reste de cette résolution :
+ * ignore la portée exacte d'une redéclaration ; la dernière affectation
+ * trouvée dans le fichier l'emporte.
+ */
+function resoudreLitteralLocal(nom, ast, walkAcorn) {
+  let valeur = null;
+  walkAcorn.simple(ast, {
+    VariableDeclarator(n) {
+      if (n.id.type === 'Identifier' && n.id.name === nom) {
+        const v = plierLitteraux(n.init);
+        if (v !== null) valeur = v;
+      }
+    },
+  });
+  return valeur;
+}
+
+/**
+ * Résout un argument dynamique de `setTimeout`/`setInterval` vers l'une de
+ * trois issues : une fonction manifeste (jamais signalée), une chaîne
+ * littérale (auditée comme le reste du code, y compris via un nom de
+ * variable qui la porte), ou une valeur réellement inconnue de l'analyse
+ * statique. `ancetres` (de `walk.ancestor` sur le site d'appel) est
+ * nécessaire pour savoir si un identifiant est un paramètre qui masque une
+ * déclaration homonyme plus large, avant toute recherche globale.
+ */
+function resoudreArgument(noeud, { ast, walkAcorn, ancetres }) {
+  if (!noeud) return { type: 'inconnue' };
+  if (noeud.type === 'ArrowFunctionExpression' || noeud.type === 'FunctionExpression') return { type: 'fonction' };
+  if (noeud.type !== 'Identifier') return { type: 'autre' };
+
+  const masque = trouverParametreEnglobant(noeud.name, ancetres);
+  if (masque) {
+    return estExecuteurPromise(masque.fonction, masque.parent, masque.index) ? { type: 'fonction' } : { type: 'inconnue' };
+  }
+  if (resoudreFonctionGlobale(noeud.name, ast, walkAcorn)) return { type: 'fonction' };
+  const litteral = resoudreLitteralLocal(noeud.name, ast, walkAcorn);
+  if (litteral !== null) return { type: 'litteral', valeur: litteral };
+  return { type: 'inconnue' };
+}
+
+/** `String.fromCharCode(...)` retourne toujours une chaîne : si tous ses arguments sont des codes numériques littéraux, son résultat est aussi peu une boîte noire qu'un littéral direct — comme `atob()`. */
+function decoderFromCharCodeLitteral(noeud) {
+  if (noeud?.type !== 'CallExpression' || nomPointe(noeud.callee) !== 'String.fromCharCode' || !noeud.arguments.length) return null;
+  const codes = [];
+  for (const a of noeud.arguments) {
+    if (a.type !== 'Literal' || typeof a.value !== 'number') return null;
+    codes.push(a.value);
+  }
+  return String.fromCharCode(...codes);
 }
 
 /**
@@ -560,7 +664,7 @@ function estFonctionResolue(noeud, ast, walkAcorn) {
  * créé (utile à l'appelant pour poursuivre l'extraction en profondeur),
  * absent quand l'argument est calculé ou ne se parse pas.
  */
-function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, extrait, texteBrut, profondeur, regle, titreConstruction, texteConstruction, remediationSupprimer, impactConstruction, referentielsSupp = [] }) {
+function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, colonneAppel, extrait, texteBrut, profondeur, regle, titreConstruction, texteConstruction, remediationSupprimer, impactConstruction, referentielsSupp = [] }) {
   const constatCalculeOuIllisible = (motif) => constat({
     regle, axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
     titre: titreConstruction, fichier: fichierOrigine, ligne: ligneAppel, extrait,
@@ -590,10 +694,22 @@ function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, extrait, tex
     return { constats: [constatCalculeOuIllisible("Son contenu littéral ne se parse pas comme du JS valide : l'analyse ne peut pas l'auditer comme le reste du code.")] };
   }
 
-  const chemin = `${fichierOrigine} (code littéral, ligne ${ligneAppel})`;
+  // La colonne du site d'appel désambiguïse deux constructions distinctes sur
+  // la MÊME ligne (courant en code minifié/empaqueté) : sans elle, deux
+  // fichiers synthétiques sans rapport entre eux portaient le même chemin —
+  // relevé par la coordination le 2026-09-28.
+  const chemin = `${fichierOrigine} (code littéral, ligne ${ligneAppel}${colonneAppel ? `, colonne ${colonneAppel}` : ''})`;
   const fichier = {
     chemin, contenu: texteBrut, lignes: texteBrut.split('\n'), ext: '.js',
     binaire: false, executee: true, vendorise: true, litteralImbrique: true,
+    // Origine réelle (fichier + ligne du site d'appel qui a produit ce
+    // fichier synthétique) : sert à deux choses hors de cette fonction — ne
+    // pas compter deux fois, dans une règle qui scanne le TEXTE brut (comme
+    // F-SOUV-01), une référence déjà visible en clair dans le fichier
+    // d'origine (un littéral direct la reproduit textuellement) ; et donner
+    // aux formats d'export (SARIF) une localisation qui correspond à un
+    // fichier réel du dépôt, plutôt qu'un chemin synthétique introuvable.
+    origineReelle: { chemin: fichierOrigine, ligne: ligneAppel },
     taille: Buffer.byteLength(texteBrut, 'utf8'),
   };
   ctx.fichiers.push(fichier);
@@ -619,14 +735,43 @@ const IMPACT_EXECUTION_CHAINE = "Toute donnée qui atteint cet appel devient du 
  * sémantique de `Function`/`new Function` : leur corps s'exécute comme
  * l'intérieur d'une fonction (où `return` est valide), contrairement à
  * `eval()` ou au script d'un worker, qui s'exécutent en portée de script.
+ * `resoudreLitteralLocal` couvre le cas d'un identifiant qui porte une
+ * chaîne littérale déclarée ailleurs dans le même fichier
+ * (`const code = "…"; eval(code)`) : sans lui, ce détour laissait ce
+ * contenu hors de portée de l'analyse alors qu'il est parfaitement lisible
+ * (relevé par la coordination le 2026-09-28).
  */
-function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, profondeur, titreConstruction, texteConstruction, remediationSupprimer, envelopper = false }) {
-  const brut = plierLitteraux(argument) ?? decoderAtobLitteral(argument);
+function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, ast, walkAcorn, profondeur, titreConstruction, texteConstruction, remediationSupprimer, envelopper = false }) {
+  const brut = plierLitteraux(argument) ?? decoderAtobLitteral(argument) ??
+    (argument?.type === 'Identifier' ? resoudreLitteralLocal(argument.name, ast, walkAcorn) : null);
   const texteAnalyse = brut !== null && envelopper ? `(function(){${brut}})` : brut;
   return traiterSiteConstruction(ctx, {
-    fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), extrait: extraireSource(unite.source, n),
+    fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: (n.loc?.start?.column ?? 0) + 1, extrait: extraireSource(unite.source, n),
     texteBrut: texteAnalyse, profondeur, regle: 'C-XSS-03',
     titreConstruction, texteConstruction, remediationSupprimer,
+    impactConstruction: IMPACT_EXECUTION_CHAINE,
+  }).constats;
+}
+
+function constatMinuteurNonResolu({ unite, ligneDe, n, nom, motif }) {
+  return constat({
+    regle: 'C-XSS-04', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
+    titre: `Source de ${nom} non résolue par l'analyse statique`,
+    fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+    constat: motif,
+    impact: "Si cette expression contient une chaîne au moment de l'appel, elle est évaluée comme du code, avec les mêmes conséquences qu'eval(). L'analyse statique ne peut ni le confirmer ni l'exclure depuis ce seul fichier.",
+    remediation: `Passer directement une fonction à ${nom}, ou documenter dans le README la provenance de cette valeur.`,
+    referentiels: ['CWE-95', REF_GUIDE],
+  });
+}
+
+function traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut, profondeur }) {
+  return traiterSiteConstruction(ctx, {
+    fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: (n.loc?.start?.column ?? 0) + 1, extrait: extraireSource(unite.source, n),
+    texteBrut, profondeur, regle: 'C-XSS-04',
+    titreConstruction: `Chaîne de caractères passée à ${nom} (équivalent à eval)`,
+    texteConstruction: `Le premier argument de \`${nom}\` est une chaîne, pas une fonction.`,
+    remediationSupprimer: `Passer une fonction : \`${nom}(() => …, délai)\`.`,
     impactConstruction: IMPACT_EXECUTION_CHAINE,
   }).constats;
 }
@@ -634,44 +779,62 @@ function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, profondeur, t
 /**
  * `setTimeout`/`setInterval` : Chromium compile en code TOUT argument qui
  * évalue en une chaîne, quelle que soit la syntaxe qui la produit
- * (`atob(...)`, concaténation, gabarit interpolé) — un texte de chaîne, pas
- * seulement les trois formes syntaxiques reconnues jusqu'ici. Une fonction
- * (fléchée, ou un identifiant qui en résout une dans ce fichier) n'est
- * jamais signalée. Un identifiant qui ne résout ni vers une fonction ni vers
- * un littéral reçoit un palier « à vérifier » (comme la source `non-resolue`
- * d'un Worker) plutôt que le silence d'avant ou une critique systématique :
- * le motif `setTimeout(callback, delai)` où `callback` est un paramètre —
- * bien réel dans du code embarqué comme lodash — resterait sinon noyé sous
- * du bruit.
+ * (`atob`, `String.fromCharCode`, concaténation, gabarit interpolé) — un
+ * texte de chaîne, pas seulement quelques formes syntaxiques reconnues.
+ * Une fonction manifeste (fléchée, ou un identifiant qui en résout une —
+ * déclarée dans ce fichier, ou paramètre `resolve`/`reject` d'un exécuteur
+ * de `new Promise(...)`, garanti par le langage) n'est jamais signalée.
+ * Un identifiant qui résout vers une chaîne littérale ailleurs dans le
+ * fichier est audité comme si elle était écrite en place. Tout le reste
+ * (identifiant non résolu, appel de fonction, accès de membre, ternaire…)
+ * reçoit un palier « à vérifier » plutôt que le silence d'avant :
+ * `setTimeout(String.fromCharCode(...))`, `setTimeout(f())`,
+ * `setTimeout(obj.m)` restaient muets (relevé par la coordination le
+ * 2026-09-28) faute d'appartenir aux trois formes syntaxiques reconnues.
  */
-function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, profondeur }) {
-  if (!arg || estFonctionResolue(arg, ast, walkAcorn)) return [];
+function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, ancetres, profondeur }) {
+  if (!arg) return [];
 
-  const estAtob = arg.type === 'CallExpression' && nomFinal(arg.callee) === 'atob';
-  const estCandidat = arg.type === 'Literal' || arg.type === 'TemplateLiteral' || arg.type === 'BinaryExpression' || estAtob;
-
-  if (!estCandidat) {
-    if (arg.type !== 'Identifier') return [];
-    return [constat({
-      regle: 'C-XSS-04', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
-      titre: `Source de ${nom} non résolue par l'analyse statique`,
-      fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-      constat: `Le premier argument de \`${nom}\` est un identifiant qui ne résout, dans ce fichier, ni vers une fonction déclarée ni vers une chaîne littérale : son contenu réel n'est connu qu'à l'exécution.`,
-      impact: "Si cette variable contient une chaîne au moment de l'appel, elle est évaluée comme du code, avec les mêmes conséquences qu'eval(). L'analyse statique ne peut ni le confirmer ni l'exclure depuis ce seul fichier.",
-      remediation: `Passer directement une fonction à ${nom}, ou documenter dans le README la provenance de cette variable.`,
-      referentiels: ['CWE-95', REF_GUIDE],
+  // Un identifiant est le seul cas où « inconnu » veut dire : peut-être une
+  // fonction (le motif `setTimeout(callback, delai)`, très courant) — d'où
+  // le palier « à vérifier », pas une critique systématique.
+  if (arg.type === 'Identifier') {
+    const resolution = resoudreArgument(arg, { ast, walkAcorn, ancetres });
+    if (resolution.type === 'fonction') return [];
+    if (resolution.type === 'litteral') {
+      return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: resolution.valeur, profondeur });
+    }
+    return [constatMinuteurNonResolu({
+      unite, ligneDe, n, nom,
+      motif: `Le premier argument de \`${nom}\` est un identifiant qui ne résout, dans ce fichier, ni vers une fonction ni vers une chaîne littérale : son contenu réel n'est connu qu'à l'exécution.`,
     })];
   }
 
-  const texteBrut = estAtob ? decoderAtobLitteral(arg) : plierLitteraux(arg);
-  return traiterSiteConstruction(ctx, {
-    fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), extrait: extraireSource(unite.source, n),
-    texteBrut, profondeur, regle: 'C-XSS-04',
-    titreConstruction: `Chaîne de caractères passée à ${nom} (équivalent à eval)`,
-    texteConstruction: `Le premier argument de \`${nom}\` est une chaîne, pas une fonction.`,
-    remediationSupprimer: `Passer une fonction : \`${nom}(() => …, délai)\`.`,
-    impactConstruction: IMPACT_EXECUTION_CHAINE,
-  }).constats;
+  if (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression') return [];
+
+  // Formes qui produisent TOUJOURS une chaîne, quel que soit leur contenu
+  // (littéral, gabarit, concaténation, atob()/String.fromCharCode()) : si le
+  // contenu ne se replie pas en littéral, il est réellement « calculé à
+  // l'exécution », au même titre qu'un eval() à argument calculé — pas une
+  // simple inconnue à vérifier, `traiterSiteConstruction` (texteBrut===null)
+  // s'en charge.
+  const estCandidat = arg.type === 'Literal' || arg.type === 'TemplateLiteral' || arg.type === 'BinaryExpression' ||
+    (arg.type === 'CallExpression' && (nomFinal(arg.callee) === 'atob' || nomPointe(arg.callee) === 'String.fromCharCode'));
+
+  if (estCandidat) {
+    const texteBrut = plierLitteraux(arg) ?? decoderAtobLitteral(arg) ?? decoderFromCharCodeLitteral(arg);
+    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut, profondeur });
+  }
+
+  // Le reste (accès de membre, appel de fonction quelconque, ternaire…) n'a
+  // pas la garantie de produire une chaîne : ni le silence d'avant, ni une
+  // critique systématique, le même palier « à vérifier » qu'un identifiant
+  // non résolu — `setTimeout(f())`, `setTimeout(obj.m)` restaient muets
+  // (relevé par la coordination le 2026-09-28).
+  return [constatMinuteurNonResolu({
+    unite, ligneDe, n, nom,
+    motif: `Le premier argument de \`${nom}\` n'est ni une fonction ni une chaîne littérale reconnue : son contenu réel n'est connu qu'à l'exécution.`,
+  })];
 }
 
 /** `new Worker(...)`/`new SharedWorker(...)` construit depuis du code en chaîne (voir `classifierSourceWorker`). */
@@ -681,7 +844,7 @@ function traiterWorker(ctx, { unite, ligneDe, n, profondeur }) {
 
   if (categorie === 'code-en-chaine') {
     return traiterSiteConstruction(ctx, {
-      fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), extrait: extraireSource(unite.source, n),
+      fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: (n.loc?.start?.column ?? 0) + 1, extrait: extraireSource(unite.source, n),
       texteBrut: extraireCodeLitteralWorker(n.arguments[0]), profondeur, regle: 'C-XSS-07',
       titreConstruction: `${nomWorker} construit depuis du code assemblé en chaîne dans le dépôt`,
       texteConstruction: `Le code exécuté par ce ${nomWorker} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé.`,
@@ -730,19 +893,23 @@ export function preparerCodeExecuteEnChaine(ctx) {
       pourChaqueUniteJs({ fichiers: [f] }, {}, ({ ast, ligneDe, walk: walkAcorn, unite }) => {
         if (!ast) return;
         const avant = ctx.fichiers.length;
-        walkAcorn.simple(ast, {
-          CallExpression(n) {
+        // `ancestor` (pas `simple`) : `traiterMinuteur` a besoin de la chaîne
+        // des ancêtres du site d'appel pour reconnaître un identifiant lié à
+        // un paramètre qui masque une déclaration homonyme plus large (voir
+        // `trouverParametreEnglobant`).
+        walkAcorn.ancestor(ast, {
+          CallExpression(n, _state, ancetres) {
             const nom = nomPointe(n.callee) || '';
             if (/(^|\.)eval$/.test(nom)) {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments[0], profondeur,
+                unite, ligneDe, n, argument: n.arguments[0], ast, walkAcorn, profondeur,
                 titreConstruction: 'Exécution de code arbitraire via eval()',
                 texteConstruction: '`eval()` est appelé dans le code exécuté du widget.',
                 remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
               }));
             } else if (n.callee.type === 'SequenceExpression' && n.callee.expressions.at(-1)?.type === 'Identifier' && n.callee.expressions.at(-1).name === 'eval') {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments[0], profondeur,
+                unite, ligneDe, n, argument: n.arguments[0], ast, walkAcorn, profondeur,
                 titreConstruction: 'Exécution de code arbitraire via eval() indirect',
                 texteConstruction: "La forme `(0, eval)(...)` (ou équivalente) appelle `eval` indirectement.",
                 remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
@@ -751,7 +918,7 @@ export function preparerCodeExecuteEnChaine(ctx) {
 
             if (nom.split('.').pop() === 'Function') {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments.at(-1), profondeur, envelopper: true,
+                unite, ligneDe, n, argument: n.arguments.at(-1), ast, walkAcorn, profondeur, envelopper: true,
                 titreConstruction: 'Construction de code à la volée via Function() (sans new)',
                 texteConstruction: '`Function(...)` sans `new` compile une chaîne en fonction exécutable, exactement comme `new Function(...)` : l\'appel fonctionne dans les deux cas.',
                 remediationSupprimer: 'Supprimer cet usage.',
@@ -759,13 +926,13 @@ export function preparerCodeExecuteEnChaine(ctx) {
             }
 
             if (/^(setTimeout|setInterval)$/.test(nom.split('.').pop())) {
-              constats.push(...traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg: n.arguments[0], ast, walkAcorn, profondeur }));
+              constats.push(...traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg: n.arguments[0], ast, walkAcorn, ancetres, profondeur }));
             }
           },
-          NewExpression(n) {
+          NewExpression(n, _state, ancetres) {
             if (nomFinal(n.callee) === 'Function') {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments.at(-1), profondeur, envelopper: true,
+                unite, ligneDe, n, argument: n.arguments.at(-1), ast, walkAcorn, profondeur, envelopper: true,
                 titreConstruction: 'Construction de code à la volée via new Function()',
                 texteConstruction: '`new Function(...)` compile une chaîne en fonction exécutable.',
                 remediationSupprimer: 'Supprimer cet usage.',
@@ -1156,6 +1323,16 @@ export function analyserSecrets(ctx) {
         const valeur = m[1] ?? m[0];
         if (LEURRES.test(valeur)) continue;
         if (/^[a-z]+(\.[a-z]+)+$/i.test(valeur)) continue;   // ressemble à un chemin, pas à un secret
+        // Un fichier synthétique (`litteralImbrique`) qui reproduit
+        // TEXTUELLEMENT un secret déjà visible dans son fichier d'origine (un
+        // littéral direct, non obfusqué) ne doit pas le compter une deuxième
+        // fois : préexistant à ce commit, mais corrigé au passage par le même
+        // mécanisme que F-SOUV-01 (voir plus bas), déjà en place pour cette
+        // matérialisation.
+        if (f.litteralImbrique && f.origineReelle) {
+          const origine = ctx.fichiers.find((of) => of.chemin === f.origineReelle.chemin);
+          if (origine?.contenu?.includes(m[0])) continue;
+        }
         constats.push(constat({
           regle: 'C-SECRET-01', axe: 'C', severite: 'critique', bloquant: true, confiance: 'probable',
           titre: `Secret potentiel versionné dans le dépôt (${libelle})`,

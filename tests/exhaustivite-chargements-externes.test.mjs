@@ -642,7 +642,7 @@ test("C-XSS-04 : setTimeout(variable, délai) où variable est concaténée avec
 // en clair, ni produire de faux constat.
 // ---------------------------------------------------------------------------
 
-test("C-GRIST : un accès full + une action de schéma cachés dans eval() sont vus exactement comme en clair (même sévérité C-GRIST-03/04, plus aucun angle mort)", () => {
+test("C-GRIST : un accès full + une action de schéma cachés dans eval() sont vus exactement comme en clair (même sévérité C-GRIST-03/04, plus aucun angle mort, et surtout AUCUN faux constat C-GRIST-01/02)", () => {
   const payload = "grist.ready({requiredAccess:'full'}); grist.docApi.applyUserActions([['RemoveTable','T']]);";
   const cache = { fichiers: [fichier('app.js', `eval(${JSON.stringify(payload)});`)], entrees: ['app.js'] };
   preparerCodeExecuteEnChaine(cache);
@@ -658,22 +658,46 @@ test("C-GRIST : un accès full + une action de schéma cachés dans eval() sont 
     assert.ok(e, `${regle} doit se déclencher en clair (référence)`);
     assert.equal(c.severite, e.severite, `${regle} : cacher dans eval() ne doit jamais donner une meilleure sévérité qu'en clair`);
   }
+
+  // Vérification indépendante de l'ABSENCE, pas seulement de la sévérité par
+  // égalité : un mutant qui réintroduirait l'ancien faux C-GRIST-01
+  // (« n'appelle jamais grist.ready() », alors qu'il est appelé — caché dans
+  // eval() — ou l'ancien faux C-GRIST-02 (accès non déclaré, alors qu'il
+  // l'est) passerait la seule comparaison de sévérité ci-dessus si ces règles
+  // se déclenchaient AUSSI en clair par erreur — ce test les exclut dans les
+  // deux versions, indépendamment l'une de l'autre.
+  for (const constats of [constatsCaches, constatsClair]) {
+    assert.equal(constats.filter((x) => x.regle === 'C-GRIST-01').length, 0, "grist.ready() est bien appelé : C-GRIST-01 ne doit jamais se déclencher ici, caché ou non");
+    assert.equal(constats.filter((x) => x.regle === 'C-GRIST-02').length, 0, "requiredAccess est bien déclaré : C-GRIST-02 ne doit jamais se déclencher ici, caché ou non");
+  }
 });
 
-test("C-STOCK-01 : eval(\"localStorage.setItem(...)\") voit le même README que le code en clair (mineur dans les deux cas, pas majeur caché)", () => {
+test("C-STOCK-01 : eval(\"localStorage.setItem(...)\") voit le même README que le code en clair (mineur dans les deux cas, pas majeur caché) — et reste majeur sans README, preuve que la règle regarde bien le README plutôt que de toujours répondre mineur", () => {
   const payload = "localStorage.setItem('theme', 'dark');";
   const readme = fichier('README.md', 'Ce widget utilise localStorage pour mémoriser le thème choisi.');
 
   const cache = { fichiers: [fichier('app.js', `eval(${JSON.stringify(payload)});`), readme] };
   preparerCodeExecuteEnChaine(cache);
-  const cCache = analyserStockage(cache).find((x) => x.regle === 'C-STOCK-01');
+  const constatsCache = analyserStockage(cache);
+  const cCache = constatsCache.find((x) => x.regle === 'C-STOCK-01');
 
   const clair = { fichiers: [fichier('app.js', payload), readme] };
   const cClair = analyserStockage(clair).find((x) => x.regle === 'C-STOCK-01');
 
   assert.ok(cCache && cClair);
+  assert.equal(constatsCache.filter((x) => x.regle === 'C-STOCK-01').length, 1, "un seul constat, ni absent ni dédoublé par le fichier synthétique");
   assert.equal(cCache.severite, 'mineur', "avant ce correctif, le fichier synthétique isolé ne voyait pas le vrai README : majeur à tort");
   assert.equal(cCache.severite, cClair.severite);
+
+  // Contrôle négatif indépendant : sans README du tout, la même construction
+  // cachée doit rester MAJEUR — sinon la règle ne distingue plus « documenté »
+  // de « non documenté » et répond « mineur » sans conditions, ce que la
+  // seule comparaison ci-dessus (cCache vs cClair, tous deux AVEC README) ne
+  // peut pas détecter.
+  const cacheSansReadme = { fichiers: [fichier('app.js', `eval(${JSON.stringify(payload)});`)] };
+  preparerCodeExecuteEnChaine(cacheSansReadme);
+  const cCacheSansReadme = analyserStockage(cacheSansReadme).find((x) => x.regle === 'C-STOCK-01');
+  assert.equal(cCacheSansReadme.severite, 'majeur', "sans README, même caché dans eval(), doit rester majeur — la règle doit vraiment regarder le README, pas répondre mineur inconditionnellement");
 });
 
 // ---------------------------------------------------------------------------
@@ -684,19 +708,31 @@ test("C-STOCK-01 : eval(\"localStorage.setItem(...)\") voit le même README que 
 // ---------------------------------------------------------------------------
 
 test("numérotation de ligne : un littéral multi-lignes qui commence au milieu d'une ligne source rapporte SA PROPRE ligne interne, pas un calcul par rapport à la ligne d'appel", () => {
+  // Construit pour que les trois hypothèses possibles donnent trois valeurs
+  // DIFFÉRENTES (la coordination a relevé le 2026-09-28 que la fixture
+  // précédente, où la ligne d'appel et la ligne interne valaient toutes deux
+  // 3, ne distinguait pas « toujours reporter la ligne d'appel » de la bonne
+  // numérotation propre, les deux donnant alors 3) :
+  //   - ligne d'appel (site du eval()) : 5
+  //   - ligne du fetch() DANS le contenu décodé (sa propre numérotation) : 2
+  //   - ancienne formule fautive (ligne d'appel + ligne interne − 1) : 5+2−1 = 6
+  // Seule la bonne numérotation donne 2 ; les deux hypothèses fautives
+  // donneraient 5 ou 6, toutes deux détectées comme fausses par ce test.
   const src = [
-    '// commentaire',
-    'const x = 1;',
-    "eval(\"a();\\nb();\\nfetch('https://exemple.example/x')\");",
+    '// l1',
+    '// l2',
+    '// l3',
+    '// l4',
+    "eval(\"a();\\nfetch('https://exemple.example/x')\");",
     '',
   ].join('\n');
   const ctx = { fichiers: [fichier('app.js', src)] };
   const construction = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-03');
-  assert.equal(construction.ligne, 3, "le site d'appel est bien à la ligne 3");
+  assert.equal(construction.ligne, 5, "le site d'appel est bien à la ligne 5");
   const fetchExterne = analyserSortiesReseau(ctx).find((x) => x.regle === 'C-EXFIL-01');
   assert.ok(fetchExterne);
-  assert.equal(fetchExterne.ligne, 3, "fetch() est à la ligne 3 DU CONTENU DÉCODÉ (a(); / b(); / fetch(...)), une numérotation propre au fichier synthétique — jamais 3+3-1=5 ni aucun autre calcul par rapport au fichier source");
-  assert.ok(fetchExterne.fichier.includes('code littéral, ligne 3'), 'le nom du fichier synthétique identifie sans ambiguïté le site d\'appel dont il provient');
+  assert.equal(fetchExterne.ligne, 2, "fetch() est à la ligne 2 DU CONTENU DÉCODÉ (a(); / fetch(...)) : ni 5 (toujours la ligne d'appel), ni 6 (5+2-1, l'ancienne formule fautive)");
+  assert.ok(fetchExterne.fichier.includes('code littéral, ligne 5'), 'le nom du fichier synthétique identifie sans ambiguïté le site d\'appel dont il provient');
 });
 
 test("C-XSS-01 : createContextualFragment(chaîneDynamique) est signalé comme innerHTML dynamique", () => {

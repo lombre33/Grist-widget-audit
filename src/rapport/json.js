@@ -12,7 +12,7 @@ export function genererJson({ ctx, notation, meta }) {
     outil: 'gwaudit', version: meta.version, genereLe: new Date().toISOString(),
     depot: meta.nomDepot, cible: meta.cible ?? null, commit: meta.commit ?? null,
     contexte: {
-      fichiers: ctx.fichiers.length, surfaceExecutee: ctx.surface.size,
+      fichiers: ctx.fichiersReels ?? ctx.fichiers.length, surfaceExecutee: ctx.surface.size,
       entrees: ctx.entrees, niveauxAccesDetectes: [...new Set((ctx.usagesGrist?.acces ?? []).map((a) => a.niveau))],
       tronque: meta.tronque ?? null,
     },

@@ -42,6 +42,20 @@ export function analyserSouverainete(ctx) {
       const h = m[1];
       for (const [re, nom, motif] of NON_SOUVERAINS) {
         if (!re.test(h)) continue;
+        // Un fichier synthétique (`litteralImbrique`, code littéral matérialisé
+        // par `preparerCodeExecuteEnChaine`) reproduit parfois TEXTUELLEMENT une
+        // référence déjà visible dans son fichier d'origine (un littéral direct,
+        // non obfusqué, contient l'hôte en clair des deux côtés) : la compter une
+        // deuxième fois gonflerait le nombre de références sans rapport avec la
+        // réalité (relevé par la coordination le 2026-09-28). Elle n'est ignorée
+        // ici QUE si le fichier d'origine la porte déjà en clair — si le littéral
+        // était encodé (base64, URI, fromCharCode...), l'hôte n'apparaît nulle
+        // part ailleurs en clair et reste une référence à part entière, révélée
+        // par le seul décodage.
+        if (f.litteralImbrique && f.origineReelle) {
+          const origine = ctx.fichiers.find((of) => of.chemin === f.origineReelle.chemin);
+          if (origine?.contenu?.includes(h)) continue;
+        }
         const cle = `${nom}`;
         if (!trouves.has(cle)) trouves.set(cle, { nom, motif, emplacements: [] });
         trouves.get(cle).emplacements.push({ fichier: f.chemin, ligne: f.contenu.slice(0, m.index).split('\n').length, hote: h });

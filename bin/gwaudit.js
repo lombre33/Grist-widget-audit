@@ -130,7 +130,7 @@ async function main() {
     }
 
     if (flag('sarif')) {
-      fs.writeFileSync(path.join(dossierSortie, 'rapport.sarif'), genererSarif({ notation, meta }), 'utf8');
+      fs.writeFileSync(path.join(dossierSortie, 'rapport.sarif'), genererSarif({ ctx, notation, meta }), 'utf8');
       console.error(`→ Rapport écrit : ${path.join(dossierSortie, 'rapport.sarif')} (SARIF 2.1.0, pour ingestion CI)`);
     }
 

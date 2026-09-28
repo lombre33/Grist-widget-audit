@@ -61,7 +61,16 @@ export function construireContexte(racine) {
     ? { fichiers: etat.tronqueFichiers, octets: etat.tronqueOctets, maxFichiers: MAX_FICHIERS, maxOctets: MAX_OCTETS_LUS_CUMULES }
     : null;
 
-  return { racine, fichiers, entrees, surface, paquet, manifestes, tronque };
+  // Figé ICI, avant qu'aucune règle ne tourne : `preparerCodeExecuteEnChaine`
+  // (axe C) ajoute ensuite à `fichiers` un fichier synthétique par contenu
+  // littéral exécuté en chaîne (eval/Function/setTimeout/Worker), pour que
+  // chaque règle qui lit `ctx.fichiers` l'audite sans code spécial. Ce
+  // compte-ci reste celui du DÉPÔT tel qu'il existe sur disque, pour que
+  // l'inventaire affiché au lecteur ne varie pas selon qu'un widget cache ou
+  // non du code dans une chaîne.
+  const fichiersReels = fichiers.length;
+
+  return { racine, fichiers, entrees, surface, paquet, manifestes, tronque, fichiersReels };
 }
 
 function parcourir(racine, dossier, acc, etat) {

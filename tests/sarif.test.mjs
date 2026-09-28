@@ -22,6 +22,36 @@ test('chaque résultat SARIF référence une règle existante et porte une local
   }
 });
 
+test("un constat trouvé dans un fichier synthétique (code littéral matérialisé, litteralImbrique) reçoit une artifactLocation.uri RÉELLE — un chemin fabriqué comme « app.js (code littéral, ligne 3) » n'existe pas sur disque et casse la résolution chez un ingesteur SARIF (relevé par la coordination le 2026-09-28)", () => {
+  const cheminSynthetique = 'app.js (code littéral, ligne 3)';
+  const ctx = {
+    fichiers: [
+      { chemin: 'app.js', contenu: 'eval("fetch(\'https://exemple.tiers/x\')");', executee: true },
+      { chemin: cheminSynthetique, contenu: "fetch('https://exemple.tiers/x')", executee: true, litteralImbrique: true, origineReelle: { chemin: 'app.js', ligne: 3 } },
+    ],
+  };
+  const constats = [
+    constat({ regle: 'C-EXFIL-01', axe: 'C', titre: 'fuite', severite: 'critique', bloquant: true, constat: 'c', fichier: cheminSynthetique, ligne: 1 }),
+  ];
+  const notation = noter(constats, new Set());
+  const sarif = JSON.parse(genererSarif({ ctx, notation, meta: { version: '1.0.0', nomDepot: 'w' } }));
+
+  const loc = sarif.runs[0].results[0].locations[0].physicalLocation;
+  assert.equal(loc.artifactLocation.uri, 'app.js', "doit pointer vers le fichier réel du dépôt, pas le chemin synthétique introuvable sur disque");
+  assert.equal(loc.region.startLine, 3, "la ligne doit être celle du site d'appel dans le fichier réel, pas la numérotation interne du contenu décodé");
+});
+
+test('sans ctx (rétrocompatibilité) : un fichier déjà réel garde sa propre localisation, inchangée', () => {
+  const constats = [
+    constat({ regle: 'C-EXFIL-01', axe: 'C', titre: 'fuite', severite: 'critique', bloquant: true, constat: 'c', fichier: 'app.js', ligne: 12 }),
+  ];
+  const notation = noter(constats, new Set());
+  const sarif = JSON.parse(genererSarif({ notation, meta: { version: '1.0.0', nomDepot: 'w' } }));
+  const loc = sarif.runs[0].results[0].locations[0].physicalLocation;
+  assert.equal(loc.artifactLocation.uri, 'app.js');
+  assert.equal(loc.region.startLine, 12);
+});
+
 test('la sévérité critique se traduit en niveau SARIF error, mineur en note', () => {
   const constats = [
     constat({ regle: 'X', axe: 'A', titre: 't1', severite: 'critique', constat: 'c' }),

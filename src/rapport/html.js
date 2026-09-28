@@ -31,7 +31,7 @@ ${css()}
     <div class="entete-fil">
       <p class="eyebrow">Rapport d'audit widget Grist · gwaudit v${echapper(meta.version)}</p>
       <h1>${echapper(meta.nomDepot)}</h1>
-      <p class="entete-meta">Généré le ${date} · ${ctx.fichiers.length} fichiers inventoriés, ${ctx.surface.size} dans la surface exécutée</p>
+      <p class="entete-meta">Généré le ${date} · ${ctx.fichiersReels ?? ctx.fichiers.length} fichiers inventoriés, ${ctx.surface.size} dans la surface exécutée</p>
       <p class="entete-meta">Commit audité : <code>${echapper(meta.commit ?? 'non déterminable')}</code>${meta.commit ? ' — ce verdict ne vaut que pour ce commit précis' : ''}</p>
     </div>
     <div class="verdict-carte" data-bande="${bandeVerdict}">
