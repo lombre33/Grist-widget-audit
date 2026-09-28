@@ -272,3 +272,49 @@ Filtré à dessein : une bonne part de ce qu'un RSSI généraliste demanderait
 (authentification forte, cloisonnement réseau, gestion des secrets côté
 serveur...) ne s'applique pas à un widget navigateur de quelques fichiers
 sans backend propre, et n'est pas listée.
+
+## 9. Regard RSSI sur la soumission anonyme (V2) — étude, pas implémentation
+
+Antoine a confirmé le 2026-09-28 une soumission anonyme (pas de compte) sur
+la V2 : n'importe qui peut donc fournir l'URL du dépôt à cloner sur
+l'infrastructure d'Antoine, sous son nom. Ce qui suit étudie ce scénario
+précis à partir de `docs/ARCHITECTURE-V2.md` §4 (lu, pas modifié — ce
+fichier et `docker/` appartiennent à un autre chantier). Aucune des deux
+observations n'est vérifiée à l'exécution : le proxy CONNECT décrit n'est
+pas encore construit, le document le dit lui-même. Ce sont des trous
+possibles dans la conception, pas des trous prouvés dans un système qui
+tourne.
+
+1. **La précision du filtre par nom d'hôte devient, pour la première fois,
+   le seul rempart — pas une défense en profondeur.** V1 (`validerHoteClone`,
+   `bin/gwaudit.js`) n'exclut que les adresses internes ; tout hôte public
+   est accepté, parce qu'Antoine choisit lui-même les dépôts à auditer.
+   La V2 change de modèle : le §4 restreint pour la première fois à des
+   hôtes nommément désignés (`github.com`, `gitlab.com`,
+   `registry.npmjs.org`). Si cette comparaison est une recherche de
+   sous-chaîne ou une regexp non ancrée plutôt qu'une égalité stricte de
+   l'hôte (ou de son suffixe précédé d'un point), un domaine entièrement
+   possédé par l'attaquant — `github.com.attaquant.example`,
+   `evilgithub.com` — la satisfait aussi bien que le vrai `github.com`.
+   L'attaquant n'a alors même plus besoin de contourner l'exclusion des
+   plages internes : son propre serveur, public, répond à la place du
+   dépôt attendu. Le document marque déjà « la syntaxe exacte du filtre...
+   n'a pas été confirmée » — je le confirme à mon tour : ce n'est pas
+   encore prouvé, et c'est exactement la même leçon que le contournement
+   `\`/userinfo déjà fermé (constat 1), appliquée à un nouvel endroit.
+2. **`git@hôte:chemin` (SSH) n'est mentionné nulle part dans la description
+   du proxy.** Le §4 ne décrit le proxy de sortie que pour du trafic
+   HTTP(S) (`HTTP_PROXY`/`HTTPS_PROXY`, consommé par `git`/`npm`). Mais
+   `resoudreCible` (`bin/gwaudit.js`) accepte aussi bien `https://` que
+   `git@hôte:chemin` comme cible de clonage valide — et le transport SSH
+   que git utilise pour cette seconde forme ne respecte pas `HTTP_PROXY`
+   par défaut. Si une soumission anonyme peut encore fournir une URL
+   `git@...`, elle dispose d'une sortie réseau directe vers n'importe quel
+   hôte:port joignable en SSH depuis le conteneur, non filtrée par le
+   proxy CONNECT — le canal que la liste blanche visait justement à
+   fermer, par un protocole différent. Deux fermetures possibles, pas
+   implémentées ici : refuser `git@...` en entrée pour une soumission
+   anonyme (n'accepter que `https://`), ou bloquer toute sortie réseau du
+   conteneur qui ne passe pas par le proxy, au niveau du réseau Docker
+   plutôt qu'au niveau de l'application — ce qui fermerait aussi toute
+   variante non prévue ici.
