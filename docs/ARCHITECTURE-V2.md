@@ -331,6 +331,17 @@ Une esquisse de `docker-compose` pour cette zone est dans
 
 ## 5. File d'attente, quotas, anti-abus
 
+**Précision de périmètre, tranchée par Antoine le 2026-09-28** : ce dépôt
+public livre la brique — le contenu de l'image d'exécution
+(`docker/execution/`) et du proxy de sortie (`docker/egress-proxy/`).
+« On se concentre sur la mise à dispo sur le dépôt de l'audit, tout ce qui
+est autour c'est de l'intégration liée à un projet spécifique donc pas sur
+le dépôt général de l'audit. » La file d'attente, les quotas, l'appel du
+conteneur avec l'URL soumise et l'intégration à `src/interface/` sont donc
+un travail du projet qui déploiera sur son VPS, **pas un livrable de ce
+dépôt** — ce qui suit reste comme documentation du besoin que cette
+intégration doit couvrir, pas comme code à écrire ici.
+
 Ce qui reste ouvert sur ce registre (constats 10c et 11, §1) se résume à
 une seule cause commune : le code de la V1 suppose implicitement **un seul
 audit à la fois, lancé par une personne de confiance**, et ne peut pas
@@ -397,7 +408,8 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
    donc l'exposition réelle est le nombre d'audits **simultanés**, pas
    leur durée. Une file qui sérialise à un job à la fois répond
    littéralement à sa demande et ferme cette exposition du même geste —
-   reste à écrire (§5).
+   son code revient au projet qui déploiera (périmètre précisé le
+   2026-09-28, voir §5), pas à ce dépôt.
 4. ~~Le score/verdict doit-il seulement informer l'utilisateur avant
    installation, ou doit-il pouvoir bloquer techniquement une
    installation en dessous d'un certain seuil ?~~ **Tranché le
@@ -427,14 +439,23 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
   marcher » tient tout entière à cette phrase : le premier `docker compose
   build && up` de ces fichiers doit se faire sur le VPS d'Antoine, c'est
   là qu'ils seront éprouvés pour la première fois.
-- Reste ouvert, propre à l'architecture V2 et pas au moteur en tant que
-  tel : limite de mémoire résidente par job (constat 10c — `ulimit -v`
-  vérifié inutilisable avec Chromium, seuls des cgroups conviennent) et
-  file d'attente qui sérialise les jobs (constat 11, décidée en principe
-  le 2026-09-28 — un job à la fois — mais **aucun code d'orchestration
-  n'existe encore** : ni la file elle-même, ni son intégration à
-  `src/interface/`, ni le passage de l'URL soumise au conteneur
-  `execution-audit`) — voir §4 et §5.
+- Limite de mémoire résidente par job (constat 10c) : déjà dans l'esquisse
+  (`mem_limit: 768m`, §4) — reste à valider sur le VPS (cgroups v2), pas à
+  concevoir.
+- File d'attente qui sérialise les jobs (constat 11) : décidée en principe
+  le 2026-09-28 (un job à la fois). Son code — la file, son intégration à
+  `src/interface/`, le passage de l'URL soumise au conteneur
+  `execution-audit` — **n'est pas un livrable de ce dépôt**, précisé par
+  Antoine le même jour (voir §5) : ce dépôt fournit la brique, le projet
+  qui déploiera construit l'orchestration autour.
+- Ajouté le 2026-09-28, à la demande d'Antoine (« ne pas oublier de
+  préciser quand il faudra régénérer l'image ») : un contrôle quotidien
+  automatisé (routine « Fraîcheur image Docker V2 ») compare `main` à un
+  hash de commit consigné en tête de `docker/execution/Dockerfile` sur les
+  seuls chemins que l'image copie (`bin/`, `src/`, `ressources/`,
+  `package.json`, `package-lock.json`) et prévient dans ce fil quand l'un
+  d'eux a bougé, avant de faire avancer ce hash. Ne construit ni ne
+  déploie rien — détecte et prévient seulement.
 - Faire valider sur le VPS d'Antoine, dans cet ordre : `docker compose
   build` réussit ; le sandbox natif de Chromium démarre sous `pwuser` avec
   `cap_drop: ALL` (sinon voir la note du service `execution-audit`) ; la

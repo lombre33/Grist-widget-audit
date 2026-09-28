@@ -14,6 +14,14 @@
 # dépendance "playwright" de package.json (^1.63.0) — à remonter ensemble
 # si l'une des deux bouge, sinon GWAUDIT_CHROMIUM_PATH (résolu au
 # lancement par entrypoint.sh) peut ne plus rien trouver.
+#
+# Dernière vérification de fraîcheur : commit a6b6ee8 (2026-09-28). Cette
+# image COPY bin/, src/, ressources/, package.json et package-lock.json
+# (voir plus bas) : tout commit qui touche l'un de ces chemins après celui
+# ci-dessus rend l'image obsolète et impose une reconstruction avant le
+# prochain déploiement. Un contrôle automatique quotidien (routine
+# « Fraîcheur image Docker V2 ») avance ce hash et prévient Antoine quand
+# c'est le cas — voir docker/README-V2-VERIFICATIONS.md.
 FROM mcr.microsoft.com/playwright:v1.63.0-jammy
 
 WORKDIR /app
