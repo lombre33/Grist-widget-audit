@@ -9,8 +9,9 @@
  * déclare pas dans le format attendu par le catalogue.
  */
 import path from 'node:path';
-import { Tokenizer, TokenizerMode, foreignContent } from 'parse5';
+import { TokenizerMode, foreignContent } from 'parse5';
 import { constat } from '../moteur/modele.js';
+import { Decoupeur } from '../moteur/decoupeur-html.js';
 
 /**
  * Domaines dont l'appel depuis le navigateur d'un agent pose une question
@@ -117,24 +118,6 @@ function estMasque(balise) {
   if (balise.attrs.some((a) => a.name === 'hidden')) return true;
   if ((attribut(balise, 'aria-hidden') ?? '').trim().toLowerCase() === 'true') return true;
   return /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden)/i.test(attribut(balise, 'style') ?? '');
-}
-
-/**
- * Le découpeur de parse5, à un détail près : pour écarter un attribut en
- * double, parse5 relit tous les attributs déjà lus de la balise, ce qui rend
- * une balise à des dizaines de milliers d'attributs quadratique. Un ensemble
- * de noms fait le même tri. Repose sur `_leaveAttrName`, `currentToken` et
- * `currentAttr`, internes à parse5 : sa version est épinglée dans
- * package.json, et un test chronométré surveille la sous-classe.
- */
-class Decoupeur extends Tokenizer {
-  _leaveAttrName() {
-    const balise = this.currentToken;
-    balise.nomsVus ??= new Set();
-    if (balise.nomsVus.has(this.currentAttr.name)) return;
-    balise.nomsVus.add(this.currentAttr.name);
-    balise.attrs.push(this.currentAttr);
-  }
 }
 
 /** Élément étranger (SVG, MathML) dont les enfants sont de nouveau lus comme du HTML. */

@@ -190,6 +190,68 @@ test('minuteur (faux positif) : le nom d\'une expression de fonction est garanti
   assert.equal(verdictMinuteur('setTimeout(function boucle() { setTimeout(boucle, 100); }, 100);'), 'rien');
 });
 
+// Branches de l'analyse de portée : écritures et masquages ----------------------
+
+test('minuteur : `for (tick in o)` sans déclaration réécrit la fonction', () => {
+  assert.equal(verdictMinuteur('(function () { function tick() {} for (tick in o) {} setTimeout(tick, 0); })();'), 'info');
+});
+
+test('eval : le nom d\'une classe masque une liaison extérieure dans son propre corps', () => {
+  assert.equal(verdictEval('const code = "1+1"; const C = class code { m() { eval(code); } };'), 'critique+B');
+});
+
+test('eval : une classe déclarée dans un bloc masque une liaison extérieure', () => {
+  assert.equal(verdictEval('const code = "1+1"; function f() { class code {} eval(code); }'), 'critique+B');
+});
+
+test('eval : une var d\'un bloc static appartient à ce bloc et masque un const extérieur', () => {
+  assert.equal(verdictEval('const code = "1+1"; class A { static { var code = obtenir(); eval(code); } }'), 'critique+B');
+});
+
+test('eval (faux positif) : une var d\'un bloc static ne remonte pas à la fonction qui contient la classe', () => {
+  assert.equal(verdictEval('const code = "1+1"; function f() { class A { static { var code = 2; } } eval(code); }'), 'mineur');
+});
+
+test('minuteur (faux positif) : une var d\'un bloc static lie un autre `tick`, son initialisation n\'écrit pas la fonction', () => {
+  assert.equal(verdictMinuteur('(function () { function tick() {} class A { static { var tick = obtenir(); } } setTimeout(tick, 0); })();'), 'rien');
+});
+
+test('minuteur (faux positif) : un `for (let tick of …)` lie un autre `tick`, qu\'il peut écrire', () => {
+  assert.equal(verdictMinuteur('(function () { function tick() {} for (let tick of [obtenir()]) { tick = 2; } setTimeout(tick, 0); })();'), 'rien');
+});
+
+test('minuteur (faux positif) : un `for (let tick in …)` lie un autre `tick`, qu\'il peut écrire', () => {
+  assert.equal(verdictMinuteur('(function () { function tick() {} for (let tick in o) { tick = 2; } setTimeout(tick, 0); })();'), 'rien');
+});
+
+test('minuteur (faux positif) : un `let tick` d\'un switch lie un autre `tick`, qu\'il peut écrire', () => {
+  assert.equal(verdictMinuteur('(function () { function tick() {} switch (x) { case 1: let tick = 2; tick = 3; } setTimeout(tick, 0); })();'), 'rien');
+});
+
+test('minuteur (faux positif) : un `let tick` d\'un bloc static lie un autre `tick`, qu\'il peut écrire', () => {
+  assert.equal(verdictMinuteur('(function () { function tick() {} class A { static { let tick = 1; tick = 2; } } setTimeout(tick, 0); })();'), 'rien');
+});
+
+test('minuteur (faux positif) : un const initialisé par une fonction fléchée est une fonction garantie', () => {
+  assert.equal(verdictMinuteur('const tick = () => {}; setTimeout(tick, 0);'), 'rien');
+});
+
+test('minuteur (faux positif) : un const initialisé par un littéral qui n\'est pas une chaîne est audité comme ce littéral', () => {
+  assert.equal(verdictMinuteur('const d = 0; setTimeout(d, 0);'), 'mineur');
+});
+
+test('eval (faux positif) : un const initialisé par un nombre est audité comme ce littéral', () => {
+  assert.equal(verdictEval('const x = 42; eval(x);'), 'mineur');
+});
+
+test('minuteur (faux positif) : une soustraction écrite dans la liaison ne produit jamais de chaîne', () => {
+  assert.equal(verdictMinuteur('let t; t = a - b; setTimeout(t, 0);'), 'info');
+});
+
+test('minuteur : une concaténation écrite dans la liaison peut produire une chaîne', () => {
+  assert.equal(verdictMinuteur('let t; t = a + b; setTimeout(t, 0);'), 'critique+B');
+});
+
 // Minuteur : exécuteur de Promise ---------------------------------------------
 
 test('minuteur (faux positif) : whackacell — des `r++` de boucles `for (let r …)` hors de l\'exécuteur ne touchent pas son `r`', () => {

@@ -594,7 +594,7 @@ test("C-XSS-04 : setTimeout(fonctionDéclaréeAuNiveauGlobal, délai) n'est qu'u
   const c = preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-04');
   assert.equal(c.length, 1);
   assert.equal(c[0].severite, 'info');
-  assert.match(c[0].constat, /niveau global/);
+  assert.match(c[0].constat, /premier niveau d'un script classique, comme une propriété de l'objet global/);
 });
 
 test("C-XSS-04 : setTimeout(callback, délai) où callback est un PARAMÈTRE (motif le plus courant dans du code embarqué type lodash) reçoit un palier « à vérifier », pas le silence ni une critique systématique", () => {

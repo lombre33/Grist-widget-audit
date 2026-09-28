@@ -16,7 +16,7 @@
 import path from 'node:path';
 import * as acornWalk from 'acorn-walk';
 import { constat } from '../moteur/modele.js';
-import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique, extraireImportMaps, parser } from '../moteur/analyse-js.js';
+import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique, extraireImportMaps, parser, syntaxeDeModule } from '../moteur/analyse-js.js';
 
 /** Hôtes considérés comme faisant partie de l'infrastructure Grist elle-même. */
 const HOTES_GRIST = [/(^|\.)getgrist\.com$/i, /(^|\.)grist\.numerique\.gouv\.fr$/i, /(^|\.)gristlabs\.com$/i];
@@ -576,21 +576,24 @@ function declarationEffective(stmt) {
  * Une fonction et une `var` du même nom partagent la même liaison : la `var`
  * écrite après la fonction est une écriture, que `estReaffecte` voit
  * (relevé par la coordination le 2026-09-28 : `function cb(){} var cb =
- * window.name;` résolvait vers la fonction). Un `with` rend tout nom
- * potentiellement une propriété de son objet : rien n'y est résolu.
+ * window.name;` résolvait vers la fonction). Une fonction déclarée dans un
+ * bloc imbriqué d'une fonction est aussi une `var` de cette fonction (voir
+ * `fonctionDeBlocHissee`). Un `with` rend tout nom potentiellement une
+ * propriété de son objet : rien n'y est résolu.
  *
  * Retourne `null` si aucune portée visible ne lie ce nom (probablement une
  * globale, ou une déclaration d'une autre unité) ; sinon l'une des formes :
  *   - `{type:'parametre', fonction, index, parent}` : paramètre positionnel
  *     simple d'une fonction — seul cas où la valeur peut être prouvée (un
  *     exécuteur de Promise, voir `estExecuteurPromise`) ;
- *   - `{type:'fonction-nommee', fonction, portee, global}` : `function nom()
- *     {}` dans `portee`, le bloc ou le programme qui la déclare ; `global`
- *     indique une portée Programme, dont la valeur n'est jamais garantie
- *     (voir `resoudreArgument`) ;
- *   - `{type:'variable', kind, declarateur?, portee}` : `const`/`let nom =
- *     …` du bloc `portee`, ou `var nom` de la fonction/du programme `portee`
- *     (sans `declarateur` : une `var` n'est jamais résolue) ;
+ *   - `{type:'fonction-nommee', fonction, portee}` : `function nom() {}`
+ *     dans `portee`, le bloc ou le programme qui la déclare ;
+ *   - `{type:'variable', kind, declarateur, portee}` : `const`/`let nom = …`
+ *     du bloc `portee` ;
+ *   - `{type:'variable', kind:'var', declarateurs, annexeB, portee}` : `var
+ *     nom` de la fonction, du bloc static ou du programme `portee`, avec tous
+ *     ses déclarateurs, et `annexeB` si une fonction d'un bloc imbriqué la
+ *     déclare aussi ;
  *   - `{type:'nom-de-fonction', fonction}` : le nom propre d'une expression
  *     de fonction (`setTimeout(function boucle() { setTimeout(boucle) })`),
  *     une liaison que le langage rend non modifiable ;
@@ -609,7 +612,11 @@ function trouverLiaisonVisible(nom, ancetres) {
         if (p.type === 'Identifier' && p.name === nom) return { type: 'parametre', fonction: n, index: idx, parent: ancetres[i - 1] ?? null };
         if (nomsLies(p).includes(nom)) return { type: 'autre' };
       }
-      if (n.body.type === 'BlockStatement' && declarateursVar(n.body, nom).length) return { type: 'variable', kind: 'var', portee: n };
+      if (n.body.type === 'BlockStatement') {
+        const declarateurs = declarateursVar(n.body, nom);
+        const annexeB = fonctionDeBlocHissee(n.body, nom);
+        if (declarateurs.length || annexeB) return { type: 'variable', kind: 'var', declarateurs, annexeB, portee: n };
+      }
       if (n.type === 'FunctionExpression' && n.id?.name === nom) return { type: 'nom-de-fonction', fonction: n };
     }
     if ((n.type === 'ClassExpression' || n.type === 'ClassDeclaration') && n.id?.name === nom) return { type: 'autre' };
@@ -626,10 +633,37 @@ function trouverLiaisonVisible(nom, ancetres) {
     if (instructions) {
       const liaison = liaisonDeBloc(nom, instructions, n);
       if (liaison) return liaison;
-      if ((n.type === 'Program' || n.type === 'StaticBlock') && declarateursVar(n, nom).length) return { type: 'variable', kind: 'var', portee: n };
+      if (n.type === 'Program' || n.type === 'StaticBlock') {
+        const declarateurs = declarateursVar(n, nom);
+        if (declarateurs.length) return { type: 'variable', kind: 'var', declarateurs, annexeB: false, portee: n };
+      }
     }
   }
   return null;
+}
+
+/**
+ * Vrai si le corps de fonction `corps` déclare `function nom() {}` dans un
+ * bloc imbriqué (hors fonctions imbriquées). Hors mode strict, l'annexe B du
+ * standard en fait aussi une `var` de la fonction, créée à son entrée même si
+ * le bloc ne s'exécute jamais : le reste du corps lit et écrit alors cette
+ * `var`, pas une liaison extérieure homonyme. Sans ce cas, `if (0) { function
+ * cb() {} } cb = "…"; setTimeout(cb)` résolvait vers un `const cb = () => {}`
+ * extérieur. Le mode strict n'est pas distingué : y voir une liaison de plus
+ * ne fait que renoncer à une résolution.
+ */
+function fonctionDeBlocHissee(corps, nom) {
+  let trouve = false;
+  const neDescendPas = () => {};
+  const visiteurs = {
+    FunctionDeclaration(n) { if (n.id?.name === nom) trouve = true; },
+    FunctionExpression: neDescendPas,
+    ArrowFunctionExpression: neDescendPas,
+  };
+  for (const instruction of corps.body) {
+    if (instruction.type !== 'FunctionDeclaration') acornWalk.recursive(instruction, null, visiteurs);
+  }
+  return trouve;
 }
 
 const estFonction = (n) => n.type === 'ArrowFunctionExpression' || n.type === 'FunctionExpression' || n.type === 'FunctionDeclaration';
@@ -659,7 +693,7 @@ function liaisonDeBloc(nom, instructions, portee) {
     }
   }
   if (autre || (fonction && lexicale)) return { type: 'autre' };
-  if (fonction) return { type: 'fonction-nommee', fonction, portee, global: portee.type === 'Program' };
+  if (fonction) return { type: 'fonction-nommee', fonction, portee };
   if (lexicale) return { type: 'variable', ...lexicale, portee };
   return null;
 }
@@ -842,25 +876,31 @@ function portionsOmbragees(nom, portee, walkAcorn) {
  * la liaison, homonymes imbriqués exclus (voir `portionsOmbragees`) : une
  * recherche par nom dans tout le fichier confondait des liaisons sans
  * rapport entre elles (les `r++` de boucles sans rapport sur whackacell).
+ * `sauf` est le déclarateur `var nom = …` qui initialise la liaison, qui
+ * n'est pas une écriture de plus (voir `valeurGarantie`). Rend `'ecriture'`
+ * si le texte écrit la liaison, sinon `'eval'` si seul un eval() direct peut
+ * l'écrire, sinon `null`.
  */
-function estReaffecte(nom, portee, walkAcorn) {
+function estReaffecte(nom, portee, walkAcorn, sauf = null) {
   const plages = portionsOmbragees(nom, portee, walkAcorn);
   const vise = (n) => !plages.some(([debut, fin]) => n.start >= debut && n.start < fin);
   const varDeclare = (d) => d?.type === 'VariableDeclaration' && d.kind === 'var' && d.declarations.some((x) => nomsLies(x.id).includes(nom));
-  let trouve = false;
+  let ecriture = false;
+  let evalDirect = false;
   walkAcorn.simple(portee, {
     AssignmentExpression(n) {
       if (!vise(n)) return;
-      if (n.left.type === 'Identifier' && n.left.name === nom) trouve = true;
-      else if ((n.left.type === 'ObjectPattern' || n.left.type === 'ArrayPattern') && nomsLies(n.left).includes(nom)) trouve = true;
+      if (n.left.type === 'Identifier' && n.left.name === nom) ecriture = true;
+      else if ((n.left.type === 'ObjectPattern' || n.left.type === 'ArrayPattern') && nomsLies(n.left).includes(nom)) ecriture = true;
     },
-    UpdateExpression(n) { if (vise(n) && n.argument.type === 'Identifier' && n.argument.name === nom) trouve = true; },
-    ForOfStatement(n) { if (vise(n) && ((n.left.type === 'Identifier' && n.left.name === nom) || varDeclare(n.left) || (n.left.type !== 'VariableDeclaration' && nomsLies(n.left).includes(nom)))) trouve = true; },
-    ForInStatement(n) { if (vise(n) && ((n.left.type === 'Identifier' && n.left.name === nom) || varDeclare(n.left) || (n.left.type !== 'VariableDeclaration' && nomsLies(n.left).includes(nom)))) trouve = true; },
-    VariableDeclaration(n) { if (vise(n) && n.kind === 'var' && n.declarations.some((d) => d.init && nomsLies(d.id).includes(nom))) trouve = true; },
-    CallExpression(n) { if (vise(n) && n.callee.type === 'Identifier' && n.callee.name === 'eval') trouve = true; },
+    UpdateExpression(n) { if (vise(n) && n.argument.type === 'Identifier' && n.argument.name === nom) ecriture = true; },
+    ForOfStatement(n) { if (vise(n) && ((n.left.type === 'Identifier' && n.left.name === nom) || varDeclare(n.left) || (n.left.type !== 'VariableDeclaration' && nomsLies(n.left).includes(nom)))) ecriture = true; },
+    ForInStatement(n) { if (vise(n) && ((n.left.type === 'Identifier' && n.left.name === nom) || varDeclare(n.left) || (n.left.type !== 'VariableDeclaration' && nomsLies(n.left).includes(nom)))) ecriture = true; },
+    VariableDeclaration(n) { if (vise(n) && n.kind === 'var' && n.declarations.some((d) => d !== sauf && d.init && nomsLies(d.id).includes(nom))) ecriture = true; },
+    CallExpression(n) { if (vise(n) && n.callee.type === 'Identifier' && n.callee.name === 'eval') evalDirect = true; },
   });
-  return trouve;
+  if (ecriture) return 'ecriture';
+  return evalDirect ? 'eval' : null;
 }
 
 /** Formes qui produisent toujours une chaîne, quel que soit leur contenu : littéral, gabarit, concaténation avec `+`, `atob()`, `String.fromCharCode()`. */
@@ -938,46 +978,96 @@ function decoderInitialisateur(init) {
 }
 
 /**
- * Résout un identifiant vers une chaîne littérale UNIQUEMENT s'il désigne,
- * depuis le site d'appel, un `const` simple (ni déstructuré, ni variable de
- * boucle) : le seul cas où le langage garantit qu'aucune écriture, d'où
- * qu'elle vienne, ne change sa valeur. Aucune recherche d'écriture n'est
- * donc à contourner. Décision de la coordination le 2026-09-28, après
- * plusieurs détournements d'une résolution des `let`/`var` « jamais
- * réaffectés » : pour eval()/Function(), toute autre liaison reste une
- * valeur que l'analyse ne peut pas garantir.
+ * Vrai si seul le texte de `portee` peut écrire une liaison qu'elle déclare :
+ * toute portée sauf le premier niveau d'un script classique. Là, une
+ * fonction ou une `var` est une propriété de l'objet global, que tout autre
+ * script de la page remplace sans écrire son nom (`window[k] = v`, un alias
+ * de `window`, `Object.assign(window, …)`), et un `let` s'écrit depuis tout
+ * autre script : la vérification « aucun autre fichier ne l'écrit » ne peut
+ * pas le garantir. Seul un `const` y reste garanti. Le premier niveau d'un
+ * module est local à ce module (vérifié dans Chromium par la coordination le
+ * 2026-09-28) : un importeur ne peut pas écrire ce qu'il importe.
  */
-function resoudreConstLitteral(noeud, ancetres) {
-  if (noeud?.type !== 'Identifier') return null;
-  const liaison = trouverLiaisonVisible(noeud.name, ancetres);
-  if (liaison?.type !== 'variable' || liaison.kind !== 'const') return null;
-  return decoderInitialisateur(liaison.declarateur.init);
+const estPorteeLocale = (portee, estModule) => portee.type !== 'Program' || estModule;
+
+/**
+ * Valeur d'une liaison que le langage garantit au moment de l'appel
+ * (décision de la coordination le 2026-09-28) :
+ *   - un `const` initialisé par une expression de fonction ou un littéral
+ *     (pliage compris, voir `decoderInitialisateur`) : aucune écriture, d'où
+ *     qu'elle vienne, ne change sa valeur ;
+ *   - un `let` ou une `var` d'une portée locale (voir `estPorteeLocale`)
+ *     initialisé de même, par un seul déclarateur, et jamais écrit dans sa
+ *     portée (mêmes écritures qu'`estReaffecte`, eval direct compris) : une
+ *     telle liaison ne s'écrit que depuis le texte de sa portée. Avant son
+ *     initialisation, elle vaut `undefined` (`var`) ou ne se lit pas
+ *     (`let`) : ni l'un ni l'autre n'exécute de code. Le code transpilé en
+ *     ES5, où tout `const` devient `var`, retrouve ainsi le traitement du
+ *     `const` qu'il était.
+ * Sinon, `motif` dit pourquoi : `partagee` (premier niveau d'un script
+ * classique), `annexeB` (voir `fonctionDeBlocHissee`), `plusieurs`
+ * déclarateurs initialisés, `illisible` (valeur initiale qui n'est ni une
+ * fonction ni un littéral), `ecriture` ou `eval` (voir `estReaffecte`).
+ * @returns {{fonction:true} | {litteral:string, init:object} | {motif:string}}
+ */
+function valeurGarantie(nom, liaison, { walkAcorn, estModule }) {
+  let init;
+  let sauf = null;
+  if (liaison.kind === 'const') init = liaison.declarateur.init;
+  else if (!estPorteeLocale(liaison.portee, estModule)) return { motif: 'partagee' };
+  else if (liaison.kind === 'let') init = liaison.declarateur.init;
+  else {
+    if (liaison.annexeB) return { motif: 'annexeB' };
+    const initialises = liaison.declarateurs.filter((d) => d.init);
+    if (initialises.length > 1) return { motif: 'plusieurs' };
+    if (!initialises.length || initialises[0].id.type !== 'Identifier') return { motif: 'illisible' };
+    [sauf] = initialises;
+    init = sauf.init;
+  }
+  const fonction = init?.type === 'ArrowFunctionExpression' || init?.type === 'FunctionExpression';
+  const litteral = fonction ? null : decoderInitialisateur(init);
+  if (!fonction && litteral === null) return { motif: 'illisible' };
+  const ecriture = liaison.kind === 'const' ? null : estReaffecte(nom, liaison.portee, walkAcorn, sauf);
+  if (ecriture) return { motif: ecriture };
+  return fonction ? { fonction: true } : { litteral, init };
+}
+
+const RAISON_PROPRIETE_GLOBALE = "est déclaré au premier niveau d'un script classique, comme une propriété de l'objet global que tout autre script de la page peut remplacer sans écrire son nom (`window[…] = …`, `Object.assign(window, …)`)";
+
+/** Pourquoi une variable n'a pas de valeur garantie, selon le motif de `valeurGarantie`. */
+function raisonVariable(kind, motif) {
+  switch (motif) {
+    case 'partagee': return kind === 'let' ? "est déclaré en `let` au premier niveau d'un script classique, où tout autre script de la page peut le réaffecter" : RAISON_PROPRIETE_GLOBALE;
+    case 'annexeB': return 'est aussi le nom d\'une fonction déclarée dans un bloc imbriqué, qui en fait une `var` de la fonction englobante hors mode strict';
+    case 'plusieurs': return 'est une variable `var` qui reçoit une valeur à plusieurs déclarations';
+    case 'ecriture': return `est une variable \`${kind}\` que sa portée réécrit`;
+    case 'eval': return `est une variable \`${kind}\` qu'un eval() direct de sa portée peut réécrire, puisqu'il y exécute son code`;
+    default: return kind === 'const' ? 'est une constante dont la valeur ne se lit pas dans le code' : `est une variable \`${kind}\` dont la valeur initiale ne se lit pas dans le code`;
+  }
 }
 
 /**
- * Résout l'argument d'un minuteur (`setTimeout`/`setInterval`) vers l'une de
- * trois issues : une fonction garantie (jamais signalée), une chaîne
- * littérale (auditée comme le reste du code), ou une valeur que l'analyse ne
- * peut pas garantir (`raison` dit pourquoi, pour le constat). Décision de la
- * coordination le 2026-09-28, après plusieurs détournements de l'ancienne
- * approche fondée sur « pas de réaffectation détectée » : n'est résolu que
- * ce dont le LANGAGE garantit la valeur au moment de l'appel.
- *   - un `const` (comme pour eval/Function, voir `resoudreConstLitteral`) ;
- *   - une déclaration de fonction seule de son nom dans une portée de
- *     fonction ou de bloc (voir `trouverLiaisonVisible`), sans aucune
- *     écriture possible dans cette portée (`estReaffecte`, eval direct
- *     compris) : une telle liaison ne s'écrit que depuis le texte de sa
- *     portée ;
+ * Résout un identifiant passé à un minuteur (`setTimeout`/`setInterval`), ou
+ * à eval()/Function() quand il n'a pas de littéral garanti, vers l'une de
+ * ces issues : une fonction garantie (jamais signalée), un littéral garanti
+ * (audité comme le reste du code), une liaison qui reçoit une chaîne ou une
+ * donnée ailleurs dans le code (`chaine-non-garantie`, traitée comme un
+ * eval() dont l'argument ne peut pas être garanti), ou une valeur inconnue.
+ * `raison` dit pourquoi la valeur n'est pas garantie, `motif` le résume
+ * (voir `valeurGarantie`) pour choisir la remédiation.
+ * Décision de la coordination le 2026-09-28, après plusieurs détournements
+ * de l'ancienne approche fondée sur « pas de réaffectation détectée » : n'est
+ * résolu que ce dont le LANGAGE garantit la valeur au moment de l'appel.
+ *   - un `const`, ou un `let`/une `var` locale jamais écrite (voir
+ *     `valeurGarantie`) ;
+ *   - une déclaration de fonction seule de son nom dans une portée locale
+ *     (voir `trouverLiaisonVisible`), sans aucune écriture possible dans
+ *     cette portée (`estReaffecte`, eval direct compris) ;
  *   - le `resolve`/`reject` d'un exécuteur de Promise, aux mêmes conditions,
  *     plus l'absence d'`arguments` dans un exécuteur `function` (voir
  *     `executeurUtiliseArguments`).
- * Une déclaration de fonction au niveau du programme n'est JAMAIS garantie :
- * dans un script classique, c'est une propriété modifiable de l'objet global,
- * que n'importe quel script de la page réécrit sans jamais écrire son nom
- * (`window[k] = v`, un alias de `window`, `Object.assign(window, …)`) — la
- * vérification « aucun autre fichier ne l'écrit » ne pouvait pas le garantir.
  */
-function resoudreArgument(noeud, { walkAcorn, ancetres }) {
+function resoudreArgument(noeud, { walkAcorn, ancetres, estModule }) {
   if (!noeud) return { type: 'inconnue' };
   if (noeud.type === 'ArrowFunctionExpression' || noeud.type === 'FunctionExpression') return { type: 'fonction' };
   if (noeud.type !== 'Identifier') return { type: 'autre' };
@@ -985,9 +1075,9 @@ function resoudreArgument(noeud, { walkAcorn, ancetres }) {
   // Une liaison non garantie qui reçoit une chaîne ou une donnée exécute un
   // contenu inconnu : même traitement qu'un eval() dont l'argument ne peut
   // pas être garanti (voir `ecrituresSuspectes`).
-  const nonGarantie = (portee, raison) => {
+  const nonGarantie = (portee, raison, motif = null) => {
     const ecritures = ecrituresSuspectes(noeud.name, portee, ancetres, walkAcorn);
-    return ecritures ? { type: 'chaine-non-garantie', litteraux: ecritures.litteraux } : { type: 'inconnue', raison };
+    return { type: ecritures ? 'chaine-non-garantie' : 'inconnue', litteraux: ecritures?.litteraux ?? [], raison, motif };
   };
 
   const liaison = trouverLiaisonVisible(noeud.name, ancetres);
@@ -1013,20 +1103,18 @@ function resoudreArgument(noeud, { walkAcorn, ancetres }) {
   }
 
   if (liaison.type === 'fonction-nommee') {
-    if (!liaison.global && !estReaffecte(noeud.name, liaison.portee, walkAcorn)) return { type: 'fonction' };
-    return nonGarantie(liaison.portee, liaison.global
-      ? "est une fonction déclarée au niveau global, que n'importe quel script de la page peut remplacer"
-      : 'est une fonction déclarée, mais réécrite dans sa portée');
+    if (!estPorteeLocale(liaison.portee, estModule)) return nonGarantie(liaison.portee, RAISON_PROPRIETE_GLOBALE, 'partagee');
+    const ecriture = estReaffecte(noeud.name, liaison.portee, walkAcorn);
+    if (!ecriture) return { type: 'fonction' };
+    return nonGarantie(liaison.portee, ecriture === 'eval'
+      ? "est une fonction déclarée qu'un eval() direct de sa portée peut réécrire, puisqu'il y exécute son code"
+      : 'est une fonction déclarée, mais réécrite dans sa portée', ecriture);
   }
 
-  if (liaison.kind === 'const') {
-    const init = liaison.declarateur.init;
-    if (init?.type === 'ArrowFunctionExpression' || init?.type === 'FunctionExpression') return { type: 'fonction' };
-    const litteral = decoderInitialisateur(init);
-    if (litteral !== null) return { type: 'litteral', valeur: litteral };
-    return nonGarantie(liaison.portee, 'est une constante dont la valeur ne se lit pas dans le code');
-  }
-  return nonGarantie(liaison.portee, `est une variable \`${liaison.kind}\`, que d'autres instructions peuvent réaffecter`);
+  const valeur = valeurGarantie(noeud.name, liaison, { walkAcorn, estModule });
+  if (valeur.fonction) return { type: 'fonction' };
+  if (!valeur.motif) return { type: 'litteral', valeur: valeur.litteral, init: valeur.init };
+  return nonGarantie(liaison.portee, raisonVariable(liaison.kind, valeur.motif), valeur.motif);
 }
 
 /**
@@ -1089,7 +1177,7 @@ function decoderFromCharCodeLitteral(noeud) {
  * créé (utile à l'appelant pour poursuivre l'extraction en profondeur),
  * absent quand l'argument est calculé ou ne se parse pas.
  */
-function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, colonneAppel, extrait, texteBrut, profondeur, regle, titreConstruction, texteConstruction, remediationSupprimer, impactConstruction, referentielsSupp = [] }) {
+function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, colonneAppel, extrait, texteBrut, profondeur, regle, titreConstruction, texteConstruction, remediationSupprimer, impactConstruction, referentielsSupp = [], motifNonGaranti = "L'analyse statique ne peut pas garantir la valeur de son argument au moment de l'appel : ce qui sera réellement exécuté n'est pas lu." }) {
   const constatCalculeOuIllisible = (motif) => constat({
     regle, axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
     titre: titreConstruction, fichier: fichierOrigine, ligne: ligneAppel, extrait,
@@ -1100,7 +1188,7 @@ function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, colonneAppel
   });
 
   if (texteBrut === null) {
-    return { constats: [constatCalculeOuIllisible("L'analyse statique ne peut pas garantir la valeur de son argument au moment de l'appel : ce qui sera réellement exécuté n'est pas lu.")] };
+    return { constats: [constatCalculeOuIllisible(motifNonGaranti)] };
   }
 
   if (profondeur >= MAX_PROFONDEUR_CODE_IMBRIQUE) {
@@ -1181,29 +1269,60 @@ function materialiserLitterauxEcrits(ctx, { unite, ligneDe, litteraux, profondeu
 }
 
 /**
+ * Où déclarer une liaison du premier niveau d'un script classique pour que
+ * le langage garantisse sa valeur (voir `estPorteeLocale`), en minuscule
+ * initiale : le texte appelant dit ce qu'on y gagne.
+ */
+function ouDeclarer(nomArg, { fonction = false } = {}) {
+  return `déclarer \`${nomArg}\` en \`const\`${fonction ? ` (\`const ${nomArg} = () => …\`)` : ''}, dans une fonction englobante ou dans un module (un \`<script type="module">\` écrit dans la page, ou un fichier qui contient un \`import\` ou un \`export\` ; sans l'un ni l'autre, un fichier peut toujours être chargé comme script classique)`;
+}
+
+/**
+ * Pour une chaîne exécutée depuis une liaison non garantie : où la déclarer
+ * pour que son contenu soit garanti et audité en place, `null` si le motif
+ * n'y change rien. Un eval() direct peut réécrire toute liaison de sa portée
+ * sauf un `const` : c'est alors la seule déclaration qui garantisse.
+ */
+function declarationQuiGarantit(nomArg, motif, { evalDirect = false } = {}) {
+  if (motif === 'eval' || (motif === 'partagee' && evalDirect)) return `déclarer \`${nomArg}\` en \`const\``;
+  if (motif === 'partagee') return ouDeclarer(nomArg);
+  return null;
+}
+
+/** Pourquoi la valeur d'un identifiant passé à eval()/Function() ou à un minuteur n'est pas garantie, à la suite du texte de la construction. */
+const motifIdentifiantNonGaranti = (nomArg, raison) => `L'analyse statique ne peut pas garantir la valeur de son argument au moment de l'appel : \`${nomArg}\` ${raison}.`;
+
+/**
  * eval()/Function() (directs ou indirects). `envelopper` corrige la
  * sémantique de `Function`/`new Function` : leur corps s'exécute comme
  * l'intérieur d'une fonction (où `return` est valide), contrairement à
  * `eval()` ou au script d'un worker, qui s'exécutent en portée de script.
- * Un identifiant n'est résolu que s'il désigne un `const` visible depuis le
- * site d'appel (voir `resoudreConstLitteral`) : `const code = "…";
- * eval(code)` est audité comme le littéral écrit en place, tout autre
- * identifiant (let, var, paramètre…) reste une valeur que l'analyse ne peut
- * pas garantir — décision de la coordination le 2026-09-28. Les chaînes
+ * Un identifiant n'est résolu que si le langage garantit sa valeur au site
+ * d'appel (voir `valeurGarantie`) : `const code = "…"; eval(code)` est audité
+ * comme le littéral écrit en place ; tout autre identifiant reste une valeur
+ * que l'analyse ne peut pas garantir, et le constat dit pourquoi. Les chaînes
  * littérales écrites dans une telle liaison restent auditées (voir
  * `materialiserLitterauxEcrits`).
  */
-function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, walkAcorn, ancetres, profondeur, titreConstruction, texteConstruction, remediationSupprimer, envelopper = false }) {
-  const brut = decoderInitialisateur(argument) ?? resoudreConstLitteral(argument, ancetres);
+function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, walkAcorn, ancetres, estModule, profondeur, titreConstruction, texteConstruction, remediationSupprimer, envelopper = false }) {
+  let brut = decoderInitialisateur(argument);
+  let motifNonGaranti;
+  let remediation = remediationSupprimer;
   if (brut === null && argument?.type === 'Identifier') {
-    const resolution = resoudreArgument(argument, { walkAcorn, ancetres });
-    if (resolution.type === 'chaine-non-garantie') materialiserLitterauxEcrits(ctx, { unite, ligneDe, litteraux: resolution.litteraux, profondeur, envelopper });
+    const resolution = resoudreArgument(argument, { walkAcorn, ancetres, estModule });
+    if (resolution.type === 'litteral') brut = resolution.valeur;
+    else {
+      if (resolution.type === 'chaine-non-garantie') materialiserLitterauxEcrits(ctx, { unite, ligneDe, litteraux: resolution.litteraux, profondeur, envelopper });
+      if (resolution.raison) motifNonGaranti = motifIdentifiantNonGaranti(argument.name, resolution.raison);
+      const declaration = declarationQuiGarantit(argument.name, resolution.motif, { evalDirect: n.callee.type === 'Identifier' && n.callee.name === 'eval' });
+      if (declaration) remediation = `${remediationSupprimer} Si ce code doit rester, ${declaration} : son contenu est alors garanti, et audité comme du code écrit en place.`;
+    }
   }
   const texteAnalyse = brut !== null && envelopper ? `(function(){${brut}})` : brut;
   return traiterSiteConstruction(ctx, {
     fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: (n.loc?.start?.column ?? 0) + 1, extrait: extraireSource(unite.source, n),
     texteBrut: texteAnalyse, profondeur, regle: 'C-XSS-03',
-    titreConstruction, texteConstruction, remediationSupprimer,
+    titreConstruction, texteConstruction, remediationSupprimer: remediation, motifNonGaranti,
     impactConstruction: IMPACT_EXECUTION_CHAINE,
   }).constats;
 }
@@ -1220,25 +1339,73 @@ function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, walkAcorn, an
  */
 const SEVERITE_MINUTEUR_NON_RESOLU = 'info';
 
-function constatMinuteurNonResolu({ unite, ligneDe, n, nom, motif }) {
+/**
+ * Palier « à vérifier » d'un minuteur. Sa remédiation dépend de la raison :
+ * une fonction déclarée au premier niveau d'un script classique EST déjà une
+ * fonction, « passer une fonction » n'y voudrait rien dire (relevé par la
+ * coordination le 2026-09-28 sur printlabels.js) ; il faut la déclarer là où
+ * le langage garantit sa valeur. Ailleurs, une fonction écrite sur place qui
+ * appelle la valeur échoue si elle n'est pas une fonction, au lieu de
+ * l'exécuter comme du code.
+ */
+function constatMinuteurNonResolu({ unite, ligneDe, n, nom, motif, nomArg = null, partagee = false }) {
+  const remediation = partagee
+    ? `${ouDeclarer(nomArg, { fonction: true }).replace(/^d/, 'D')}. Le langage garantit alors qu'aucun autre script ne la remplace.`
+    : `Passer à \`${nom}\` une fonction écrite sur place (\`${nom}(() => ${nomArg ? `${nomArg}()` : '…'}, délai)\`) : une valeur qui ne serait pas une fonction y provoque une erreur au lieu d'être exécutée comme du code. À défaut, documenter dans le README la provenance de cette valeur.`;
   return constat({
     regle: 'C-XSS-04', axe: 'C', severite: SEVERITE_MINUTEUR_NON_RESOLU, bloquant: false, confiance: 'a_verifier',
     titre: `Source de ${nom} non résolue par l'analyse statique`,
     fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
     constat: motif,
     impact: "Si cette expression contient une chaîne au moment de l'appel, elle est évaluée comme du code, avec les mêmes conséquences qu'eval(). L'analyse statique ne peut ni le confirmer ni l'exclure depuis ce seul fichier.",
-    remediation: `Passer directement une fonction à ${nom}, ou documenter dans le README la provenance de cette valeur.`,
+    remediation,
     referentiels: ['CWE-95', REF_GUIDE],
   });
 }
 
-function traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut, profondeur }) {
+/**
+ * Ce que le constat d'un minuteur affirme de son premier argument, selon ce
+ * que l'analyse en sait vraiment. « Est une chaîne » n'est vrai que d'une
+ * forme qui en produit toujours une : une donnée reçue (`r.Formule`) a un
+ * type inconnu, une concaténation peut donner un nombre, un littéral non
+ * chaîne est converti (relevé par la coordination le 2026-09-28).
+ */
+function formeArgumentMinuteur(nom, forme, nomArg) {
+  switch (forme) {
+    case 'litteral': return {
+      titre: `Littéral passé à ${nom} à la place d'une fonction (équivalent à eval)`,
+      texte: `Le premier argument de \`${nom}\` est un littéral, pas une fonction : il est converti en chaîne, puis exécuté comme du code.`,
+    };
+    case 'concatenation': return {
+      titre: `Concaténation passée à ${nom} (équivalent à eval)`,
+      texte: `Le premier argument de \`${nom}\` est une concaténation, jamais une fonction : si elle produit une chaîne, celle-ci est exécutée comme du code.`,
+    };
+    case 'donnee': return {
+      titre: `Donnée reçue par le widget passée à ${nom} (équivalent à eval)`,
+      texte: `Le premier argument de \`${nom}\` provient d'une donnée reçue par le widget, dont le type n'est pas connu : si c'est une chaîne, elle est exécutée comme du code.`,
+    };
+    case 'liaison': return {
+      titre: `Valeur qui peut être une chaîne passée à ${nom} (équivalent à eval)`,
+      texte: `Le premier argument de \`${nom}\`, \`${nomArg}\`, reçoit une chaîne ou une donnée ailleurs dans le code : si c'en est une au moment de l'appel, elle est exécutée comme du code.`,
+    };
+    default: return {
+      titre: `Chaîne de caractères passée à ${nom} (équivalent à eval)`,
+      texte: `Le premier argument de \`${nom}\` est une chaîne, pas une fonction.`,
+    };
+  }
+}
+
+function traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut, profondeur, forme = 'chaine', nomArg = null, raison = null, motif = null }) {
+  const { titre, texte } = formeArgumentMinuteur(nom, forme, nomArg);
+  const remediation = `Passer une fonction : \`${nom}(() => …, délai)\`.`;
+  const declaration = declarationQuiGarantit(nomArg, motif);
   return traiterSiteConstruction(ctx, {
     fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: (n.loc?.start?.column ?? 0) + 1, extrait: extraireSource(unite.source, n),
     texteBrut, profondeur, regle: 'C-XSS-04',
-    titreConstruction: `Chaîne de caractères passée à ${nom} (équivalent à eval)`,
-    texteConstruction: `Le premier argument de \`${nom}\` est une chaîne, pas une fonction.`,
-    remediationSupprimer: `Passer une fonction : \`${nom}(() => …, délai)\`.`,
+    titreConstruction: titre,
+    texteConstruction: texte,
+    remediationSupprimer: declaration ? `${remediation} Si cette chaîne doit rester, ${declaration} : son contenu est alors garanti, et audité comme du code écrit en place.` : remediation,
+    motifNonGaranti: raison ? motifIdentifiantNonGaranti(nomArg, raison) : undefined,
     impactConstruction: IMPACT_EXECUTION_CHAINE,
   }).constats;
 }
@@ -1266,30 +1433,30 @@ function traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBru
  * `setTimeout(r.Formule, 0)` notait mieux que l'écrire en clair (décision de
  * la coordination le 2026-09-28, après mesure sur 31 widgets honnêtes).
  */
-function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, ancetres, profondeur }) {
+function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, ancetres, estModule, profondeur }) {
   if (!arg) return [];
 
   if (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression') return [];
 
   if (estSourceDonneeWidget(arg, ancetres)) {
-    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: null, profondeur });
+    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: null, profondeur, forme: 'donnee' });
   }
 
   // Un identifiant est le seul cas où « inconnu » veut dire : peut-être une
   // fonction (le motif `setTimeout(callback, delai)`, très courant) — d'où
   // le palier « à vérifier », pas une critique systématique.
   if (arg.type === 'Identifier') {
-    const resolution = resoudreArgument(arg, { walkAcorn, ancetres });
+    const resolution = resoudreArgument(arg, { walkAcorn, ancetres, estModule });
     if (resolution.type === 'fonction') return [];
     if (resolution.type === 'litteral') {
-      return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: resolution.valeur, profondeur });
+      return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: resolution.valeur, profondeur, forme: coercerLitteralNonChaine(resolution.init) === null ? 'chaine' : 'litteral' });
     }
     if (resolution.type === 'chaine-non-garantie') {
       materialiserLitterauxEcrits(ctx, { unite, ligneDe, litteraux: resolution.litteraux, profondeur });
-      return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: null, profondeur });
+      return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: null, profondeur, forme: 'liaison', nomArg: arg.name, raison: resolution.raison, motif: resolution.motif });
     }
     return [constatMinuteurNonResolu({
-      unite, ligneDe, n, nom,
+      unite, ligneDe, n, nom, nomArg: arg.name, partagee: resolution.motif === 'partagee',
       motif: `Le premier argument de \`${nom}\`, \`${arg.name}\`, ${resolution.raison} : l'analyse statique ne peut pas garantir qu'il s'agit encore d'une fonction au moment de l'appel.`,
     })];
   }
@@ -1313,7 +1480,7 @@ function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, anc
   // littéral : mineur, jamais un faux bloquant.
   const nonChaineLitterale = coercerLitteralNonChaine(arg);
   if (nonChaineLitterale !== null) {
-    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: nonChaineLitterale, profondeur });
+    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: nonChaineLitterale, profondeur, forme: 'litteral' });
   }
 
   // Formes qui produisent TOUJOURS une chaîne, quel que soit leur contenu
@@ -1324,7 +1491,7 @@ function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, anc
   // (texteBrut===null) s'en charge.
   if (produitToujoursUneChaine(arg)) {
     const texteBrut = plierLitteraux(arg) ?? decoderAtobLitteral(arg) ?? decoderFromCharCodeLitteral(arg);
-    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut, profondeur });
+    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut, profondeur, forme: texteBrut === null && arg.type === 'BinaryExpression' ? 'concatenation' : 'chaine' });
   }
 
   // Le reste (accès de membre, appel de fonction quelconque, ternaire…) n'a
@@ -1394,6 +1561,10 @@ export function preparerCodeExecuteEnChaine(ctx) {
       pourChaqueUniteJs({ fichiers: [f] }, {}, ({ ast, ligneDe, walk: walkAcorn, unite }) => {
         if (!ast) return;
         const avant = ctx.fichiers.length;
+        // Le premier niveau d'un module n'est pas partagé avec les autres
+        // scripts de la page (voir `estPorteeLocale`) : seul le langage en
+        // décide, par la syntaxe du fichier ou l'élément qui le contient.
+        const estModule = unite.module || syntaxeDeModule(ast);
         // `ancestor` (pas `simple`) : `traiterMinuteur` et `traiterAppelExecution`
         // ont besoin de la chaîne des ancêtres du site d'appel pour résoudre un
         // identifiant vers la liaison la plus proche qui le lie, quelle que
@@ -1403,14 +1574,14 @@ export function preparerCodeExecuteEnChaine(ctx) {
             const nom = nomPointe(n.callee) || '';
             if (/(^|\.)eval$/.test(nom)) {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments[0], ast, walkAcorn, ancetres, profondeur,
+                unite, ligneDe, n, argument: n.arguments[0], ast, walkAcorn, ancetres, estModule, profondeur,
                 titreConstruction: 'Exécution de code arbitraire via eval()',
                 texteConstruction: '`eval()` est appelé dans le code exécuté du widget.',
                 remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
               }));
             } else if (n.callee.type === 'SequenceExpression' && n.callee.expressions.at(-1)?.type === 'Identifier' && n.callee.expressions.at(-1).name === 'eval') {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments[0], ast, walkAcorn, ancetres, profondeur,
+                unite, ligneDe, n, argument: n.arguments[0], ast, walkAcorn, ancetres, estModule, profondeur,
                 titreConstruction: 'Exécution de code arbitraire via eval() indirect',
                 texteConstruction: "La forme `(0, eval)(...)` (ou équivalente) appelle `eval` indirectement.",
                 remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
@@ -1419,7 +1590,7 @@ export function preparerCodeExecuteEnChaine(ctx) {
 
             if (nom.split('.').pop() === 'Function') {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments.at(-1), ast, walkAcorn, ancetres, profondeur, envelopper: true,
+                unite, ligneDe, n, argument: n.arguments.at(-1), ast, walkAcorn, ancetres, estModule, profondeur, envelopper: true,
                 titreConstruction: 'Construction de code à la volée via Function() (sans new)',
                 texteConstruction: '`Function(...)` sans `new` compile une chaîne en fonction exécutable, exactement comme `new Function(...)` : l\'appel fonctionne dans les deux cas.',
                 remediationSupprimer: 'Supprimer cet usage.',
@@ -1427,13 +1598,13 @@ export function preparerCodeExecuteEnChaine(ctx) {
             }
 
             if (/^(setTimeout|setInterval)$/.test(nom.split('.').pop())) {
-              constats.push(...traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg: n.arguments[0], ast, walkAcorn, ancetres, profondeur }));
+              constats.push(...traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg: n.arguments[0], ast, walkAcorn, ancetres, estModule, profondeur }));
             }
           },
           NewExpression(n, _state, ancetres) {
             if (nomFinal(n.callee) === 'Function') {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments.at(-1), ast, walkAcorn, ancetres, profondeur, envelopper: true,
+                unite, ligneDe, n, argument: n.arguments.at(-1), ast, walkAcorn, ancetres, estModule, profondeur, envelopper: true,
                 titreConstruction: 'Construction de code à la volée via new Function()',
                 texteConstruction: '`new Function(...)` compile une chaîne en fonction exécutable.',
                 remediationSupprimer: 'Supprimer cet usage.',
