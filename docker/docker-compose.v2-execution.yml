@@ -1,24 +1,39 @@
-# Esquisse — zone d'exécution durcie pour l'audit V2 (voir docs/ARCHITECTURE-V2.md).
+# Zone d'exécution durcie pour l'audit V2 (voir docs/ARCHITECTURE-V2.md).
 #
-# NON DÉPLOYÉ, NON TESTÉ ICI : comme pour docker-compose.yml (instance
-# Grist réelle), la politique réseau de cet environnement cloud empêche de
-# valider quoi que ce soit de conteneurisé — à essayer sur le VPS d'Antoine,
+# ÉCRIT ET RELU ICI, JAMAIS CONSTRUIT NI DÉMARRÉ : la politique réseau de
+# cet environnement cloud bloque Docker Hub (comme pour docker-compose.yml,
+# l'instance Grist réelle) — `docker compose build`/`up` n'a donc jamais pu
+# être exécuté sur ce fichier. À essayer en premier sur le VPS d'Antoine,
 # en particulier le point le plus incertain : le sandbox natif de Chromium
 # dans un conteneur Docker classique (voir la remarque dans le service
 # execution-audit ci-dessous).
 #
-# Ce fichier illustre les contraintes d'isolation, pas une solution clé en
-# main : "build: ./execution" et l'image de egress-proxy restent à écrire.
+# Antoine a tranché le 2026-09-28 : soumission sans compte (anonyme, donc
+# vigilance renforcée sur les URL soumises — voir resoudreCible()/
+# validerHoteClone() côté gwaudit et egress-proxy ci-dessous, tous deux
+# déjà conçus pour ce cas) et volume faible avec mise en attente si deux
+# jobs arrivent en même temps : ça ferme la question Docker durci vs
+# microVM (§6) en faveur du premier — une file qui sérialise à un job à la
+# fois répond à la demande ET ferme l'exposition réelle documentée en §1
+# (le nombre d'audits simultanés, pas leur durée). Cette sérialisation
+# elle-même reste à écrire côté zone "site" (§5), hors de ce fichier.
 services:
   execution-audit:
-    build: ./execution   # Dockerfile : Node + Chromium + le même gwaudit que la V1 (npm install du dépôt, pas un fork serveur), à écrire
+    build: ./execution   # docker/execution/Dockerfile : Node + Chromium (image Playwright officielle) + le même gwaudit que la V1, écrit mais jamais construit ici
     # Un conteneur = un seul job d'audit. L'orchestrateur (file d'attente,
-    # hors de ce fichier) le démarre pour un job précis et le détruit
-    # ensuite — ne jamais le laisser tourner pour un deuxième job.
+    # hors de ce fichier) le démarre pour un job précis, lui passe l'URL
+    # soumise en argument et détruit le conteneur ensuite — ne jamais le
+    # laisser tourner pour un deuxième job.
     read_only: true
     tmpfs:
       - /tmp:size=512m,mode=1777   # tout le travail d'un job (clone, inventaire, harnais) tient ici, purgé avec le conteneur
-    user: "10001:10001"             # jamais root
+    # Pas d'UID numérique forcé ici : le Dockerfile fixe déjà USER pwuser
+    # (l'utilisateur non root fourni par l'image Playwright officielle).
+    # Superposer un UID choisi au hasard ferait tourner le conteneur sous
+    # une identité qui ne correspond à aucune entrée passwd de l'image, ce
+    # qui peut casser des chemins internes de Chromium (HOME, sandbox) —
+    # à vérifier sur le VPS si un UID numérique explicite s'avère
+    # nécessaire pour l'orchestrateur réel.
     security_opt:
       - no-new-privileges:true
     cap_drop:
@@ -36,26 +51,21 @@ services:
       - reseau-ferme   # pas de route par défaut vers Internet
     environment:
       - HOME=/tmp
+    volumes:
+      - ./out:/out   # emplacement illustratif : l'orchestrateur (§5) choisit le vrai montage par job
     # Volontairement aucune variable héritée du service "site" (secrets,
     # clés API, identifiants base de données) : ce conteneur ne doit rien
     # détenir qui ait de la valeur en dehors du job qu'il traite.
 
   egress-proxy:
-    # Placeholder : proxy de sortie à liste blanche (github.com, gitlab.com,
-    # registry.npmjs.org…), pour les deux seules étapes qui ont besoin
-    # d'une vraie sortie réseau (clonage git, npm audit — voir
-    # docs/ARCHITECTURE-V2.md §4). Doit refaire sa propre résolution DNS et
-    # rejeter les plages privées/loopback/link-local : ne pas se reposer
-    # uniquement sur la validation applicative de gwaudit.
-    # Non implémenté ici — proposition (voir docs/ARCHITECTURE-V2.md §4,
-    # "Proposition concrète pour le VPS d'Antoine") : un proxy CONNECT
-    # explicite (tinyproxy ou squid) en liste blanche par nom d'hôte
-    # (github.com, gitlab.com, registry.npmjs.org). Pas de terminaison TLS
+    build: ./egress-proxy   # docker/egress-proxy/Dockerfile + squid.conf : liste blanche par nom d'hôte (github.com, gitlab.com, registry.npmjs.org), écrit mais jamais construit ni testé contre un vrai CONNECT ici
+    # Pour les deux seules étapes qui ont besoin d'une vraie sortie réseau
+    # (clonage git, npm audit — voir docs/ARCHITECTURE-V2.md §4). Refait sa
+    # propre résolution DNS et rejette les plages privées/loopback/
+    # lien-local (acl "dst" dans squid.conf) : ne se repose pas uniquement
+    # sur la validation applicative de gwaudit. Pas de terminaison TLS
     # nécessaire (CONNECT tunnelise, ne casse pas le certificate pinning
-    # git/npm) — mais la syntaxe exacte du filtre par domaine de l'outil
-    # choisi n'a pas été vérifiée contre sa documentation actuelle, à
-    # confirmer avant écriture du Dockerfile.
-    image: à-définir
+    # git/npm).
     networks:
       - reseau-ferme
       - reseau-sortie-controlee

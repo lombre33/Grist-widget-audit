@@ -369,27 +369,63 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
 
 ## 6. Ce qui reste à trancher avec Antoine
 
-1. Soumission par des visiteurs anonymes avec quotas (IP/e-mail), ou
-   faut-il un compte pour soumettre un widget à l'audit ?
+1. ~~Soumission par des visiteurs anonymes avec quotas, ou faut-il un
+   compte ?~~ **Tranché le 2026-09-28 : anonyme, sans compte.** Antoine :
+   « user non loggé, donc être très vigilant sur les liens qu'ils vont
+   envoyer. » Aucune identité soumissionnaire à laquelle faire confiance —
+   toute URL passe par `resoudreCible()`/`validerHoteClone()` (constat 1,
+   §1) puis par le proxy CONNECT à liste blanche (§4) avant toute
+   connexion réelle ; les deux existent déjà pour cette raison précise, et
+   c'est le trou de parseur du 2026-09-20 sur le premier qui a rappelé que
+   ces deux couches doivent rester indépendantes. Reste à concevoir côté
+   zone « site » (§5, pas encore écrit) : quotas par IP faute de compte,
+   et l'affichage doit dire clairement à l'utilisateur que rien ne
+   garantit qui a soumis quoi.
 2. Le verdict doit-il être figé sur un hash de commit précis, avec
    invalidation automatique si le mainteneur pousse du nouveau code sous
-   la même URL (§3) ?
-3. Volume attendu — quelques widgets par semaine, ou potentiellement
-   plus ? Détermine si un Docker durci (§4) suffit ou s'il vaut mieux
-   viser une isolation plus forte (microVM) dès le départ.
+   la même URL (§3) ? Posée à nouveau dans le fil du projet le
+   2026-09-28.
+3. ~~Volume attendu — Docker durci ou microVM ?~~ **Tranché le
+   2026-09-28 : volume faible, avec mise en attente si deux jobs arrivent
+   en même temps.** Ferme la question en faveur du Docker durci (§4), pas
+   d'une isolation plus forte dès le départ — cohérent avec ce que
+   l'analyse d'exposition avait déjà établi (§1, §5) : le plafond CPU ne
+   s'exerce jamais en pratique (`page.goto()` coupe à 30 s, bien avant),
+   donc l'exposition réelle est le nombre d'audits **simultanés**, pas
+   leur durée. Une file qui sérialise à un job à la fois répond
+   littéralement à sa demande et ferme cette exposition du même geste —
+   reste à écrire (§5).
 4. Le score/verdict doit-il seulement informer l'utilisateur avant
    installation, ou doit-il pouvoir bloquer techniquement une
-   installation en dessous d'un certain seuil ?
+   installation en dessous d'un certain seuil ? Posée à nouveau dans le
+   fil du projet le 2026-09-28.
 
 ## 7. Prochaines étapes concrètes
 
-- Fait : les constats 1, 2, 3, 4, 8, 9, 10a, 10b et 12 (§1) sont corrigés
-  dans le moteur, et les constats 5, 6 et 7 substantiellement atténués par
-  le durcissement réseau ajouté en même temps.
+- Fait : les constats 1, 2, 3, 4, 5, 8, 9, 10a, 10b et 12 (§1) sont
+  corrigés dans le moteur ; les constats 6 et 7 restent substantiellement
+  atténués par le durcissement réseau ajouté en même temps.
+- Fait, mais **écrit et relu, jamais construit ni démarré** (Docker Hub
+  bloqué depuis cet environnement de développement, voir `docker/README.md`) :
+  `docker/execution/Dockerfile` (+ `entrypoint.sh`) et
+  `docker/egress-proxy/Dockerfile` (+ `squid.conf`), référencés désormais
+  par `docker-compose.v2-execution.yml` à la place des deux placeholders
+  qu'ils remplacent. La différence entre « prêt » et « ça devrait
+  marcher » tient tout entière à cette phrase : le premier `docker compose
+  build && up` de ces fichiers doit se faire sur le VPS d'Antoine, c'est
+  là qu'ils seront éprouvés pour la première fois.
 - Reste ouvert, propre à l'architecture V2 et pas au moteur en tant que
   tel : limite de mémoire résidente par job (constat 10c — `ulimit -v`
   vérifié inutilisable avec Chromium, seuls des cgroups conviennent) et
-  limite de concurrence (constat 11) — voir §4 et §5.
-- Faire valider sur le VPS d'Antoine : le sandbox natif de Chromium dans
-  son environnement Docker réel (§4), et l'esquisse `docker-compose`
-  jointe.
+  file d'attente qui sérialise les jobs (constat 11, décidée en principe
+  le 2026-09-28 — un job à la fois — mais **aucun code d'orchestration
+  n'existe encore** : ni la file elle-même, ni son intégration à
+  `src/interface/`, ni le passage de l'URL soumise au conteneur
+  `execution-audit`) — voir §4 et §5.
+- Faire valider sur le VPS d'Antoine, dans cet ordre : `docker compose
+  build` réussit ; le sandbox natif de Chromium démarre sous `pwuser` avec
+  `cap_drop: ALL` (sinon voir la note du service `execution-audit`) ; la
+  limite mémoire via `mem_limit`/cgroups v2 coupe réellement (comme prévu
+  au §4, pas testable depuis ce cloud) ; un `git ls-remote` et un `npm
+  audit` réels passent par `egress-proxy` et un hôte hors liste blanche
+  est refusé.
