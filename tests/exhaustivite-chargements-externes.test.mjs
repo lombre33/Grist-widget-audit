@@ -584,9 +584,17 @@ test('C-XSS-04 : setTimeout(fonction fléchée, délai) ne déclenche rien', () 
   assert.equal(preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-04').length, 0);
 });
 
-test('C-XSS-04 : setTimeout(nomDeFonctionDéclaréeDansCeFichier, délai) ne déclenche rien', () => {
-  const ctx = { fichiers: [fichier('app.js', 'function rafraichir() { console.log(1); }\nsetTimeout(rafraichir, 1000);')] };
+test('C-XSS-04 : setTimeout(fonctionDéclaréeDansUneFonction, délai) ne déclenche rien', () => {
+  const ctx = { fichiers: [fichier('app.js', 'function demarrer() {\n  function rafraichir() { console.log(1); }\n  setTimeout(rafraichir, 1000);\n}')] };
   assert.equal(preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-04').length, 0);
+});
+
+test("C-XSS-04 : setTimeout(fonctionDéclaréeAuNiveauGlobal, délai) n'est qu'une information : n'importe quel script de la page peut remplacer une fonction globale (`window[k] = …`) sans jamais écrire son nom", () => {
+  const ctx = { fichiers: [fichier('app.js', 'function rafraichir() { console.log(1); }\nsetTimeout(rafraichir, 1000);')] };
+  const c = preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-04');
+  assert.equal(c.length, 1);
+  assert.equal(c[0].severite, 'info');
+  assert.match(c[0].constat, /niveau global/);
 });
 
 test("C-XSS-04 : setTimeout(callback, délai) où callback est un PARAMÈTRE (motif le plus courant dans du code embarqué type lodash) reçoit un palier « à vérifier », pas le silence ni une critique systématique", () => {
@@ -854,16 +862,16 @@ test('C-XSS-03 : Function("return this") (idiome lodash de détection du global)
 // ce que l'invariant du projet interdit explicitement.
 // ---------------------------------------------------------------------------
 
-test("C-XSS-03 (D1) : eval(code) où code est une var RÉAFFECTÉE puis REDÉCLARÉE plus loin dans le fichier doit être traité comme calculé à l'exécution, pas résolu vers l'une ou l'autre valeur", () => {
+test("C-XSS-03 (D1) : eval(code) où code est une var RÉAFFECTÉE puis REDÉCLARÉE plus loin dans le fichier n'est résolu vers aucune des deux valeurs", () => {
   const ctx = { fichiers: [fichier('app.js', 'var code = "1+1"; eval(code); var code = "2+2";')] };
   const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-03');
   assert.ok(c);
   assert.equal(c.severite, 'critique');
   assert.equal(c.bloquant, true);
-  assert.ok(c.constat.includes('calculé'), "une var redéclarée ailleurs dans le fichier n'est pas une valeur fiable : ni « 1+1 » ni « 2+2 » ne doit être pris pour argent comptant");
+  assert.ok(c.constat.includes('ne peut pas garantir'), "une var n'est pas une valeur garantie : ni « 1+1 » ni « 2+2 » ne doit être pris pour argent comptant");
 });
 
-test("C-XSS-03 (D1) : eval(code) où code est un let réaffecté depuis une donnée d'enregistrement Grist avant l'appel doit être traité comme calculé à l'exécution, pas résolu vers sa valeur initiale", () => {
+test("C-XSS-03 (D1) : eval(code) où code est un let réaffecté depuis une donnée d'enregistrement Grist avant l'appel n'est pas résolu vers sa valeur initiale", () => {
   const contenu = "function surRecord(r) { let code = 'void 0'; code = r.Formule; eval(code); }";
   const ctx = { fichiers: [fichier('app.js', contenu)] };
   const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-03');

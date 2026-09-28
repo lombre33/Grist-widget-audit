@@ -14,6 +14,7 @@
  * injection > stockage hors Grist > le reste.
  */
 import path from 'node:path';
+import * as acornWalk from 'acorn-walk';
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique, extraireImportMaps, parser } from '../moteur/analyse-js.js';
 
@@ -430,7 +431,14 @@ function extraireCodeLitteralWorker(arg) {
   if (arg.type === 'CallExpression' && nomFinal(arg.callee) === 'createObjectURL') {
     const blob = arg.arguments[0];
     if (blob?.type === 'NewExpression' && nomFinal(blob.callee) === 'Blob' && blob.arguments[0]?.type === 'ArrayExpression') {
-      const morceaux = blob.arguments[0].elements.map((el) => plierLitteraux(el));
+      // Chaque élément du tableau peut être un littéral direct, une
+      // concaténation de constantes (`plierLitteraux`), OU lui-même encodé
+      // (`atob(...)`, `String.fromCharCode(...)`) : un eval() équivalent
+      // décode déjà ces deux formes (voir `traiterAppelExecution`), le même
+      // contenu caché dans un Worker doit recevoir le même traitement, pas
+      // rester à tort « pas entièrement littéral » (relevé par la
+      // coordination le 2026-09-28).
+      const morceaux = blob.arguments[0].elements.map((el) => plierLitteraux(el) ?? decoderAtobLitteral(el) ?? decoderFromCharCodeLitteral(el));
       if (morceaux.length && morceaux.every((m) => m !== null)) return morceaux.join('');
     }
   }
@@ -503,6 +511,20 @@ function decoderAtobLitteral(noeud) {
 }
 
 /**
+ * Un littéral NON-chaîne (`null`, un nombre, un booléen) a une valeur
+ * entièrement déterminée à la lecture : `ToString()` la fixe sans ambiguïté
+ * (`String(null) === 'null'`, `String(42) === '42'`…), exactement comme une
+ * chaîne littérale directe. Exclut une regex littérale (`/x/`), dont la
+ * valeur n'est pas un primitif simple à coercer ainsi. `null` retourné
+ * signifie ici « n'est pas un tel littéral », pas « vaut null » — comme le
+ * reste des fonctions `plierLitteraux`/`decoder*Litteral` de ce fichier.
+ */
+function coercerLitteralNonChaine(noeud) {
+  if (noeud?.type !== 'Literal' || typeof noeud.value === 'string' || noeud.regex) return null;
+  return String(noeud.value);
+}
+
+/**
  * Noms liés par un motif de paramètre ou de déclaration, récursivement
  * (`Identifier`, `AssignmentPattern` — valeur par défaut —, `ObjectPattern`,
  * `ArrayPattern`, `RestElement`) : un paramètre déstructuré ou à valeur par
@@ -524,60 +546,147 @@ function nomsLies(motif) {
   return [];
 }
 
+/** Déballe un export (`export function f() {}`, `export const x = …`, `export default function f() {}`) vers sa déclaration réelle : un export N'EST PAS une portée, juste une visibilité en plus, et une déclaration exportée doit être vue comme n'importe quelle autre par la marche de portée — sans ce déballage, `export function tick(){}` ou `export const code = "…"` étaient invisibles à `trouverLiaisonVisible` (relevé par la coordination le 2026-09-28). */
+function declarationEffective(stmt) {
+  if (stmt.type === 'ExportNamedDeclaration' && stmt.declaration) return stmt.declaration;
+  if (stmt.type === 'ExportDefaultDeclaration' && stmt.declaration?.type === 'FunctionDeclaration' && stmt.declaration.id) return stmt.declaration;
+  return stmt;
+}
+
 /**
  * Cherche, du site d'appel vers l'extérieur, la portée la plus proche qui
  * lie `nom` : un paramètre de fonction (y compris déstructuré/par défaut),
  * un paramètre de `catch`, la variable d'un `for`/`for…of`/`for…in`, une
- * déclaration `function`/`const`/`let`/`var` d'un bloc ou du programme.
- * Une seule marche d'ancêtres pour tous les cas : la portée JS veut que la
- * plus proche masque tout le reste, quelle que soit sa nature (un paramètre
- * masque une fonction homonyme du fichier, une variable de bloc masque à
- * son tour un paramètre plus extérieur) — les traiter séparément avait
- * laissé passer un paramètre déstructuré/par défaut/de catch, ou une
- * variable locale homonyme d'une fonction du fichier (c-securite.js:522
- * avant cette révision ne voyait que les paramètres `Identifier` et
- * ignorait les portées de bloc et de `var`), relevé par la coordination le
- * 2026-09-28. `ancetres` vient de `walk.ancestor` sur le site d'appel (le
- * nœud lui-même en dernier élément).
+ * déclaration `function`/`const`/`let`/`var` (exportée ou non) d'un bloc ou
+ * du programme. Une seule marche d'ancêtres pour tous les cas : la portée JS
+ * veut que la plus proche masque tout le reste, quelle que soit sa nature
+ * (un paramètre masque une fonction homonyme du fichier, une variable de
+ * bloc masque à son tour un paramètre plus extérieur) — les traiter
+ * séparément avait laissé passer un paramètre déstructuré/par défaut/de
+ * catch, ou une variable locale homonyme d'une fonction du fichier, relevé
+ * par la coordination le 2026-09-28. `ancetres` vient de `walk.ancestor` sur
+ * le site d'appel (le nœud lui-même en dernier élément).
+ *
+ * Un bloc est scanné EN ENTIER avant de conclure, jamais sur la première
+ * correspondance dans l'ordre du texte. Une `var` n'appartient pas à son
+ * bloc mais à la fonction (ou au programme) qui la contient : elle est
+ * cherchée n'importe où dans cette fonction, hors fonctions imbriquées (voir
+ * `declarateursVar`) — sans quoi `function f(){ if (x) { var code =
+ * location.hash } eval(code) }` résolvait vers un `const code` extérieur.
+ * Une fonction et une `var` du même nom partagent la même liaison : la `var`
+ * écrite après la fonction est une écriture, que `estReaffecte` voit
+ * (relevé par la coordination le 2026-09-28 : `function cb(){} var cb =
+ * window.name;` résolvait vers la fonction). Un `with` rend tout nom
+ * potentiellement une propriété de son objet : rien n'y est résolu.
  *
  * Retourne `null` si aucune portée visible ne lie ce nom (probablement une
  * globale, ou une déclaration d'une autre unité) ; sinon l'une des formes :
  *   - `{type:'parametre', fonction, index, parent}` : paramètre positionnel
  *     simple d'une fonction — seul cas où la valeur peut être prouvée (un
  *     exécuteur de Promise, voir `estExecuteurPromise`) ;
- *   - `{type:'fonction-nommee', fonction}` : `function nom() {}` ;
- *   - `{type:'variable', kind, declarateur}` : `const`/`let`/`var nom = …` ;
+ *   - `{type:'fonction-nommee', fonction, portee, global}` : `function nom()
+ *     {}` dans `portee`, le bloc ou le programme qui la déclare ; `global`
+ *     indique une portée Programme, dont la valeur n'est jamais garantie
+ *     (voir `resoudreArgument`) ;
+ *   - `{type:'variable', kind, declarateur?, portee}` : `const`/`let nom =
+ *     …` du bloc `portee`, ou `var nom` de la fonction/du programme `portee`
+ *     (sans `declarateur` : une `var` n'est jamais résolue) ;
+ *   - `{type:'nom-de-fonction', fonction}` : le nom propre d'une expression
+ *     de fonction (`setTimeout(function boucle() { setTimeout(boucle) })`),
+ *     une liaison que le langage rend non modifiable ;
  *   - `{type:'autre'}` : une liaison existe à ce niveau (paramètre
- *     déstructuré/par défaut, catch, boucle, variable déstructurée) mais
- *     n'est jamais résolvable — la recherche s'arrête ici sans continuer
- *     vers l'extérieur.
+ *     déstructuré/par défaut, catch, boucle, variable déstructurée, classe,
+ *     import, `with`) mais n'est jamais résolvable — la recherche s'arrête
+ *     ici.
  */
 function trouverLiaisonVisible(nom, ancetres) {
   for (let i = ancetres.length - 2; i >= 0; i--) {
     const n = ancetres[i];
-    if (n.type === 'ArrowFunctionExpression' || n.type === 'FunctionExpression' || n.type === 'FunctionDeclaration') {
+    if (n.type === 'WithStatement') return { type: 'autre' };
+    if (estFonction(n)) {
       for (let idx = 0; idx < n.params.length; idx++) {
         const p = n.params[idx];
         if (p.type === 'Identifier' && p.name === nom) return { type: 'parametre', fonction: n, index: idx, parent: ancetres[i - 1] ?? null };
         if (nomsLies(p).includes(nom)) return { type: 'autre' };
       }
+      if (n.body.type === 'BlockStatement' && declarateursVar(n.body, nom).length) return { type: 'variable', kind: 'var', portee: n };
+      if (n.type === 'FunctionExpression' && n.id?.name === nom) return { type: 'nom-de-fonction', fonction: n };
     }
+    if ((n.type === 'ClassExpression' || n.type === 'ClassDeclaration') && n.id?.name === nom) return { type: 'autre' };
     if (n.type === 'CatchClause' && n.param && nomsLies(n.param).includes(nom)) return { type: 'autre' };
-    if ((n.type === 'ForOfStatement' || n.type === 'ForInStatement' || n.type === 'ForStatement') && n.left?.type === 'VariableDeclaration') {
-      for (const d of n.left.declarations) if (nomsLies(d.id).includes(nom)) return { type: 'autre' }; // change à chaque itération : jamais un littéral fiable
+    // La déclaration d'un `for` classique est dans `init`, celle d'un
+    // `for…of`/`for…in` dans `left` : ne lire que `left` laissait `for (let
+    // code = r.Formule; ;) eval(code)` résoudre vers un `const code`
+    // extérieur (relevé par la coordination le 2026-09-28).
+    const teteDeBoucle = n.type === 'ForStatement' ? n.init : (n.type === 'ForOfStatement' || n.type === 'ForInStatement') ? n.left : null;
+    if (teteDeBoucle?.type === 'VariableDeclaration') {
+      for (const d of teteDeBoucle.declarations) if (nomsLies(d.id).includes(nom)) return { type: 'autre' }; // change à chaque itération : jamais un littéral fiable
     }
-    if (n.type === 'BlockStatement' || n.type === 'Program') {
-      for (const stmt of n.body) {
-        if (stmt.type === 'FunctionDeclaration' && stmt.id?.name === nom) return { type: 'fonction-nommee', fonction: stmt };
-        if (stmt.type !== 'VariableDeclaration') continue;
-        for (const d of stmt.declarations) {
-          if (d.id.type === 'Identifier' && d.id.name === nom) return { type: 'variable', kind: stmt.kind, declarateur: d };
-          if (nomsLies(d.id).includes(nom)) return { type: 'autre' };
-        }
-      }
+    const instructions = instructionsDePortee(n);
+    if (instructions) {
+      const liaison = liaisonDeBloc(nom, instructions, n);
+      if (liaison) return liaison;
+      if ((n.type === 'Program' || n.type === 'StaticBlock') && declarateursVar(n, nom).length) return { type: 'variable', kind: 'var', portee: n };
     }
   }
   return null;
+}
+
+const estFonction = (n) => n.type === 'ArrowFunctionExpression' || n.type === 'FunctionExpression' || n.type === 'FunctionDeclaration';
+
+/** Instructions d'un nœud qui ouvre une portée de bloc (un `switch` en ouvre une seule pour tous ses `case`), `null` sinon. */
+function instructionsDePortee(n) {
+  if (n.type === 'Program' || n.type === 'BlockStatement' || n.type === 'StaticBlock') return n.body;
+  if (n.type === 'SwitchStatement') return n.cases.flatMap((c) => c.consequent);
+  return null;
+}
+
+/** Liaison de portée de bloc (`let`, `const`, `class`, `function`, `import`) de `nom` parmi `instructions`, `null` si aucune. */
+function liaisonDeBloc(nom, instructions, portee) {
+  let fonction = null;
+  let lexicale = null;
+  let autre = false;
+  for (const brut of instructions) {
+    if (brut.type === 'ImportDeclaration' && brut.specifiers.some((s) => s.local.name === nom)) autre = true;
+    const stmt = declarationEffective(brut);
+    if (stmt.type === 'FunctionDeclaration' && stmt.id?.name === nom) fonction = stmt;
+    else if (stmt.type === 'ClassDeclaration' && stmt.id?.name === nom) autre = true;
+    else if (stmt.type === 'VariableDeclaration' && stmt.kind !== 'var') {
+      for (const d of stmt.declarations) {
+        if (d.id.type === 'Identifier' && d.id.name === nom) lexicale = { kind: stmt.kind, declarateur: d };
+        else if (nomsLies(d.id).includes(nom)) autre = true;
+      }
+    }
+  }
+  if (autre || (fonction && lexicale)) return { type: 'autre' };
+  if (fonction) return { type: 'fonction-nommee', fonction, portee, global: portee.type === 'Program' };
+  if (lexicale) return { type: 'variable', ...lexicale, portee };
+  return null;
+}
+
+/**
+ * Déclarateurs `var nom` n'importe où sous `racine`, hors fonctions et blocs
+ * `static` imbriqués (qui ont leur propre portée de `var`) : une `var`
+ * appartient à la fonction ou au programme qui la contient, quel que soit
+ * le bloc où elle est écrite.
+ */
+function declarateursVar(racine, nom) {
+  const trouves = [];
+  const neDescendPas = () => {};
+  const visiteurs = {
+    FunctionDeclaration: neDescendPas,
+    FunctionExpression: neDescendPas,
+    ArrowFunctionExpression: neDescendPas,
+    StaticBlock: neDescendPas,
+    VariableDeclaration(n, st, c) {
+      for (const d of n.declarations) {
+        if (n.kind === 'var' && nomsLies(d.id).includes(nom)) trouves.push(d);
+        if (d.init) c(d.init, st);
+      }
+    },
+  };
+  for (const depart of racine.type === 'StaticBlock' ? racine.body : [racine]) acornWalk.recursive(depart, null, visiteurs);
+  return trouves;
 }
 
 /**
@@ -665,88 +774,273 @@ function estSourceDonneeWidget(noeud, ancetres) {
 }
 
 /**
- * Vrai si `nom` est réaffecté n'importe où dans `ast` : une affectation
- * directe ou composée (`nom = …`, `nom += …`), ou une mise à jour
- * (`nom++`). Une variable ou un paramètre réaffecté ne peut plus être
- * résolu de façon fiable vers sa valeur d'origine : elle peut avoir changé
- * entre la déclaration (ou le début de la fonction) et le site d'appel.
- * Recherche volontairement non bornée à la portée trouvée : plus
- * grossière, mais jamais moins sûre (un homonyme réaffecté ailleurs ne
- * peut, au pire, que faire traiter comme « inconnue » une liaison qui
- * aurait pu être résolue — jamais l'inverse). Relevé par la coordination le
- * 2026-09-28 : `let code = 'void 0'; code = r.Formule; eval(code)` restait
- * pris pour le littéral `'void 0'` sans ce garde-fou (axe D réel : NON
- * CONFORME 75 → CONFORME 89, alors qu'`eval(r.Formule)` en clair est NON
- * CONFORME 72).
+ * Vrai si la fonction `fonction` lie elle-même `nom` pour tout son corps :
+ * par un paramètre, par son propre nom (expression de fonction nommée), par
+ * une déclaration `function nom` au premier niveau de son corps, ou par une
+ * `var nom` n'importe où dans son corps hors fonctions imbriquées (une `var`
+ * remonte à la fonction qui la contient). Une déclaration `function nom` dans
+ * un bloc imbriqué n'en fait pas partie : elle ne lie `nom` que dans ce bloc
+ * en mode strict, et `portionsOmbragees` la traite comme tel.
  */
-function estReaffecte(nom, ast, walkAcorn) {
+function lieDansSaPorteeDeFonction(fonction, nom) {
+  if (fonction.params.some((p) => nomsLies(p).includes(nom))) return true;
+  if (fonction.type === 'FunctionExpression' && fonction.id?.name === nom) return true;
+  if (fonction.body.type !== 'BlockStatement') return false;
+  if (fonction.body.body.some((s) => { const d = declarationEffective(s); return d.type === 'FunctionDeclaration' && d.id?.name === nom; })) return true;
+  return declarateursVar(fonction.body, nom).length > 0;
+}
+
+/**
+ * Plages (`[début, fin[` en positions du source) des sous-arbres de `portee`
+ * où `nom` désigne une AUTRE liaison que celle qu'on vérifie : une fonction
+ * imbriquée qui lie ce nom pour tout son corps (voir
+ * `lieDansSaPorteeDeFonction`), un `catch` qui le lie, une boucle
+ * `for (let|const nom …)`, un bloc, un `switch` ou un bloc `static` imbriqué
+ * qui déclare son propre `nom`. Une écriture dans une telle plage vise
+ * l'homonyme, jamais la liaison vérifiée. Sans cette exclusion, les `r++` de
+ * quatre boucles `for (let r = 0; …)` sans rapport désarmaient l'exemption de
+ * `await new Promise(r => setTimeout(r, …))` (whackacell, relevé par la
+ * coordination le 2026-09-28). `portee` elle-même n'est jamais exclue : c'est
+ * elle qui porte la liaison vérifiée. Une `var` n'ouvre pas de portée de
+ * bloc : elle n'est une plage d'exclusion que dans sa propre fonction.
+ */
+function portionsOmbragees(nom, portee, walkAcorn) {
+  const plages = [];
+  const lie = (declaration) => declaration?.type === 'VariableDeclaration' && declaration.kind !== 'var' && declaration.declarations.some((d) => nomsLies(d.id).includes(nom));
+  const fonction = (n) => { if (n !== portee && lieDansSaPorteeDeFonction(n, nom)) plages.push([n.start, n.end]); };
+  const bloc = (n) => {
+    if (n === portee) return;
+    if (liaisonDeBloc(nom, instructionsDePortee(n), n) || (n.type === 'StaticBlock' && declarateursVar(n, nom).length)) plages.push([n.start, n.end]);
+  };
+  walkAcorn.simple(portee, {
+    FunctionDeclaration: fonction,
+    FunctionExpression: fonction,
+    ArrowFunctionExpression: fonction,
+    CatchClause(n) { if (n.param && nomsLies(n.param).includes(nom)) plages.push([n.start, n.end]); },
+    ForStatement(n) { if (lie(n.init)) plages.push([n.start, n.end]); },
+    ForOfStatement(n) { if (lie(n.left)) plages.push([n.start, n.end]); },
+    ForInStatement(n) { if (lie(n.left)) plages.push([n.start, n.end]); },
+    BlockStatement: bloc,
+    SwitchStatement: bloc,
+    StaticBlock: bloc,
+  });
+  return plages;
+}
+
+/**
+ * Vrai si la liaison `nom` de `portee` peut être écrite depuis `portee`.
+ * Dans une portée de fonction ou de bloc, le langage ne permet que ces
+ * écritures, toutes visibles dans le texte : une affectation directe,
+ * composée ou déstructurée (`nom = …`, `nom += …`, `({nom} = …)`,
+ * `[nom] = […]`), une mise à jour (`nom++`), la variable d'un `for…of`/
+ * `for…in` sans déclaration ou en `var` (réaffectée à chaque itération), une
+ * redéclaration `var nom = …` (même liaison qu'un paramètre ou une `var`
+ * de la même fonction), et un `eval()` direct, qui exécute du code dans
+ * cette même portée. La coordination a mesuré plusieurs détournements de la
+ * seule forme `nom = …` (2026-09-28) : déstructuration, boucle sans
+ * déclaration, écriture par un eval imbriqué. Bornée à la portée qui porte
+ * la liaison, homonymes imbriqués exclus (voir `portionsOmbragees`) : une
+ * recherche par nom dans tout le fichier confondait des liaisons sans
+ * rapport entre elles (les `r++` de boucles sans rapport sur whackacell).
+ */
+function estReaffecte(nom, portee, walkAcorn) {
+  const plages = portionsOmbragees(nom, portee, walkAcorn);
+  const vise = (n) => !plages.some(([debut, fin]) => n.start >= debut && n.start < fin);
+  const varDeclare = (d) => d?.type === 'VariableDeclaration' && d.kind === 'var' && d.declarations.some((x) => nomsLies(x.id).includes(nom));
   let trouve = false;
-  walkAcorn.simple(ast, {
-    AssignmentExpression(n) { if (n.left.type === 'Identifier' && n.left.name === nom) trouve = true; },
-    UpdateExpression(n) { if (n.argument.type === 'Identifier' && n.argument.name === nom) trouve = true; },
+  walkAcorn.simple(portee, {
+    AssignmentExpression(n) {
+      if (!vise(n)) return;
+      if (n.left.type === 'Identifier' && n.left.name === nom) trouve = true;
+      else if ((n.left.type === 'ObjectPattern' || n.left.type === 'ArrayPattern') && nomsLies(n.left).includes(nom)) trouve = true;
+    },
+    UpdateExpression(n) { if (vise(n) && n.argument.type === 'Identifier' && n.argument.name === nom) trouve = true; },
+    ForOfStatement(n) { if (vise(n) && ((n.left.type === 'Identifier' && n.left.name === nom) || varDeclare(n.left) || (n.left.type !== 'VariableDeclaration' && nomsLies(n.left).includes(nom)))) trouve = true; },
+    ForInStatement(n) { if (vise(n) && ((n.left.type === 'Identifier' && n.left.name === nom) || varDeclare(n.left) || (n.left.type !== 'VariableDeclaration' && nomsLies(n.left).includes(nom)))) trouve = true; },
+    VariableDeclaration(n) { if (vise(n) && n.kind === 'var' && n.declarations.some((d) => d.init && nomsLies(d.id).includes(nom))) trouve = true; },
+    CallExpression(n) { if (vise(n) && n.callee.type === 'Identifier' && n.callee.name === 'eval') trouve = true; },
   });
   return trouve;
 }
 
-/**
- * `estReaffecte`, complété par un compte des déclarations : une seconde
- * déclaration du même nom ailleurs dans le fichier (`var code = "<a>"; …;
- * var code = "1";`) équivaut, pour ce qui nous occupe, à une réaffectation
- * — la valeur lue à l'exécution n'est pas forcément celle du déclarateur
- * trouvé par `trouverLiaisonVisible`. Utilisé uniquement pour une liaison
- * `let`/`var` (jamais nécessaire pour un `const`, qui ne peut ni être
- * réaffecté ni redéclaré — la syntaxe l'interdit).
- */
-function estReaffecteOuRedeclare(nom, ast, walkAcorn) {
-  if (estReaffecte(nom, ast, walkAcorn)) return true;
-  let compte = 0;
-  walkAcorn.simple(ast, { VariableDeclarator(d) { if (d.id.type === 'Identifier' && d.id.name === nom) compte++; } });
-  return compte > 1;
+/** Formes qui produisent toujours une chaîne, quel que soit leur contenu : littéral, gabarit, concaténation avec `+`, `atob()`, `String.fromCharCode()`. */
+function produitToujoursUneChaine(noeud) {
+  return (noeud?.type === 'Literal' && typeof noeud.value === 'string') || noeud?.type === 'TemplateLiteral' ||
+    (noeud?.type === 'BinaryExpression' && noeud.operator === '+') ||
+    (noeud?.type === 'CallExpression' && (nomFinal(noeud.callee) === 'atob' || /(^|\.)String\.fromCharCode$/.test(nomPointe(noeud.callee) || '')));
 }
 
 /**
- * Résout un argument dynamique (de `setTimeout`/`setInterval`, `eval`,
- * `Function`) vers l'une de trois issues : une fonction manifeste (jamais
- * signalée), une chaîne littérale (auditée comme le reste du code, y
- * compris via un nom de variable qui la porte), ou une valeur réellement
- * inconnue de l'analyse statique. Ne résout QUE vers une liaison visible
- * depuis le site d'appel (voir `trouverLiaisonVisible`) et jamais
- * réaffectée : un `const`, ou un `let`/`var` sans aucune affectation ni
- * redéclaration ailleurs dans le fichier — jamais une recherche globale
- * sans portée (l'ancienne approche, relevé par la coordination le
- * 2026-09-28, prenait pour argent comptant la première ou la dernière
- * déclaration homonyme trouvée n'importe où).
+ * Écritures de la liaison `nom` de `portee` (initialisation ou affectation
+ * visible dans `portee`) qui y placent une chaîne (voir
+ * `produitToujoursUneChaine`) ou une donnée reçue par le widget (voir
+ * `estSourceDonneeWidget`) ; `null` s'il n'y en a aucune. Un minuteur sur une
+ * telle liaison exécute une chaîne dont l'analyse ne peut pas garantir le
+ * contenu : sans ce contrôle, `let code = "fetch(…)"; setTimeout(code, 0)`
+ * ne donnait qu'une information sans pénalité, quand `setTimeout("fetch(…)",
+ * 0)` est audité (une liaison `let` n'est plus jamais résolue vers sa
+ * valeur). `litteraux` rend les chaînes littérales écrites, pour que leur
+ * contenu soit audité comme du code à leur propre emplacement. `ancetres`
+ * sont ceux du site d'appel, dont `portee` fait partie : ils complètent ceux
+ * de chaque écriture pour résoudre une donnée comme `r.Formule` depuis
+ * l'endroit où elle est écrite.
  */
-function resoudreArgument(noeud, { ast, walkAcorn, ancetres }) {
+function ecrituresSuspectes(nom, portee, ancetres, walkAcorn) {
+  const plages = portionsOmbragees(nom, portee, walkAcorn);
+  const vise = (n) => !plages.some(([debut, fin]) => n.start >= debut && n.start < fin);
+  const exterieurs = ancetres.slice(0, Math.max(0, ancetres.indexOf(portee)));
+  let suspecte = false;
+  const litteraux = [];
+  const examiner = (valeur, ancetresEcriture) => {
+    if (!valeur) return;
+    if (produitToujoursUneChaine(valeur)) {
+      suspecte = true;
+      const texte = plierLitteraux(valeur) ?? decoderAtobLitteral(valeur) ?? decoderFromCharCodeLitteral(valeur);
+      if (texte !== null) litteraux.push({ noeud: valeur, valeur: texte });
+    } else if (estSourceDonneeWidget(valeur, [...exterieurs, ...ancetresEcriture, valeur])) {
+      suspecte = true;
+    }
+  };
+  walkAcorn.ancestor(portee, {
+    VariableDeclarator(n, _etat, anc) { if (vise(n) && n.id.type === 'Identifier' && n.id.name === nom) examiner(n.init, anc); },
+    AssignmentExpression(n, _etat, anc) { if (vise(n) && n.left.type === 'Identifier' && n.left.name === nom) examiner(n.right, anc); },
+  });
+  return suspecte ? { litteraux } : null;
+}
+
+/**
+ * Vrai si `fonction` — un exécuteur `function(resolve, reject) {…}` (jamais
+ * une fléchée, qui n'a pas son propre `arguments`) — référence `arguments`
+ * n'importe où dans son corps. En mode non strict, `arguments[0] = x`
+ * réaffecte silencieusement le paramètre nommé correspondant, contournant
+ * toute vérification qui ne regarde que le nom `resolve`/`reject` lui-même
+ * (relevé par la coordination le 2026-09-28). Conservateur à dessein : toute
+ * référence, même une simple lecture, désarme l'exemption plutôt que
+ * d'essayer de distinguer une lecture innocente d'une écriture, ou un
+ * `arguments` imbriqué dans une fonction interne qui a le sien.
+ */
+function executeurUtiliseArguments(fonction, walkAcorn) {
+  if (fonction.type !== 'FunctionExpression') return false;
+  let trouve = false;
+  walkAcorn.simple(fonction, { Identifier(n) { if (n.name === 'arguments') trouve = true; } });
+  return trouve;
+}
+
+/**
+ * Décode le contenu littéral d'un initialisateur, quelle que soit sa forme
+ * (chaîne directe, concaténation de constantes, `atob(...)`,
+ * `String.fromCharCode(...)`, ou un littéral non-chaîne comme `null`/un
+ * nombre — voir `coercerLitteralNonChaine`). Partagé entre la résolution
+ * `const` d'eval()/Function() et celle, plus large, d'un minuteur.
+ */
+function decoderInitialisateur(init) {
+  return plierLitteraux(init) ?? decoderAtobLitteral(init) ?? decoderFromCharCodeLitteral(init) ?? coercerLitteralNonChaine(init);
+}
+
+/**
+ * Résout un identifiant vers une chaîne littérale UNIQUEMENT s'il désigne,
+ * depuis le site d'appel, un `const` simple (ni déstructuré, ni variable de
+ * boucle) : le seul cas où le langage garantit qu'aucune écriture, d'où
+ * qu'elle vienne, ne change sa valeur. Aucune recherche d'écriture n'est
+ * donc à contourner. Décision de la coordination le 2026-09-28, après
+ * plusieurs détournements d'une résolution des `let`/`var` « jamais
+ * réaffectés » : pour eval()/Function(), toute autre liaison reste une
+ * valeur que l'analyse ne peut pas garantir.
+ */
+function resoudreConstLitteral(noeud, ancetres) {
+  if (noeud?.type !== 'Identifier') return null;
+  const liaison = trouverLiaisonVisible(noeud.name, ancetres);
+  if (liaison?.type !== 'variable' || liaison.kind !== 'const') return null;
+  return decoderInitialisateur(liaison.declarateur.init);
+}
+
+/**
+ * Résout l'argument d'un minuteur (`setTimeout`/`setInterval`) vers l'une de
+ * trois issues : une fonction garantie (jamais signalée), une chaîne
+ * littérale (auditée comme le reste du code), ou une valeur que l'analyse ne
+ * peut pas garantir (`raison` dit pourquoi, pour le constat). Décision de la
+ * coordination le 2026-09-28, après plusieurs détournements de l'ancienne
+ * approche fondée sur « pas de réaffectation détectée » : n'est résolu que
+ * ce dont le LANGAGE garantit la valeur au moment de l'appel.
+ *   - un `const` (comme pour eval/Function, voir `resoudreConstLitteral`) ;
+ *   - une déclaration de fonction seule de son nom dans une portée de
+ *     fonction ou de bloc (voir `trouverLiaisonVisible`), sans aucune
+ *     écriture possible dans cette portée (`estReaffecte`, eval direct
+ *     compris) : une telle liaison ne s'écrit que depuis le texte de sa
+ *     portée ;
+ *   - le `resolve`/`reject` d'un exécuteur de Promise, aux mêmes conditions,
+ *     plus l'absence d'`arguments` dans un exécuteur `function` (voir
+ *     `executeurUtiliseArguments`).
+ * Une déclaration de fonction au niveau du programme n'est JAMAIS garantie :
+ * dans un script classique, c'est une propriété modifiable de l'objet global,
+ * que n'importe quel script de la page réécrit sans jamais écrire son nom
+ * (`window[k] = v`, un alias de `window`, `Object.assign(window, …)`) — la
+ * vérification « aucun autre fichier ne l'écrit » ne pouvait pas le garantir.
+ */
+function resoudreArgument(noeud, { walkAcorn, ancetres }) {
   if (!noeud) return { type: 'inconnue' };
   if (noeud.type === 'ArrowFunctionExpression' || noeud.type === 'FunctionExpression') return { type: 'fonction' };
   if (noeud.type !== 'Identifier') return { type: 'autre' };
 
+  // Une liaison non garantie qui reçoit une chaîne ou une donnée exécute un
+  // contenu inconnu : même traitement qu'un eval() dont l'argument ne peut
+  // pas être garanti (voir `ecrituresSuspectes`).
+  const nonGarantie = (portee, raison) => {
+    const ecritures = ecrituresSuspectes(noeud.name, portee, ancetres, walkAcorn);
+    return ecritures ? { type: 'chaine-non-garantie', litteraux: ecritures.litteraux } : { type: 'inconnue', raison };
+  };
+
   const liaison = trouverLiaisonVisible(noeud.name, ancetres);
-  if (!liaison || liaison.type === 'autre') return { type: 'inconnue' };
+  if (!liaison) return nonGarantie(ancetres[0], "n'est déclaré dans aucune portée visible de ce fichier");
+  if (liaison.type === 'autre') return { type: 'inconnue', raison: 'est lié par une forme que l\'analyse ne suit pas (paramètre déstructuré, variable de boucle, `catch`, classe, import ou `with`)' };
 
   if (liaison.type === 'parametre') {
-    if (estExecuteurPromise(liaison.fonction, liaison.parent, liaison.index) && !estReaffecte(noeud.name, ast, walkAcorn)) {
-      return { type: 'fonction' };
-    }
-    return { type: 'inconnue' };
+    const executeur = estExecuteurPromise(liaison.fonction, liaison.parent, liaison.index);
+    // Toute la fonction, paramètres compris : la valeur par défaut d'un
+    // troisième paramètre (`function (resolve, reject, x = (resolve = …))`)
+    // s'évalue avant le corps et peut réécrire `resolve`.
+    if (executeur && !estReaffecte(noeud.name, liaison.fonction, walkAcorn) && !executeurUtiliseArguments(liaison.fonction, walkAcorn)) return { type: 'fonction' };
+    return nonGarantie(liaison.fonction, executeur
+      ? "est le paramètre d'un exécuteur de Promise, mais peut être réécrit avant l'appel"
+      : "est un paramètre, dont la valeur dépend de l'appelant");
+  }
+
+  // Seul un eval() direct du corps peut encore y déclarer une `var`
+  // homonyme qui masque ce nom : `estReaffecte` le voit.
+  if (liaison.type === 'nom-de-fonction') {
+    if (!estReaffecte(noeud.name, liaison.fonction.body, walkAcorn)) return { type: 'fonction' };
+    return nonGarantie(liaison.fonction.body, 'est le nom d\'une expression de fonction, mais un eval() de son corps peut le masquer');
   }
 
   if (liaison.type === 'fonction-nommee') {
-    return estReaffecte(noeud.name, ast, walkAcorn) ? { type: 'inconnue' } : { type: 'fonction' };
+    if (!liaison.global && !estReaffecte(noeud.name, liaison.portee, walkAcorn)) return { type: 'fonction' };
+    return nonGarantie(liaison.portee, liaison.global
+      ? "est une fonction déclarée au niveau global, que n'importe quel script de la page peut remplacer"
+      : 'est une fonction déclarée, mais réécrite dans sa portée');
   }
 
-  // liaison.type === 'variable'
-  if (estReaffecteOuRedeclare(noeud.name, ast, walkAcorn)) return { type: 'inconnue' };
-  const init = liaison.declarateur.init;
-  if (init?.type === 'ArrowFunctionExpression' || init?.type === 'FunctionExpression') return { type: 'fonction' };
-  const litteral = plierLitteraux(init);
-  return litteral !== null ? { type: 'litteral', valeur: litteral } : { type: 'inconnue' };
+  if (liaison.kind === 'const') {
+    const init = liaison.declarateur.init;
+    if (init?.type === 'ArrowFunctionExpression' || init?.type === 'FunctionExpression') return { type: 'fonction' };
+    const litteral = decoderInitialisateur(init);
+    if (litteral !== null) return { type: 'litteral', valeur: litteral };
+    return nonGarantie(liaison.portee, 'est une constante dont la valeur ne se lit pas dans le code');
+  }
+  return nonGarantie(liaison.portee, `est une variable \`${liaison.kind}\`, que d'autres instructions peuvent réaffecter`);
 }
 
-/** `String.fromCharCode(...)` retourne toujours une chaîne : si tous ses arguments sont des codes numériques littéraux, son résultat est aussi peu une boîte noire qu'un littéral direct — comme `atob()`. */
+/**
+ * `String.fromCharCode(...)` retourne toujours une chaîne : si tous ses
+ * arguments sont des codes numériques littéraux, son résultat est aussi peu
+ * une boîte noire qu'un littéral direct — comme `atob()`. La comparaison
+ * tolère un alias global de tête (`window.String.fromCharCode`,
+ * `self.String.fromCharCode`…), comme le fait déjà `nomFinal` ailleurs dans
+ * ce fichier pour `eval`/`Function`/`document.write` : une correspondance
+ * exacte manquait cette forme pourtant courante en code minifié/empaqueté
+ * (relevé par la coordination le 2026-09-28).
+ */
 function decoderFromCharCodeLitteral(noeud) {
-  if (noeud?.type !== 'CallExpression' || nomPointe(noeud.callee) !== 'String.fromCharCode' || !noeud.arguments.length) return null;
+  if (noeud?.type !== 'CallExpression' || !/(^|\.)String\.fromCharCode$/.test(nomPointe(noeud.callee) || '') || !noeud.arguments.length) return null;
   const codes = [];
   for (const a of noeud.arguments) {
     if (a.type !== 'Literal' || typeof a.value !== 'number') return null;
@@ -806,7 +1100,7 @@ function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, colonneAppel
   });
 
   if (texteBrut === null) {
-    return { constats: [constatCalculeOuIllisible("Son argument est calculé à l'exécution : rien de ce qui sera réellement exécuté n'est lu par l'analyse statique.")] };
+    return { constats: [constatCalculeOuIllisible("L'analyse statique ne peut pas garantir la valeur de son argument au moment de l'appel : ce qui sera réellement exécuté n'est pas lu.")] };
   }
 
   if (profondeur >= MAX_PROFONDEUR_CODE_IMBRIQUE) {
@@ -861,26 +1155,49 @@ function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, colonneAppel
 
 const IMPACT_EXECUTION_CHAINE = "Toute donnée qui atteint cet appel devient du code exécuté avec l'accès du widget au document. C'est rédhibitoire pour un hébergement sur instance officielle, et cela empêche toute politique de sécurité de contenu stricte.";
 
+const litterauxMaterialises = new WeakSet();
+
+/**
+ * Matérialise les chaînes littérales écrites dans une liaison que l'analyse
+ * ne peut pas garantir (voir `ecrituresSuspectes`), chacune à son propre
+ * emplacement : le constat critique du site d'appel dit que la valeur
+ * exécutée n'est pas garantie, jamais que ces contenus échappent à l'audit.
+ * Leur rappel mineur est omis, le constat critique le couvre. Plusieurs
+ * sites d'appel peuvent lire la même liaison : chaque littéral n'est
+ * matérialisé qu'une fois (le chemin synthétique est celui du littéral), et
+ * n'est marqué qu'une fois matérialisé, pour qu'un texte qui ne se parse
+ * qu'en corps de fonction (`return …`, lu par Function) le soit encore
+ * après un eval() qui l'a lu en vain.
+ */
+function materialiserLitterauxEcrits(ctx, { unite, ligneDe, litteraux, profondeur, envelopper = false }) {
+  for (const { noeud, valeur } of litteraux) {
+    if (litterauxMaterialises.has(noeud)) continue;
+    const { fichier } = traiterSiteConstruction(ctx, {
+      fichierOrigine: unite.chemin, ligneAppel: ligneDe(noeud), colonneAppel: (noeud.loc?.start?.column ?? 0) + 1, extrait: extraireSource(unite.source, noeud),
+      texteBrut: envelopper ? `(function(){${valeur}})` : valeur, profondeur, regle: 'C-XSS-03', titreConstruction: '', texteConstruction: '', remediationSupprimer: '', impactConstruction: '',
+    });
+    if (fichier) litterauxMaterialises.add(noeud);
+  }
+}
+
 /**
  * eval()/Function() (directs ou indirects). `envelopper` corrige la
  * sémantique de `Function`/`new Function` : leur corps s'exécute comme
  * l'intérieur d'une fonction (où `return` est valide), contrairement à
  * `eval()` ou au script d'un worker, qui s'exécutent en portée de script.
- * `resoudreArgument` couvre le cas d'un identifiant qui porte une chaîne
- * littérale déclarée ailleurs dans le même fichier (`const code = "…";
- * eval(code)`) : sans lui, ce détour laissait ce contenu hors de portée de
- * l'analyse alors qu'il est parfaitement lisible (relevé par la
- * coordination le 2026-09-28) — et, comme pour `setTimeout`, seule une
- * liaison visible depuis le site d'appel et jamais réaffectée est résolue
- * (voir `resoudreArgument`) : `let code = 'void 0'; code = r.Formule;
- * eval(code)` doit être traité comme calculé à l'exécution, pas comme
- * `'void 0'` (relevé par la coordination le 2026-09-28).
+ * Un identifiant n'est résolu que s'il désigne un `const` visible depuis le
+ * site d'appel (voir `resoudreConstLitteral`) : `const code = "…";
+ * eval(code)` est audité comme le littéral écrit en place, tout autre
+ * identifiant (let, var, paramètre…) reste une valeur que l'analyse ne peut
+ * pas garantir — décision de la coordination le 2026-09-28. Les chaînes
+ * littérales écrites dans une telle liaison restent auditées (voir
+ * `materialiserLitterauxEcrits`).
  */
-function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, ast, walkAcorn, ancetres, profondeur, titreConstruction, texteConstruction, remediationSupprimer, envelopper = false }) {
-  let brut = plierLitteraux(argument) ?? decoderAtobLitteral(argument);
+function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, walkAcorn, ancetres, profondeur, titreConstruction, texteConstruction, remediationSupprimer, envelopper = false }) {
+  const brut = decoderInitialisateur(argument) ?? resoudreConstLitteral(argument, ancetres);
   if (brut === null && argument?.type === 'Identifier') {
-    const resolution = resoudreArgument(argument, { ast, walkAcorn, ancetres });
-    if (resolution.type === 'litteral') brut = resolution.valeur;
+    const resolution = resoudreArgument(argument, { walkAcorn, ancetres });
+    if (resolution.type === 'chaine-non-garantie') materialiserLitterauxEcrits(ctx, { unite, ligneDe, litteraux: resolution.litteraux, profondeur, envelopper });
   }
   const texteAnalyse = brut !== null && envelopper ? `(function(){${brut}})` : brut;
   return traiterSiteConstruction(ctx, {
@@ -962,27 +1279,50 @@ function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, anc
   // fonction (le motif `setTimeout(callback, delai)`, très courant) — d'où
   // le palier « à vérifier », pas une critique systématique.
   if (arg.type === 'Identifier') {
-    const resolution = resoudreArgument(arg, { ast, walkAcorn, ancetres });
+    const resolution = resoudreArgument(arg, { walkAcorn, ancetres });
     if (resolution.type === 'fonction') return [];
     if (resolution.type === 'litteral') {
       return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: resolution.valeur, profondeur });
     }
+    if (resolution.type === 'chaine-non-garantie') {
+      materialiserLitterauxEcrits(ctx, { unite, ligneDe, litteraux: resolution.litteraux, profondeur });
+      return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: null, profondeur });
+    }
     return [constatMinuteurNonResolu({
       unite, ligneDe, n, nom,
-      motif: `Le premier argument de \`${nom}\` est un identifiant qui ne résout, dans ce fichier, ni vers une fonction ni vers une chaîne littérale : son contenu réel n'est connu qu'à l'exécution.`,
+      motif: `Le premier argument de \`${nom}\`, \`${arg.name}\`, ${resolution.raison} : l'analyse statique ne peut pas garantir qu'il s'agit encore d'une fonction au moment de l'appel.`,
     })];
   }
 
-  // Formes qui produisent TOUJOURS une chaîne, quel que soit leur contenu
-  // (littéral, gabarit, concaténation, atob()/String.fromCharCode()) : si le
-  // contenu ne se replie pas en littéral, il est réellement « calculé à
-  // l'exécution », au même titre qu'un eval() à argument calculé — pas une
-  // simple inconnue à vérifier, `traiterSiteConstruction` (texteBrut===null)
-  // s'en charge.
-  const estCandidat = arg.type === 'Literal' || arg.type === 'TemplateLiteral' || arg.type === 'BinaryExpression' ||
-    (arg.type === 'CallExpression' && (nomFinal(arg.callee) === 'atob' || nomPointe(arg.callee) === 'String.fromCharCode'));
+  // Un opérateur binaire AUTRE que `+` (soustraction, comparaison,
+  // bit-à-bit…) ne produit JAMAIS de chaîne, quels que soient ses opérandes
+  // (coercion numérique ou booléenne garantie par la spécification) : même
+  // non résolu (`a - b` où ni `a` ni `b` n'est connu), le résultat ne peut
+  // être qu'un nombre ou un booléen, jamais du texte attaquable. Le traiter
+  // comme un candidat « chaîne garantie » produisait un faux bloquant sur
+  // `setTimeout(a - b, …)` (relevé par la coordination le 2026-09-28) :
+  // provablement sûr, donc aucun constat, pas même une information.
+  if (arg.type === 'BinaryExpression' && arg.operator !== '+') return [];
 
-  if (estCandidat) {
+  // Un littéral NON-chaîne (null, nombre, booléen) a une valeur ENTIÈREMENT
+  // connue à la lecture — `ToString()` la détermine de façon déterministe,
+  // ce n'est pas moins un littéral qu'une chaîne. `setTimeout(null, 1)` et
+  // `setTimeout(0)` ressortaient à tort en critique+bloquant avec le texte
+  // « calculé à l'exécution », alors que rien n'est calculé (relevé par la
+  // coordination le 2026-09-28). Audité comme le reste du modèle du
+  // littéral : mineur, jamais un faux bloquant.
+  const nonChaineLitterale = coercerLitteralNonChaine(arg);
+  if (nonChaineLitterale !== null) {
+    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: nonChaineLitterale, profondeur });
+  }
+
+  // Formes qui produisent TOUJOURS une chaîne, quel que soit leur contenu
+  // (littéral, gabarit, concaténation avec `+`, atob()/String.fromCharCode())
+  // : si le contenu ne se replie pas en littéral, il est réellement
+  // « calculé à l'exécution », au même titre qu'un eval() à argument calculé
+  // — pas une simple inconnue à vérifier, `traiterSiteConstruction`
+  // (texteBrut===null) s'en charge.
+  if (produitToujoursUneChaine(arg)) {
     const texteBrut = plierLitteraux(arg) ?? decoderAtobLitteral(arg) ?? decoderFromCharCodeLitteral(arg);
     return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut, profondeur });
   }
