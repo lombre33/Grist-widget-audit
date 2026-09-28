@@ -22,4 +22,30 @@ export GWAUDIT_CHROMIUM_PATH
 CIBLE="${1:?usage: entrypoint.sh <url-du-widget-a-auditer>}"
 
 mkdir -p /out
-exec node bin/gwaudit.js "$CIBLE" --json --sortie /out
+
+# Plafond de durée au niveau du conteneur (défense en profondeur), ajouté
+# le 2026-09-28 après qu'une revue a trouvé une expression régulière à
+# retour arrière catastrophique dans une règle de l'axe F (F-RGAA-05,
+# src/regles/f-conformite.js) qui a bloqué un audit reproductible sur un
+# widget officiel Grist. La règle elle-même se corrige ailleurs (hors
+# périmètre de ce fil, pas touchée ici) — mais la classe de bug reste :
+# analyseStatique() (src/moteur/statique.js) exécute les axes A/B/C/F en
+# JavaScript synchrone dans CE process, sans aucune limite propre, et un
+# thread bloqué par du retour arrière ne peut structurellement pas
+# exécuter le moindre setTimeout côté outil pour s'auto-interrompre. Seul
+# un mécanisme externe au process peut couper un blocage de cette nature
+# — vérifié ici avec une vraie boucle Node synchrone et sans gestionnaire
+# de signal : `timeout` la termine par un simple SIGTERM, sans même avoir
+# besoin du repli -k (voir docker/README-V2-VERIFICATIONS.md point 6).
+#
+# 480 s = marge au-dessus de la somme des plafonds déjà internes à l'outil
+# (clone git 120 s, npm audit 120 s, scénario axe D ~90 s) : large pour ne
+# jamais couper un audit légitime, borné pour ne jamais bloquer
+# indéfiniment la file qui sérialise les jobs en V2 (constat 11, §5).
+# -k 10 : repli SIGKILL 10 s après le SIGTERM initial, au cas où un futur
+# changement du process ajouterait un gestionnaire de signal qui l'ignore
+# ou n'a pas l'occasion de s'exécuter. Le code de sortie 124 (timeout) ou
+# 137 (tué par SIGKILL) signale sans ambiguïté un job coupé par ce
+# plafond, à distinguer d'un échec normal de gwaudit — utile à
+# l'intégrateur qui appellera ce conteneur (§5, hors de ce dépôt).
+exec timeout -k 10 480 node bin/gwaudit.js "$CIBLE" --json --sortie /out

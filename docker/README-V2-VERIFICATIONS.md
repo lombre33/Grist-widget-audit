@@ -92,6 +92,32 @@ alloue délibérément au-delà doit voir son conteneur tué par le noyau (`dock
 compose ... ps` montre un statut OOMKilled), pas planter Chromium en
 silence ni continuer indéfiniment.
 
+## 6. Le plafond de durée coupe réellement un job bloqué, y compris Chromium
+
+Ajouté le 2026-09-28 (`docker/execution/entrypoint.sh` enveloppe désormais
+l'audit dans `timeout -k 10 480 node …`, voir `docs/ARCHITECTURE-V2.md`
+§4). Vérifié hors conteneur qu'un simple SIGTERM suffit à tuer un process
+Node bloqué en boucle synchrone — reste propre au conteneur :
+
+```bash
+# Doit se terminer aux alentours de 480 s (pas avant, pas après), avec un
+# code de sortie 124 ou 137 — jamais tourner indéfiniment :
+docker compose -f docker-compose.v2-execution.yml run --rm execution-audit \
+  https://exemple-qui-declenche-un-blocage-connu.invalid
+docker compose -f docker-compose.v2-execution.yml ps -a   # confirmer le code de sortie
+```
+
+Si un widget hostile fait tourner un sous-processus (Chromium notamment)
+qui survit à la fin de `node`, confirmer qu'aucun processus ne persiste
+après ce délai :
+
+```bash
+docker compose -f docker-compose.v2-execution.yml run --rm -d execution-audit \
+  https://exemple-qui-declenche-un-blocage-connu.invalid
+# quelques secondes après le plafond, sur l'hôte :
+docker exec <id-conteneur> ps aux 2>&1 || echo 'conteneur déjà détruit — attendu'
+```
+
 ---
 
 Ce fichier documente des vérifications à faire, pas des résultats obtenus —

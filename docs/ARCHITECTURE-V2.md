@@ -256,6 +256,34 @@ entièrement remplacer — à éprouver sur le VPS d'Antoine.
 - **Un job = un conteneur à usage unique.** Un pool de conteneurs vierges
   pré-chauffés peut réduire la latence, mais aucun ne doit survivre à un
   second job.
+- **Plafond de durée du job, au niveau du conteneur.** Ajouté le
+  2026-09-28 après qu'une revue a trouvé, dans une règle de l'axe F
+  (`F-RGAA-05`), une expression régulière à retour arrière catastrophique
+  qui a bloqué un audit reproductible sur un widget officiel Grist. La
+  règle se corrige ailleurs (hors périmètre de ce document), mais la
+  classe de bug reste : `analyseStatique()` (`src/moteur/statique.js`)
+  exécute les axes A/B/C/F en JavaScript synchrone dans le même process
+  que le reste de l'outil, sans aucune limite propre — et un thread
+  Node bloqué par du retour arrière ne peut structurellement pas exécuter
+  le moindre `setTimeout` interne pour s'auto-interrompre (le clonage git
+  et `npm audit` ont déjà chacun leur propre plafond en sous-processus,
+  120 s ; l'axe D a le sien, ~90 s ; seule cette phase n'en avait aucun).
+  Seul un mécanisme externe au process peut couper un blocage de cette
+  nature : `docker/execution/entrypoint.sh` enveloppe désormais tout
+  l'audit dans `timeout -k 10 480 node bin/gwaudit.js …` — 480 s de marge
+  au-dessus de la somme des plafonds internes déjà connus, pour ne jamais
+  couper un audit légitime tout en bornant ce que la file d'attente qui
+  sérialise les jobs (constat 11, §5) peut rester bloquée par un seul job
+  pathologique. Vérifié hors conteneur avec une vraie boucle Node
+  synchrone sans gestionnaire de signal : un simple SIGTERM suffit à la
+  tuer immédiatement, le repli `-k` en SIGKILL n'a même pas été
+  nécessaire ; reste à confirmer en conteneur réel, notamment que la
+  destruction du process 1 du conteneur (`timeout`, lui-même remplacé par
+  `exec`) entraîne bien celle d'un éventuel Chromium orphelin par arrêt de
+  l'espace de noms PID — propriété standard de Docker/Linux, pas
+  spécifique à ce script, mais jamais observée ici faute de pouvoir
+  démarrer un conteneur (voir `docker/README-V2-VERIFICATIONS.md` point
+  6).
 
 ### Proposition concrète pour le VPS d'Antoine (Debian 13)
 
@@ -456,10 +484,18 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
   `package.json`, `package-lock.json`) et prévient dans ce fil quand l'un
   d'eux a bougé, avant de faire avancer ce hash. Ne construit ni ne
   déploie rien — détecte et prévient seulement.
+- Ajouté le 2026-09-28, après le blocage trouvé sur `F-RGAA-05` (§4) :
+  `docker/execution/entrypoint.sh` enveloppe tout l'audit dans
+  `timeout -k 10 480 …`, plafond au niveau du conteneur qui ne dépend
+  d'aucune limite interne à l'outil. Vérifié hors conteneur (SIGTERM seul
+  suffit sur une boucle Node synchrone) ; reste à confirmer en conteneur
+  réel, y compris l'arrêt d'un Chromium orphelin (`docker/README-V2-VERIFICATIONS.md`
+  point 6).
 - Faire valider sur le VPS d'Antoine, dans cet ordre : `docker compose
   build` réussit ; le sandbox natif de Chromium démarre sous `pwuser` avec
   `cap_drop: ALL` (sinon voir la note du service `execution-audit`) ; la
   limite mémoire via `mem_limit`/cgroups v2 coupe réellement (comme prévu
   au §4, pas testable depuis ce cloud) ; un `git ls-remote` et un `npm
   audit` réels passent par `egress-proxy` et un hôte hors liste blanche
-  est refusé.
+  est refusé ; un job qui dépasse 480 s est coupé sans laisser de
+  processus survivant (point 6 ci-dessus).
