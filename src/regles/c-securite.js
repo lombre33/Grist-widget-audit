@@ -15,7 +15,7 @@
  */
 import path from 'node:path';
 import { constat } from '../moteur/modele.js';
-import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique, extraireImportMaps } from '../moteur/analyse-js.js';
+import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique, extraireImportMaps, parser } from '../moteur/analyse-js.js';
 
 /** Hôtes considérés comme faisant partie de l'infrastructure Grist elle-même. */
 const HOTES_GRIST = [/(^|\.)getgrist\.com$/i, /(^|\.)grist\.numerique\.gouv\.fr$/i, /(^|\.)gristlabs\.com$/i];
@@ -400,6 +400,34 @@ function estPrefixeCodeEnChaine(noeud) {
   return prefixe !== null && /^(data|blob):/i.test(prefixe.trim());
 }
 
+/**
+ * Extrait le texte du code exécuté par un Worker/SharedWorker classé
+ * `code-en-chaine`, quand il est ENTIÈREMENT littéral (data: littérale — y
+ * compris en base64 — ou Blob dont TOUS les éléments du tableau sont des
+ * littéraux). Retourne null si une partie est calculée (variable, `atob()`,
+ * concaténation avec une variable) : ce contenu reste hors de portée, comme
+ * avant — c'est là qu'est le vrai risque, pas dans un littéral qu'on peut lire.
+ */
+function extraireCodeLitteralWorker(arg) {
+  const lit = chaineLitterale(arg);
+  if (lit !== null) {
+    const m = /^data:([^,]*),([\s\S]*)$/i.exec(lit.trim());
+    if (!m) return null;
+    if (/;base64\s*$/i.test(m[1])) {
+      try { return Buffer.from(m[2], 'base64').toString('utf8'); } catch { return null; }
+    }
+    try { return decodeURIComponent(m[2]); } catch { return m[2]; }
+  }
+  if (arg.type === 'CallExpression' && nomFinal(arg.callee) === 'createObjectURL') {
+    const blob = arg.arguments[0];
+    if (blob?.type === 'NewExpression' && nomFinal(blob.callee) === 'Blob' && blob.arguments[0]?.type === 'ArrayExpression') {
+      const morceaux = blob.arguments[0].elements.map((el) => chaineLitterale(el));
+      if (morceaux.length && morceaux.every((m) => m !== null)) return morceaux.join('');
+    }
+  }
+  return null;
+}
+
 function classifierSourceWorker(arg) {
   if (!arg) return 'non-resolue';
 
@@ -418,6 +446,117 @@ function classifierSourceWorker(arg) {
   }
 
   return 'non-resolue';
+}
+
+const MAX_PROFONDEUR_CODE_IMBRIQUE = 5;
+
+/**
+ * Un argument littéral (chaîne ou gabarit sans interpolation) qui SE PARSE
+ * comme du JS valide n'est plus une boîte noire : c'est un fichier de plus
+ * dans la surface auditée, où chaque règle de l'axe C s'applique à sa propre
+ * sévérité — un eval() imbriqué y redevient critique, un fetch() vers un
+ * domaine externe y est vu par C-EXFIL-01/02 — au lieu de traiter la seule
+ * construction comme LE risque, quel que soit son contenu.
+ *
+ * Revu avec la coordination le 2026-09-28 : l'unconditionnalité posait un
+ * faux positif qu'aucune propriété de sécurité réelle ne justifie —
+ * `Function("return this")`, l'idiome lodash de détection du global (une
+ * chaîne figée et lisible, sans donnée ni réseau), que l'API Grist elle-même
+ * bundle. Le référentiel le reconnaît déjà : C-CSP-01 épargne 'unsafe-eval'
+ * pour cette API, et C-EXFIL-04 recommande justement de l'embarquer plutôt
+ * que de la charger depuis docs.getgrist.com — un widget qui suit ce
+ * conseil ne doit pas devenir NON CONFORME pour le lodash qu'elle bundle.
+ *
+ * Un argument calculé, ou un littéral qui ne se parse pas comme du JS, reste
+ * hors de portée de cette analyse : c'est LÀ le vrai risque (du code que
+ * l'audit ne lit pas), pas dans un littéral qu'il peut lire — l'appelant
+ * garde alors le traitement critique/bloquant inchangé. Retourne null dans
+ * ce cas.
+ *
+ * Bornée en profondeur (`ctx._profondeurCodeImbrique`) : un widget
+ * malveillant pourrait sinon empiler des littéraux emboîtés pour épuiser
+ * l'analyse plutôt que pour échapper à une détection précise.
+ */
+function analyserSiCodeLitteral(ctx, texte, { fichier, ligne, profondeur }) {
+  if (profondeur >= MAX_PROFONDEUR_CODE_IMBRIQUE) {
+    return [constat({
+      regle: 'C-XSS-03', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
+      titre: 'Imbrication de code littéral trop profonde pour être auditée',
+      fichier, ligne,
+      constat: `Ce code contient une chaîne exécutable elle-même imbriquée au-delà de ${MAX_PROFONDEUR_CODE_IMBRIQUE} niveaux.`,
+      impact: "Aucune raison légitime à ce niveau d'imbrication ; peut viser à épuiser l'analyse automatique plutôt qu'à échapper à une détection précise.",
+      remediation: 'Supprimer cette construction en cascade.',
+      referentiels: ['CWE-95'],
+    })];
+  }
+  const ast = parser(texte);
+  if (!ast) return null;
+
+  ctx.destinationsExternes ??= new Set(); // partagé avec l'appel imbriqué, voir enregistrerDestination()
+  const pseudoFichier = { chemin: fichier, contenu: texte, lignes: texte.split('\n'), ext: '.js', binaire: false, executee: true, vendorise: false };
+  const pseudoCtx = { ...ctx, fichiers: [pseudoFichier], entrees: [fichier], _profondeurCodeImbrique: profondeur + 1 };
+
+  const constats = [];
+  for (const regle of reglesC) {
+    // analyserAccesGrist (C-GRIST-01 à 04) porte sur le WIDGET ENTIER (a-t-il
+    // appelé grist.ready() quelque part, quel niveau d'accès a-t-il négocié) :
+    // un fragment isolé ne peut par construction jamais satisfaire une
+    // vérification qui porte sur l'ensemble de la surface. Le faire tourner
+    // dessus ne produirait qu'un « n'appelle jamais grist.ready() »
+    // systématique, sans rapport avec le fragment — vérifié à l'exécution.
+    if (regle === analyserAccesGrist) continue;
+    constats.push(...regle(pseudoCtx));
+  }
+  for (const c of constats) {
+    c.ligne = ligne + (c.ligne ?? 1) - 1; // la ligne 1 du littéral correspond au site d'appel
+    c.titre = `[Code littéral audité] ${c.titre}`;
+  }
+  return constats;
+}
+
+/**
+ * eval()/Function() (directs ou indirects) : signale la construction, puis —
+ * si l'argument est littéral et parse comme du JS — analyse son contenu
+ * comme du code de la surface (`analyserSiCodeLitteral`) plutôt que de
+ * traiter la seule construction comme LE risque. `envelopper` corrige la
+ * sémantique de `Function`/`new Function` : leur corps s'exécute comme
+ * l'intérieur d'une fonction (où `return` est valide), contrairement à
+ * `eval()` ou au script d'un worker, qui s'exécutent en portée de script.
+ */
+function traiterExecutionDeChaine(ctx, { unite, ligneDe, n, argument, titreConstruction, texteConstruction, remediationSupprimer, envelopper = false }) {
+  const profondeur = ctx._profondeurCodeImbrique ?? 0;
+  const texteBrut = chaineLitterale(argument);
+  const texteAnalyse = texteBrut !== null && envelopper ? `(function(){${texteBrut}})` : texteBrut;
+  const sousConstats = texteAnalyse !== null
+    ? analyserSiCodeLitteral(ctx, texteAnalyse, { fichier: unite.chemin, ligne: ligneDe(n), profondeur })
+    : null;
+
+  if (sousConstats) {
+    return [
+      ...sousConstats,
+      constat({
+        regle: 'C-XSS-03', axe: 'C', severite: 'mineur', bloquant: false, confiance: 'certain',
+        titre: `${titreConstruction} (contenu littéral, audité comme du code du dépôt)`,
+        fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+        constat: `${texteConstruction} Son contenu est un littéral qui a pu être analysé comme le reste du code : chaque règle de sécurité s'y applique déjà, à sa propre sévérité.`,
+        impact: "Reste un obstacle inutile à une politique de sécurité de contenu stricte, et une source de confusion en relecture, mais le contenu lui-même est audité comme n'importe quel autre fichier du dépôt.",
+        remediation: remediationSupprimer,
+        referentiels: ['CWE-95'],
+      }),
+    ];
+  }
+
+  return [constat({
+    regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
+    titre: titreConstruction,
+    fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+    constat: texteBrut === null
+      ? `${texteConstruction} Son argument est calculé à l'exécution : rien de ce qui sera réellement exécuté n'est lu par l'analyse statique.`
+      : `${texteConstruction} Son contenu littéral ne se parse pas comme du JS valide : l'analyse ne peut pas l'auditer comme le reste du code.`,
+    impact: "Toute donnée qui atteint cet appel devient du code exécuté avec l'accès du widget au document. C'est rédhibitoire pour un hébergement sur instance officielle, et cela empêche toute politique de sécurité de contenu stricte.",
+    remediation: remediationSupprimer,
+    referentiels: ['CWE-95', REF_ANSSI, 'OWASP Top 10 A03:2021'],
+  })];
 }
 
 export function analyserInjections(ctx) {
@@ -492,39 +631,30 @@ export function analyserInjections(ctx) {
         }
 
         if (/(^|\.)eval$/.test(nom)) {
-          constats.push(constat({
-            regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
-            titre: 'Exécution de code arbitraire via eval()',
-            fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-            constat: '`eval()` est appelé dans le code exécuté du widget.',
-            impact: "Toute donnée qui atteint cet appel devient du code exécuté avec l'accès du widget au document. C'est rédhibitoire pour un hébergement sur instance officielle, et cela empêche toute politique de sécurité de contenu stricte.",
-            remediation: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
-            referentiels: ['CWE-95', REF_ANSSI, 'OWASP Top 10 A03:2021'],
+          constats.push(...traiterExecutionDeChaine(ctx, {
+            unite, ligneDe, n, argument: n.arguments[0],
+            titreConstruction: 'Exécution de code arbitraire via eval()',
+            texteConstruction: '`eval()` est appelé dans le code exécuté du widget.',
+            remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
           }));
         } else if (n.callee.type === 'SequenceExpression' && n.callee.expressions.at(-1)?.type === 'Identifier' && n.callee.expressions.at(-1).name === 'eval') {
           // Eval indirect : `(0, eval)(...)` exécute dans la portée globale plutôt que locale,
           // mais reste un eval — un contournement courant des analyseurs qui ne cherchent que
           // l'appel direct `eval(...)`.
-          constats.push(constat({
-            regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
-            titre: 'Exécution de code arbitraire via eval() indirect',
-            fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-            constat: "La forme `(0, eval)(...)` (ou équivalente) appelle `eval` indirectement.",
-            impact: "Un eval indirect exécute dans la portée globale plutôt que locale, mais reste un eval : toute donnée qui l'atteint devient du code exécuté avec l'accès du widget au document.",
-            remediation: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
-            referentiels: ['CWE-95', REF_ANSSI, 'OWASP Top 10 A03:2021'],
+          constats.push(...traiterExecutionDeChaine(ctx, {
+            unite, ligneDe, n, argument: n.arguments[0],
+            titreConstruction: 'Exécution de code arbitraire via eval() indirect',
+            texteConstruction: "La forme `(0, eval)(...)` (ou équivalente) appelle `eval` indirectement.",
+            remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
           }));
         }
 
         if (nom.split('.').pop() === 'Function') {
-          constats.push(constat({
-            regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
-            titre: 'Construction de code à la volée via Function() (sans new)',
-            fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-            constat: '`Function(...)` sans `new` compile une chaîne en fonction exécutable, exactement comme `new Function(...)` : l\'appel fonctionne dans les deux cas.',
-            impact: "Équivalent fonctionnel d'`eval()` : exécution de code arbitraire avec l'accès du widget au document.",
-            remediation: "Supprimer cet usage.",
-            referentiels: ['CWE-95', REF_ANSSI],
+          constats.push(...traiterExecutionDeChaine(ctx, {
+            unite, ligneDe, n, argument: n.arguments.at(-1), envelopper: true,
+            titreConstruction: 'Construction de code à la volée via Function() (sans new)',
+            texteConstruction: '`Function(...)` sans `new` compile une chaîne en fonction exécutable, exactement comme `new Function(...)` : l\'appel fonctionne dans les deux cas.',
+            remediationSupprimer: 'Supprimer cet usage.',
           }));
         }
 
@@ -557,15 +687,32 @@ export function analyserInjections(ctx) {
         if (/^(setTimeout|setInterval)$/.test(nom.split('.').pop()) && n.arguments[0] &&
             (n.arguments[0].type === 'Literal' || n.arguments[0].type === 'TemplateLiteral' ||
              (n.arguments[0].type === 'BinaryExpression'))) {
-          constats.push(constat({
-            regle: 'C-XSS-04', axe: 'C', severite: 'majeur', confiance: 'certain',
-            titre: `Chaîne de caractères passée à ${nom} (équivalent à eval)`,
-            fichier: unite.chemin, ligne: ligneDe(n),
-            constat: `Le premier argument de \`${nom}\` est une chaîne, pas une fonction.`,
-            impact: 'Le moteur évalue cette chaîne comme du code, avec les mêmes conséquences que `eval()`.',
-            remediation: 'Passer une fonction : `setTimeout(() => …, delai)`.',
-            referentiels: ['CWE-95'],
-          }));
+          const profondeur = ctx._profondeurCodeImbrique ?? 0;
+          const texte = chaineLitterale(n.arguments[0]);
+          const sousConstats = texte !== null
+            ? analyserSiCodeLitteral(ctx, texte, { fichier: unite.chemin, ligne: ligneDe(n), profondeur })
+            : null;
+          if (sousConstats) {
+            constats.push(...sousConstats, constat({
+              regle: 'C-XSS-04', axe: 'C', severite: 'mineur', bloquant: false, confiance: 'certain',
+              titre: `Chaîne de caractères passée à ${nom} (contenu littéral, audité comme du code du dépôt)`,
+              fichier: unite.chemin, ligne: ligneDe(n),
+              constat: `Le premier argument de \`${nom}\` est une chaîne, pas une fonction. Son contenu est un littéral qui a pu être analysé comme le reste du code.`,
+              impact: "Reste un style à éviter (un passage par le moteur d'évaluation de chaînes plutôt qu'un appel de fonction), mais le contenu lui-même est audité comme n'importe quel autre fichier du dépôt.",
+              remediation: 'Passer une fonction : `setTimeout(() => …, delai)`.',
+              referentiels: ['CWE-95'],
+            }));
+          } else {
+            constats.push(constat({
+              regle: 'C-XSS-04', axe: 'C', severite: 'majeur', confiance: 'certain',
+              titre: `Chaîne de caractères passée à ${nom} (équivalent à eval)`,
+              fichier: unite.chemin, ligne: ligneDe(n),
+              constat: `Le premier argument de \`${nom}\` est une chaîne, pas une fonction.`,
+              impact: 'Le moteur évalue cette chaîne comme du code, avec les mêmes conséquences que `eval()`.',
+              remediation: 'Passer une fonction : `setTimeout(() => …, delai)`.',
+              referentiels: ['CWE-95'],
+            }));
+          }
         }
 
         // jQuery .html(x) avec argument dynamique
@@ -583,14 +730,11 @@ export function analyserInjections(ctx) {
       },
       NewExpression(n) {
         if (nomFinal(n.callee) === 'Function') {
-          constats.push(constat({
-            regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
-            titre: 'Construction de code à la volée via new Function()',
-            fichier: unite.chemin, ligne: ligneDe(n),
-            constat: '`new Function(...)` compile une chaîne en fonction exécutable.',
-            impact: "Équivalent fonctionnel d'`eval()` : exécution de code arbitraire avec l'accès du widget au document.",
-            remediation: "Supprimer cet usage.",
-            referentiels: ['CWE-95', REF_ANSSI],
+          constats.push(...traiterExecutionDeChaine(ctx, {
+            unite, ligneDe, n, argument: n.arguments.at(-1), envelopper: true,
+            titreConstruction: 'Construction de code à la volée via new Function()',
+            texteConstruction: '`new Function(...)` compile une chaîne en fonction exécutable.',
+            remediationSupprimer: 'Supprimer cet usage.',
           }));
         }
 
@@ -598,15 +742,32 @@ export function analyserInjections(ctx) {
           const nomWorker = nomFinal(n.callee); // affichage : nom nu même pour `new window.Worker(...)`
           const categorie = classifierSourceWorker(n.arguments[0]);
           if (categorie === 'code-en-chaine') {
-            constats.push(constat({
-              regle: 'C-XSS-07', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
-              titre: `${nomWorker} construit depuis du code assemblé en chaîne dans le dépôt`,
-              fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-              constat: `Le code exécuté par ce ${nomWorker} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé.`,
-              impact: "Équivalent fonctionnel d'eval() : ce code s'exécute avec les privilèges réseau du widget dès la construction du worker, et rien de son contenu — par exemple un appel vers un domaine externe — n'est lu par l'analyse statique, qui ne lit que des fichiers. Couper ou encoder cette chaîne (concaténation, atob) rend d'ailleurs inopérante toute recherche de motif dans le texte, ce qui exclut par principe une vérification automatique du contenu plutôt que de la construction elle-même — d'où un constat sur la construction, quel que soit ce que le tableau du Blob contient ou l'argument passé à createObjectURL.",
-              remediation: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${nomWorker}('./chemin/local.js')\` : il redevient un fichier du dépôt, lisible et audité comme le reste du widget.`,
-              referentiels: ['CWE-95', REF_ANSSI],
-            }));
+            const texteCode = extraireCodeLitteralWorker(n.arguments[0]);
+            const profondeur = ctx._profondeurCodeImbrique ?? 0;
+            const sousConstats = texteCode !== null
+              ? analyserSiCodeLitteral(ctx, texteCode, { fichier: unite.chemin, ligne: ligneDe(n), profondeur })
+              : null;
+            if (sousConstats) {
+              constats.push(...sousConstats, constat({
+                regle: 'C-XSS-07', axe: 'C', severite: 'mineur', bloquant: false, confiance: 'certain',
+                titre: `${nomWorker} construit depuis du code en chaîne, entièrement littéral et audité`,
+                fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+                constat: `Le code exécuté par ce ${nomWorker} est fourni sous forme de chaîne écrite dans le dépôt, mais son contenu est entièrement littéral : il a pu être analysé comme un fichier de plus, avec les mêmes règles que le reste du dépôt.`,
+                impact: "Reste un obstacle inutile à la lisibilité (un fichier de worker séparé serait plus clair et permettrait de le suivre comme le reste de la surface), mais le contenu lui-même est audité comme n'importe quel autre fichier du dépôt.",
+                remediation: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${nomWorker}('./chemin/local.js')\`, pour une lisibilité optimale.`,
+                referentiels: ['CWE-95'],
+              }));
+            } else {
+              constats.push(constat({
+                regle: 'C-XSS-07', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
+                titre: `${nomWorker} construit depuis du code assemblé en chaîne dans le dépôt`,
+                fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+                constat: `Le code exécuté par ce ${nomWorker} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé, et son contenu n'est pas entièrement littéral (variable, \`atob()\`, concaténation).`,
+                impact: "Équivalent fonctionnel d'eval() : ce code s'exécute avec les privilèges réseau du widget dès la construction du worker, et rien de son contenu — par exemple un appel vers un domaine externe — n'est lu par l'analyse statique, qui ne lit que des fichiers.",
+                remediation: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${nomWorker}('./chemin/local.js')\` : il redevient un fichier du dépôt, lisible et audité comme le reste du widget.`,
+                referentiels: ['CWE-95', REF_ANSSI],
+              }));
+            }
           } else if (categorie === 'non-resolue') {
             constats.push(constat({
               regle: 'C-XSS-07', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
