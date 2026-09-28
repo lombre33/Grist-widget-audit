@@ -24,13 +24,19 @@ export function genererMarkdown({ ctx, notation, meta }) {
   l.push('');
   l.push(`**${notation.verdict}** — score global **${notation.global}/100**`);
   l.push('');
+  // Cadrage voulu par Antoine (2026-09-28), même texte que src/rapport/html.js :
+  // l'audit informe, il ne décide pas. Les libellés du référentiel (CONFORME,
+  // CONFORME SOUS RÉSERVE, NON CONFORME, bloquant) restent inchangés, mais un
+  // lecteur qui découvre l'outil doit comprendre qu'aucun ne bloque l'installation.
+  l.push("Ce rapport informe, il ne décide pas. **CONFORME**, **CONFORME SOUS RÉSERVE** et **NON CONFORME** résument un niveau de risque, pas une autorisation : rien ici n'empêche d'installer ce widget, y compris s'il est **NON CONFORME** parce qu'il porte un point **bloquant**. À l'agent de juger si le risque relevé convient à son usage — un widget non conforme peut très bien fonctionner, et être acceptable sur des données non sensibles.");
+  l.push('');
   l.push(notation.motif);
   l.push('');
 
   if (notation.bloquants.length) {
     l.push(`### Points bloquants (${notation.bloquants.length})`);
     l.push('');
-    l.push("Un hébergement sur instance officielle (DINUM, ANCT) est exclu tant que ces points ne sont pas corrigés — ils ne se compensent par aucun score par ailleurs élevé, à l'image d'un avis RSSI.");
+    l.push("Un hébergement sur instance officielle (DINUM, ANCT) est exclu tant que ces points ne sont pas corrigés — ils ne se compensent par aucun score par ailleurs élevé, à l'image d'un avis RSSI. Cela ne bloque rien d'autre : ce widget reste installable ailleurs, à charge pour l'agent de juger si ce risque convient à son usage.");
     l.push('');
     for (const c of trierConstats(notation.bloquants)) {
       const loc = c.fichier ? ` — \`${c.fichier}${c.ligne ? ':' + c.ligne : ''}\`` : '';
