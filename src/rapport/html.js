@@ -40,6 +40,8 @@ ${css()}
     </div>
   </header>
 
+  ${blocLectureVerdict()}
+
   ${blocMotif(notation)}
 
   <p class="avertissement">Rapport à valeur de première analyse : il éclaire une revue humaine, il ne la remplace pas. Méthodologie complète dans <code>docs/METHODOLOGIE.md</code>.</p>
@@ -73,7 +75,7 @@ ${css()}
   </main>
 
   <footer class="pied">
-    <p>gwaudit v${echapper(meta.version)} — audit automatisé de widgets Grist. Six axes : qualité, lisibilité, sécurité statique, sécurité en condition réelle, dépendances, conformité. Un score élevé n'emporte aucune certification ; un point bloquant l'exclut quel que soit le reste.</p>
+    <p>gwaudit v${echapper(meta.version)} — audit automatisé de widgets Grist. Six axes : qualité, lisibilité, sécurité statique, sécurité en condition réelle, dépendances, conformité. Un score élevé n'emporte aucune certification ; un point bloquant suffit à rendre le verdict NON CONFORME, quel que soit le reste — mais ni l'un ni l'autre n'empêche d'installer le widget. C'est un signal de risque, pas une autorisation.</p>
   </footer>
 </div>
 `;
@@ -82,6 +84,20 @@ ${css()}
 // ---------------------------------------------------------------------------
 // Fragments
 // ---------------------------------------------------------------------------
+
+/**
+ * Cadrage voulu par Antoine (2026-09-28) : l'audit informe, il ne décide pas.
+ * CONFORME / CONFORME SOUS RÉSERVE / NON CONFORME et le mot « bloquant »
+ * restent tels quels — ils appartiennent au référentiel — mais un lecteur qui
+ * découvre l'outil doit comprendre, avant même de lire le score, qu'aucun de
+ * ces libellés n'empêche d'installer le widget : un NON CONFORME reste
+ * installable, à charge pour l'agent de juger si le risque relevé convient à
+ * son usage (des données non sensibles, par exemple).
+ */
+function blocLectureVerdict() {
+  return `
+  <p class="lecture-verdict">Ce rapport informe, il ne décide pas. <strong>CONFORME</strong>, <strong>CONFORME SOUS RÉSERVE</strong> et <strong>NON CONFORME</strong> résument un niveau de risque, pas une autorisation : rien ici n'empêche d'installer ce widget, y compris s'il est <strong>NON CONFORME</strong> parce qu'il porte un point <strong>bloquant</strong>. À l'agent de juger si le risque relevé convient à son usage — un widget non conforme peut très bien fonctionner, et être acceptable sur des données non sensibles.</p>`;
+}
 
 /**
  * Motif du verdict, produit par le moteur de notation (notation.motif) : on
@@ -100,7 +116,7 @@ function blocBloquants(bloquants) {
   return `
   <section class="alerte-bloquants" aria-labelledby="titre-bloquants">
     <h2 id="titre-bloquants">⛔ ${bloquants.length} point${bloquants.length > 1 ? 's' : ''} bloquant${bloquants.length > 1 ? 's' : ''}</h2>
-    <p>Un hébergement sur instance officielle (DINUM, ANCT) est exclu tant que ces points ne sont pas corrigés — ils ne se compensent par aucun score par ailleurs élevé, à l'image d'un avis RSSI.</p>
+    <p>Un hébergement sur instance officielle (DINUM, ANCT) est exclu tant que ces points ne sont pas corrigés — ils ne se compensent par aucun score par ailleurs élevé, à l'image d'un avis RSSI. Cela ne bloque rien d'autre : ce widget reste installable ailleurs, à charge pour l'agent de juger si ce risque convient à son usage.</p>
     <ul>
       ${bloquants.map((c) => `<li><a href="#${c.uid}"><code>${echapper(c.regle)}</code> ${echapper(c.titre)}</a></li>`).join('\n      ')}
     </ul>
@@ -176,7 +192,7 @@ function carte(c) {
           <span class="constat-corps">
             <span class="constat-ligne1">
               <code class="regle">${echapper(c.regle)}</code>
-              ${c.bloquant ? '<span class="badge-bloquant">BLOQUANT</span>' : ''}
+              ${c.bloquant ? '<span class="badge-bloquant" title="Un point bloquant suffit à rendre le verdict NON CONFORME ; il n’empêche pas d’installer ce widget, c’est un signal de risque, pas une interdiction.">BLOQUANT</span>' : ''}
               <span class="constat-titre">${echapper(c.titre)}</span>
             </span>
             ${loc ? `<span class="constat-ligne2">${loc}</span>` : ''}
@@ -306,6 +322,9 @@ a{color:inherit;}
 
 .avertissement{font-size:13.5px; color:var(--text-muted); margin:16px 0 28px; padding-left:12px; border-left:3px solid var(--border);}
 .avertissement code{font-size:12.5px; background:var(--surface-2); padding:1px 5px; border-radius:4px;}
+
+.lecture-verdict{font-size:13.5px; color:var(--text-2); line-height:1.55; margin:16px 0 0; padding:12px 16px; background:var(--surface-2); border-radius:10px;}
+.lecture-verdict strong{color:var(--text);}
 
 .motif-verdict{font-size:13.5px; color:var(--text-2); margin:14px 0 0; line-height:1.5;}
 .motif-verdict.motif-partiel{background:var(--attention-bg); border:1px solid var(--attention); border-radius:12px; padding:12px 18px; margin-top:16px; font-size:14px; font-weight:600; color:var(--text); line-height:1.5;}
