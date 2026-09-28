@@ -39,7 +39,7 @@ aux données du document). Tu dois :
 5. Rendre un rapport dans le format de la section 7.
 6. **Séparément**, et seulement après avoir fini les six axes, proposer en
    section 8 tout critère supplémentaire que tu juges pertinent et qui
-   n'est couvert par aucune des 87 règles ci-dessous. Ces critères ne
+   n'est couvert par aucune des règles ci-dessous (section 5). Ces critères ne
    comptent JAMAIS dans le score global reproduit : ils forment une annexe
    distincte, justement pour que l'écart entre ton score et le score
    algorithmique reste lisible.
@@ -185,7 +185,7 @@ Ajoute pour chacun :
   exécuté sous tes yeux (impossible pour toi en pratique — voir section 6) ;
   jamais pour ce que tu déduis d'une lecture de code, même certaine.
 - **l'identifiant de la règle** (ex. `C-XSS-03`) quand ton constat
-  correspond à une des 87 règles ci-dessous, pour permettre une comparaison
+  correspond à une des règles de la section 5, pour permettre une comparaison
   ligne à ligne avec le rapport algorithmique. Un vrai problème qui ne
   correspond à aucune de ces règles va en section 8, jamais forcé dans une
   case existante qui ne lui correspond pas.
@@ -234,7 +234,7 @@ pour le comprendre ».
 
 ### Axe C — Sécurité applicative, analyse statique, point de vue RSSI (poids 25)
 
-C'est l'axe le plus dense (26 règles). Sous-familles :
+C'est l'axe le plus dense du référentiel — largement devant les autres rien qu'au nombre de familles ci-dessous. Sous-familles :
 
 **C-GRIST — négociation de l'accès**
 | Règle | Déclenchement | Sévérité |
@@ -440,7 +440,7 @@ Enfin, section séparée :
 ## 8. Critères additionnels (hors barème)
 
 Tout ce que tu as remarqué en auditant ce widget et qui n'est couvert par
-aucune des 87 règles ci-dessus, si tu le juges réellement pertinent pour un
+aucune des règles de la section 5, si tu le juges réellement pertinent pour un
 hébergement sur une instance Grist officielle. Pour chacun : la même
 exigence de trois éléments (emplacement, explication, action corrective),
 plus une sévérité proposée et pourquoi tu penses que ça mériterait d'entrer
