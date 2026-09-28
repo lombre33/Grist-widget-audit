@@ -326,54 +326,97 @@ function prefixeConcatenationLitteral(noeud) {
   return null;
 }
 
+/** Nom simple d'un appelé (`Worker`, `createObjectURL`…), sans se soucier d'un alias global de tête (`window.`, `self.`, `globalThis.`) : `nomPointe(noeud)` donne la chaîne pointée complète, on ne garde que son dernier segment. Un objet non lié à l'alias qui porte la même propriété (`monObjet.Worker`) matche aussi — un compromis déjà fait par ce fichier pour `eval`/`Function`/`document.write`, gardé ici pour la même raison : l'angle mort d'un nom réel manqué coûte plus qu'un faux positif rarissime. */
+function nomFinal(noeud) {
+  return (nomPointe(noeud) || '').split('.').pop();
+}
+
+/** Chaîne littérale résolue (ou son préfixe de concaténation/gabarit) qui commence par l'un des schémas donnés (`data:`, `blob:`, `javascript:`…), sans se soucier de la forme d'écriture. */
+function debuteParSchema(noeud, ...schemas) {
+  const texte = chaineLitterale(noeud) ?? prefixeConcatenationLitteral(noeud);
+  if (texte === null) return false;
+  const t = texte.trim();
+  return schemas.some((s) => new RegExp(`^${s}:`, 'i').test(t));
+}
+
+/** Classe une chaîne littérale résolue (ou son préfixe) par son schéma. */
+function classifierSchemaLitteral(texte) {
+  const t = texte.trim();
+  if (/^(data|blob):/i.test(t)) return 'code-en-chaine';
+  if (/^https?:\/\//i.test(t)) return 'url-absolue';
+  return 'chemin-local';
+}
+
 /**
  * Classe la source passée à `new Worker(...)`/`new SharedWorker(...)`.
  * Vérifié par l'exécution (vraie Chromium) : un `importScripts()` vers un
  * domaine externe, sans aucun en-tête CORS, s'exécute aussi bien depuis un
  * worker `blob:` que depuis un worker `data:` — ni l'un ni l'autre n'a de
  * mécanisme d'intégrité, et surtout ni l'un ni l'autre n'est un fichier que
- * l'audit peut lire.
+ * l'audit peut lire. Reconnaît un alias global de tête (`window.Worker`,
+ * `self.URL.createObjectURL`…) via `nomFinal()`.
  *
  * - 'chemin-local' : chemin relatif littéral (`./w.js`), ou
- *   `new URL('./w.js', import.meta.url)` — déjà suivi par
+ *   `new URL('./w.js', <base quelconque>)` — déjà suivi par
  *   `referencesSortantes()` pour la surface exécutée, rien à signaler ici.
+ *   C'est le SCHÉMA du premier argument de `new URL(...)` qui décide, jamais
+ *   sa base : si ce premier argument résout en `data:`/`blob:`, l'URL
+ *   obtenue l'est aussi quelle que soit la base (ces schémas s'auto-suffisent
+ *   et ignorent la base par construction) ; s'il est relatif, le résultat
+ *   est local quelle que soit la base — et si la base est elle-même une URL
+ *   absolue externe écrite en dur, le résultat est une URL absolue externe,
+ *   qui retombe dans le cas 'url-absolue' ci-dessous (mort par construction,
+ *   donc sans risque réel) : rien de ce qu'une base peut faire ne rend ce
+ *   raisonnement par le seul premier argument incorrect.
  * - 'url-absolue' : URL http(s) littérale — lève toujours une
  *   `SecurityError` synchrone (vérifié), donc jamais exécutée : rien à
  *   signaler (voir be1b5f4, C-EXFIL-07 retirée pour cette raison).
- * - 'code-en-chaine' : `URL.createObjectURL(new Blob([...]))`, ou une URL
- *   `data:` littérale ou obtenue par concaténation/gabarit dont la tête est
- *   `data:`. Signalé quel que soit le CONTENU du tableau du `Blob` — littéral
- *   ou variable — au même titre qu'`eval()` est signalé quel que soit son
- *   argument : chercher une source de confiance dans ce contenu ne prouve
- *   rien (une bibliothèque tierce peut légitimement bundler son worker
- *   ainsi), et ne pas le faire n'enlève rien à la question de fond, qui est
- *   la construction elle-même — récupérer un contenu (déjà vu par
- *   C-EXFIL-01/02 si le Blob vient d'un `fetch`) et l'exécuter comme du code
- *   sont deux faits distincts, comme un `eval()` de la réponse d'un `fetch`
- *   relève à la fois de C-EXFIL et d'`eval`.
+ * - 'code-en-chaine' : une URL `data:`/`blob:` littérale ou obtenue par
+ *   concaténation/gabarit, ou tout appel à `createObjectURL(...)` (quel que
+ *   soit son propre argument — Blob littéral, Blob depuis une variable, ou
+ *   variable déjà porteuse d'un Blob/File : aucune de ces formes n'est un
+ *   fichier que l'audit peut lire, la question de fond est la même dans
+ *   tous les cas). Signalé quel que soit le CONTENU, au même titre qu'`eval()`
+ *   est signalé quel que soit son argument : chercher une source de confiance
+ *   dans ce contenu ne prouve rien, et ne pas le faire n'enlève rien à la
+ *   question de fond, qui est la construction elle-même — récupérer un
+ *   contenu (déjà vu par C-EXFIL-01/02 si le Blob vient d'un `fetch`) et
+ *   l'exécuter comme du code sont deux faits distincts, comme un `eval()` de
+ *   la réponse d'un `fetch` relève à la fois de C-EXFIL et d'`eval`.
  * - 'non-resolue' : tout le reste (variable, gabarit interpolé, expression
  *   calculée) — y compris une URL `blob:` assemblée dans une instruction
  *   précédente, que l'analyse d'une seule expression ne peut pas remonter.
  */
+/**
+ * Un préfixe littéral de tête (concaténation, gabarit interpolé) ne peut
+ * décider QUE le cas `code-en-chaine` : une fois le schéma `data:`/`blob:`
+ * confirmé en tête, aucune suite ne peut plus le changer. Il ne décide
+ * jamais `chemin-local` : une suite inconnue (variable de sélection du
+ * fichier) peut désigner n'importe quel fichier, que l'analyse ne peut pas
+ * énumérer — ce cas reste `non-resolue`, pas un chemin réputé sûr.
+ */
+function estPrefixeCodeEnChaine(noeud) {
+  const prefixe = prefixeConcatenationLitteral(noeud);
+  return prefixe !== null && /^(data|blob):/i.test(prefixe.trim());
+}
+
 function classifierSourceWorker(arg) {
   if (!arg) return 'non-resolue';
+
   const lit = chaineLitterale(arg);
-  if (lit !== null) {
-    if (/^data:/i.test(lit.trim())) return 'code-en-chaine';
-    if (/^https?:\/\//i.test(lit.trim())) return 'url-absolue';
-    return 'chemin-local';
+  if (lit !== null) return classifierSchemaLitteral(lit);
+  if (estPrefixeCodeEnChaine(arg)) return 'code-en-chaine';
+
+  if (arg.type === 'CallExpression' && nomFinal(arg.callee) === 'createObjectURL') {
+    return 'code-en-chaine';
   }
-  const prefixe = prefixeConcatenationLitteral(arg);
-  if (prefixe !== null && /^data:/i.test(prefixe.trim())) return 'code-en-chaine';
-  if (arg.type === 'NewExpression' && (nomPointe(arg.callee) || '') === 'URL' && chaineLitterale(arg.arguments[0]) !== null) {
-    return 'chemin-local'; // new URL('./w.js', import.meta.url) et formes voisines
+
+  if (arg.type === 'NewExpression' && nomFinal(arg.callee) === 'URL') {
+    const xLit = chaineLitterale(arg.arguments[0]);
+    if (xLit !== null) return classifierSchemaLitteral(xLit);
+    if (estPrefixeCodeEnChaine(arg.arguments[0])) return 'code-en-chaine';
   }
-  if (arg.type === 'CallExpression' && (nomPointe(arg.callee) || '') === 'URL.createObjectURL') {
-    const blob = arg.arguments[0];
-    if (blob?.type === 'NewExpression' && (nomPointe(blob.callee) || '') === 'Blob' && blob.arguments[0]?.type === 'ArrayExpression') {
-      return 'code-en-chaine';
-    }
-  }
+
   return 'non-resolue';
 }
 
@@ -391,6 +434,20 @@ export function analyserInjections(ctx) {
       AssignmentExpression(n) {
         if (n.left.type !== 'MemberExpression') return;
         const nom = nomPointe(n.left) || '';
+
+        if (/^(href|src|action|formaction)$/i.test(nom.split('.').pop()) && debuteParSchema(n.right, 'javascript')) {
+          constats.push(constat({
+            regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
+            titre: 'Exécution de code arbitraire via une URL javascript:',
+            fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+            constat: `Le code affecte à \`${nom}\` une URL de schéma \`javascript:\`.`,
+            impact: "Une URL `javascript:` exécute son contenu comme du code dès la navigation (ou immédiatement pour `location`) — même risque qu'`eval()`, sous un déguisement qui échappe à une recherche de texte sur `eval(`.",
+            remediation: "Supprimer cette URL. Utiliser un gestionnaire d'évènement (`addEventListener('click', ...)`) plutôt qu'un lien `javascript:`.",
+            referentiels: ['CWE-95', REF_ANSSI, 'OWASP Top 10 A03:2021'],
+          }));
+          return;
+        }
+
         if (!SINKS_HTML.test(nom)) return;
         if (!estDynamique(n.right)) {
           htmlConstant.push({ fichier: unite.chemin, ligne: ligneDe(n) });
@@ -444,6 +501,57 @@ export function analyserInjections(ctx) {
             remediation: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
             referentiels: ['CWE-95', REF_ANSSI, 'OWASP Top 10 A03:2021'],
           }));
+        } else if (n.callee.type === 'SequenceExpression' && n.callee.expressions.at(-1)?.type === 'Identifier' && n.callee.expressions.at(-1).name === 'eval') {
+          // Eval indirect : `(0, eval)(...)` exécute dans la portée globale plutôt que locale,
+          // mais reste un eval — un contournement courant des analyseurs qui ne cherchent que
+          // l'appel direct `eval(...)`.
+          constats.push(constat({
+            regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
+            titre: 'Exécution de code arbitraire via eval() indirect',
+            fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+            constat: "La forme `(0, eval)(...)` (ou équivalente) appelle `eval` indirectement.",
+            impact: "Un eval indirect exécute dans la portée globale plutôt que locale, mais reste un eval : toute donnée qui l'atteint devient du code exécuté avec l'accès du widget au document.",
+            remediation: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
+            referentiels: ['CWE-95', REF_ANSSI, 'OWASP Top 10 A03:2021'],
+          }));
+        }
+
+        if (nom.split('.').pop() === 'Function') {
+          constats.push(constat({
+            regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
+            titre: 'Construction de code à la volée via Function() (sans new)',
+            fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+            constat: '`Function(...)` sans `new` compile une chaîne en fonction exécutable, exactement comme `new Function(...)` : l\'appel fonctionne dans les deux cas.',
+            impact: "Équivalent fonctionnel d'`eval()` : exécution de code arbitraire avec l'accès du widget au document.",
+            remediation: "Supprimer cet usage.",
+            referentiels: ['CWE-95', REF_ANSSI],
+          }));
+        }
+
+        if (/(^|\.)createContextualFragment$/.test(nom) && estDynamique(n.arguments[0])) {
+          constats.push(constat({
+            regle: 'C-XSS-01', axe: 'C', severite: 'majeur', confiance: 'probable',
+            titre: 'Fragment HTML construit depuis une chaîne dynamique (createContextualFragment)',
+            fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+            constat: "Le code construit un fragment HTML depuis une chaîne calculée à l'exécution.",
+            impact: "Une fois ce fragment inséré dans le document (`appendChild`, etc.), tout balisage qu'il contient s'exécute comme du HTML natif : même risque qu'une affectation dynamique à `innerHTML`.",
+            remediation: "Construire les nœuds avec `document.createElement`/`textContent`, ou passer par un assainisseur (DOMPurify) avant d'appeler `createContextualFragment`.",
+            referentiels: ['OWASP Top 10 A03:2021', 'CWE-79'],
+          }));
+        }
+
+        if (/(^|\.)setAttribute$/.test(nom) && n.callee.type === 'MemberExpression' &&
+            /^(href|src|action|formaction)$/i.test(chaineLitterale(n.arguments[0]) || '') &&
+            debuteParSchema(n.arguments[1], 'javascript')) {
+          constats.push(constat({
+            regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
+            titre: 'Exécution de code arbitraire via une URL javascript:',
+            fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+            constat: `Le code appelle \`setAttribute\` pour donner à un attribut de navigation une URL de schéma \`javascript:\`.`,
+            impact: "Une URL `javascript:` exécute son contenu comme du code dès la navigation — même risque qu'`eval()`, sous un déguisement qui échappe à une recherche de texte sur `eval(`.",
+            remediation: "Supprimer cette URL. Utiliser un gestionnaire d'évènement (`addEventListener('click', ...)`) plutôt qu'un lien `javascript:`.",
+            referentiels: ['CWE-95', REF_ANSSI, 'OWASP Top 10 A03:2021'],
+          }));
         }
 
         if (/^(setTimeout|setInterval)$/.test(nom.split('.').pop()) && n.arguments[0] &&
@@ -474,7 +582,7 @@ export function analyserInjections(ctx) {
         }
       },
       NewExpression(n) {
-        if ((nomPointe(n.callee) || '').split('.').pop() === 'Function') {
+        if (nomFinal(n.callee) === 'Function') {
           constats.push(constat({
             regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
             titre: 'Construction de code à la volée via new Function()',
@@ -486,26 +594,27 @@ export function analyserInjections(ctx) {
           }));
         }
 
-        if (/^(Worker|SharedWorker)$/.test(nomPointe(n.callee) ?? '')) {
+        if (/^(Worker|SharedWorker)$/.test(nomFinal(n.callee))) {
+          const nomWorker = nomFinal(n.callee); // affichage : nom nu même pour `new window.Worker(...)`
           const categorie = classifierSourceWorker(n.arguments[0]);
           if (categorie === 'code-en-chaine') {
             constats.push(constat({
               regle: 'C-XSS-07', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
-              titre: `${n.callee.name} construit depuis du code assemblé en chaîne dans le dépôt`,
+              titre: `${nomWorker} construit depuis du code assemblé en chaîne dans le dépôt`,
               fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-              constat: `Le code exécuté par ce ${n.callee.name} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé.`,
-              impact: "Équivalent fonctionnel d'eval() : ce code s'exécute avec les privilèges réseau du widget dès la construction du worker, et rien de son contenu — par exemple un appel vers un domaine externe — n'est lu par l'analyse statique, qui ne lit que des fichiers. Couper ou encoder cette chaîne (concaténation, atob) rend d'ailleurs inopérante toute recherche de motif dans le texte, ce qui exclut par principe une vérification automatique du contenu plutôt que de la construction elle-même — d'où un constat sur la construction, quel que soit ce que le tableau du Blob contient.",
-              remediation: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${n.callee.name}('./chemin/local.js')\` : il redevient un fichier du dépôt, lisible et audité comme le reste du widget.`,
+              constat: `Le code exécuté par ce ${nomWorker} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé.`,
+              impact: "Équivalent fonctionnel d'eval() : ce code s'exécute avec les privilèges réseau du widget dès la construction du worker, et rien de son contenu — par exemple un appel vers un domaine externe — n'est lu par l'analyse statique, qui ne lit que des fichiers. Couper ou encoder cette chaîne (concaténation, atob) rend d'ailleurs inopérante toute recherche de motif dans le texte, ce qui exclut par principe une vérification automatique du contenu plutôt que de la construction elle-même — d'où un constat sur la construction, quel que soit ce que le tableau du Blob contient ou l'argument passé à createObjectURL.",
+              remediation: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${nomWorker}('./chemin/local.js')\` : il redevient un fichier du dépôt, lisible et audité comme le reste du widget.`,
               referentiels: ['CWE-95', REF_ANSSI],
             }));
           } else if (categorie === 'non-resolue') {
             constats.push(constat({
               regle: 'C-XSS-07', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
-              titre: `Source de ${n.callee.name} non résolue par l'analyse statique`,
+              titre: `Source de ${nomWorker} non résolue par l'analyse statique`,
               fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-              constat: `La source passée à ${n.callee.name} n'est ni un chemin de fichier littéral ni un motif reconnu : elle peut provenir d'une variable construite ailleurs dans le code.`,
+              constat: `La source passée à ${nomWorker} n'est ni un chemin de fichier littéral ni un motif reconnu : elle peut provenir d'une variable construite ailleurs dans le code.`,
               impact: "L'analyse statique ne lit que des fichiers déclarés en clair : une source calculée peut pointer vers du code jamais vu par aucune règle, y compris une URL blob: ou data: assemblée dans une instruction précédente.",
-              remediation: `Utiliser un chemin de fichier littéral (\`new ${n.callee.name}('./chemin/local.js')\`), ou documenter dans le README la provenance exacte de cette source.`,
+              remediation: `Utiliser un chemin de fichier littéral (\`new ${nomWorker}('./chemin/local.js')\`), ou documenter dans le README la provenance exacte de cette source.`,
               referentiels: [REF_GUIDE, 'CWE-95'],
             }));
           }
@@ -1031,71 +1140,109 @@ export function analyserScriptDynamique(ctx) {
   pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
 
-    const variablesScript = new Set();
+    // nom de variable -> 'script' | 'link'. Un <link> créé dynamiquement
+    // (feuille de style, préchargement…) et pointé vers un domaine externe
+    // porte le même défaut de traçabilité qu'un <script> — une source lue nulle
+    // part dans le HTML statique — par les deux mêmes voies : affectation de
+    // propriété (`.src`/`.href`) ou `setAttribute`.
+    const variablesElement = new Map();
     walk.ancestor(ast, {
       CallExpression(n, _state, ancetres) {
         const nom = nomPointe(n.callee) || '';
         if (!/(^|\.)createElement$/.test(nom)) return;
-        if ((chaineLitterale(n.arguments[0]) || '').toLowerCase() !== 'script') return;
+        const balise = (chaineLitterale(n.arguments[0]) || '').toLowerCase();
+        if (balise !== 'script' && balise !== 'link') return;
         const parent = ancetres[ancetres.length - 2];
-        if (parent?.type === 'VariableDeclarator' && parent.id.type === 'Identifier') variablesScript.add(parent.id.name);
-        if (parent?.type === 'AssignmentExpression' && parent.left.type === 'Identifier') variablesScript.add(parent.left.name);
+        if (parent?.type === 'VariableDeclarator' && parent.id.type === 'Identifier') variablesElement.set(parent.id.name, balise);
+        if (parent?.type === 'AssignmentExpression' && parent.left.type === 'Identifier') variablesElement.set(parent.left.name, balise);
       },
     });
-    if (!variablesScript.size) return;
+    if (!variablesElement.size) return;
 
-    // Un `integrity` assigné sur le même élément — avant ou après `.src`, peu
-    // importe l'ordre — est le même signal d'atténuation que C-EXFIL-03
-    // reconnaît déjà pour une balise <script integrity="…"> statique : la
-    // sévérité ne doit pas dépendre du style d'écriture (URL en constante ou
-    // en littéral) mais de cette propriété de sécurité réelle.
+    // Un `integrity` assigné sur le même élément — avant ou après la source,
+    // par affectation ou par `setAttribute`, peu importe l'ordre ou la forme
+    // — est le même signal d'atténuation que C-EXFIL-03 reconnaît déjà pour
+    // une balise statique : la sévérité ne doit pas dépendre du style
+    // d'écriture mais de cette propriété de sécurité réelle.
     const variablesAvecIntegrite = new Set();
     walk.simple(ast, {
       AssignmentExpression(n) {
         if (n.left.type !== 'MemberExpression' || n.left.computed) return;
         if (n.left.property.name !== 'integrity') return;
-        if (n.left.object.type !== 'Identifier' || !variablesScript.has(n.left.object.name)) return;
+        if (n.left.object.type !== 'Identifier' || !variablesElement.has(n.left.object.name)) return;
         variablesAvecIntegrite.add(n.left.object.name);
       },
+      CallExpression(n) {
+        if (!/(^|\.)setAttribute$/.test(nomPointe(n.callee) || '')) return;
+        if (n.callee.type !== 'MemberExpression' || n.callee.object.type !== 'Identifier') return;
+        if (!variablesElement.has(n.callee.object.name)) return;
+        if ((chaineLitterale(n.arguments[0]) || '').toLowerCase() !== 'integrity') return;
+        variablesAvecIntegrite.add(n.callee.object.name);
+      },
     });
+
+    function signaler(noeud, nomVariable, valeurNoeud) {
+      const type = variablesElement.get(nomVariable);
+      const nomBalise = type === 'script' ? '<script>' : '<link>';
+      const attribut = type === 'script' ? 'src' : 'href';
+
+      const valeur = chaineLitterale(valeurNoeud);
+      const dynamique = estDynamique(valeurNoeud);
+      const h = hote(valeur ?? '');
+      if (!dynamique && (estLocal(h) || estGrist(h))) return;
+
+      const cle = `${unite.chemin}:${ligneDe(noeud)}:${nomVariable}`;
+      if (vus.has(cle)) return;
+      vus.add(cle);
+      if (!dynamique) enregistrerDestination(ctx, h);
+
+      const protege = !dynamique && variablesAvecIntegrite.has(nomVariable);
+      // Un <script> injecté exécute du code avec tous les privilèges du widget ;
+      // un <link> externe n'atteint « que » l'exfiltration par sélecteurs CSS ou
+      // un contenu non garanti d'une visite à l'autre — un risque réel mais
+      // d'une autre nature, donc un cran de sévérité en dessous, jamais bloquant.
+      const severite = type === 'script' ? (dynamique ? 'majeur' : 'critique') : (dynamique ? 'mineur' : 'majeur');
+      const bloquant = type === 'script' && !dynamique && !protege;
+
+      constats.push(constat({
+        regle: 'C-EXFIL-05', axe: 'C', severite, bloquant,
+        confiance: dynamique ? 'a_verifier' : 'certain',
+        titre: dynamique
+          ? `Élément ${nomBalise} créé dynamiquement, avec un ${attribut} calculé à l'exécution`
+          : `Élément ${nomBalise} créé dynamiquement et pointé vers un service externe : ${h}${protege ? ' (intégrité vérifiée)' : ''}`,
+        fichier: unite.chemin, ligne: ligneDe(noeud),
+        extrait: extraireSource(unite.source, noeud),
+        constat: dynamique
+          ? `Le code crée un élément \`${nomBalise}\` par \`createElement('${type}')\` puis lui donne un ${attribut} construit à l'exécution (affectation ou \`setAttribute\`) : la lecture du code seule ne permet pas de savoir quelle ressource sera réellement chargée.`
+          : `Le code crée un élément \`${nomBalise}\` par \`createElement('${type}')\` et l'attache à \`${h}\`, un service extérieur à l'instance Grist${protege ? ', avec un attribut `integrity` assigné sur le même élément' : " sans contrôle d'intégrité (`integrity`)"}.`,
+        impact: type === 'script'
+          ? "Un script inséré de cette façon échappe à l'analyse statique du HTML (qui ne lit que les balises `<script src>` déjà présentes dans le document), et peut être déclenché après un délai ou une interaction de l'agent, hors de la fenêtre d'observation d'un audit ponctuel. Une fois exécuté, ce script a tous les privilèges du widget, donc l'accès que l'agent lui a accordé au document."
+          : "Une feuille de style ou une ressource préchargée insérée de cette façon échappe à l'analyse statique du HTML : elle peut exfiltrer des données affichées via des sélecteurs d'attribut CSS, ou changer de contenu d'une visite à l'autre sans qu'aucune revue ne le revoie.",
+        remediation: dynamique
+          ? `Restreindre ${attribut} à une liste blanche de constantes, et documenter dans le README la liste exhaustive des ressources chargées dynamiquement.`
+          : protege
+            ? `Ce chargement vérifie déjà l'intégrité de la ressource récupérée depuis \`${h}\` : il suffit de documenter ce choix dans le README.`
+            : `Ajouter un attribut \`integrity\` (et \`crossorigin\`) sur l'élément avant de l'attacher au document, ou déclarer cette ressource directement dans le HTML, ou documenter dans le README pourquoi le chargement dynamique vers \`${h}\` est nécessaire.`,
+        referentiels: [REF_GUIDE, 'OWASP Top 10 A08:2021 — Intégrité logicielle', 'CWE-829'],
+      }));
+    }
 
     walk.simple(ast, {
       AssignmentExpression(n) {
         if (n.left.type !== 'MemberExpression' || n.left.computed) return;
-        if (n.left.property.name !== 'src') return;
-        if (n.left.object.type !== 'Identifier' || !variablesScript.has(n.left.object.name)) return;
-
-        const valeur = chaineLitterale(n.right);
-        const dynamique = estDynamique(n.right);
-        const h = hote(valeur ?? '');
-        if (!dynamique && (estLocal(h) || estGrist(h))) return;
-
-        const cle = `${unite.chemin}:${ligneDe(n)}`;
-        if (vus.has(cle)) return;
-        vus.add(cle);
-        if (!dynamique) enregistrerDestination(ctx, h);
-
-        const protege = !dynamique && variablesAvecIntegrite.has(n.left.object.name);
-
-        constats.push(constat({
-          regle: 'C-EXFIL-05', axe: 'C', severite: dynamique ? 'majeur' : 'critique', bloquant: !dynamique && !protege,
-          confiance: dynamique ? 'a_verifier' : 'certain',
-          titre: dynamique
-            ? "Élément <script> créé dynamiquement, avec une source calculée à l'exécution"
-            : `Élément <script> créé dynamiquement et pointé vers un service externe : ${h}${protege ? ' (intégrité vérifiée)' : ''}`,
-          fichier: unite.chemin, ligne: ligneDe(n),
-          extrait: extraireSource(unite.source, n),
-          constat: dynamique
-            ? "Le code crée un élément `<script>` par `createElement('script')` puis lui assigne une source construite à l'exécution : la lecture du code seule ne permet pas de savoir quel script sera réellement chargé."
-            : `Le code crée un élément \`<script>\` par \`createElement('script')\` et l'attache à \`${h}\`, un service extérieur à l'instance Grist${protege ? ', avec un attribut `integrity` assigné sur le même élément' : ' sans contrôle d\'intégrité (`integrity`)'}.`,
-          impact: "Un script inséré de cette façon échappe à l'analyse statique du HTML (qui ne lit que les balises `<script src>` déjà présentes dans le document), et peut être déclenché après un délai ou une interaction de l'agent, hors de la fenêtre d'observation d'un audit ponctuel. Une fois exécuté, ce script a tous les privilèges du widget, donc l'accès que l'agent lui a accordé au document.",
-          remediation: dynamique
-            ? "Restreindre la source à une liste blanche de constantes, et documenter dans le README la liste exhaustive des scripts chargés dynamiquement."
-            : protege
-              ? `Ce chargement vérifie déjà l'intégrité du script récupéré depuis \`${h}\` : il suffit de documenter ce choix dans le README.`
-              : `Ajouter un attribut \`integrity\` (et \`crossorigin\`) sur l'élément avant de l'attacher au document, ou déclarer ce script directement dans le HTML (\`<script src="…" integrity="…">\`), ou documenter dans le README pourquoi le chargement dynamique vers \`${h}\` est nécessaire.`,
-          referentiels: [REF_GUIDE, 'OWASP Top 10 A08:2021 — Intégrité logicielle', 'CWE-829'],
-        }));
+        if (n.left.object.type !== 'Identifier') return;
+        const type = variablesElement.get(n.left.object.name);
+        if (!type) return;
+        if (n.left.property.name !== (type === 'script' ? 'src' : 'href')) return;
+        signaler(n, n.left.object.name, n.right);
+      },
+      CallExpression(n) {
+        if (!/(^|\.)setAttribute$/.test(nomPointe(n.callee) || '')) return;
+        if (n.callee.type !== 'MemberExpression' || n.callee.object.type !== 'Identifier') return;
+        const type = variablesElement.get(n.callee.object.name);
+        if (!type) return;
+        if ((chaineLitterale(n.arguments[0]) || '').toLowerCase() !== (type === 'script' ? 'src' : 'href')) return;
+        signaler(n, n.callee.object.name, n.arguments[1]);
       },
     });
   });

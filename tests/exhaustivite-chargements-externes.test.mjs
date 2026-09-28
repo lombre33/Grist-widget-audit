@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { extraireImportMaps } from '../src/moteur/analyse-js.js';
-import { analyserRessourcesExternes, analyserSortiesReseau, analyserInjections } from '../src/regles/c-securite.js';
+import { analyserRessourcesExternes, analyserSortiesReseau, analyserInjections, analyserScriptDynamique } from '../src/regles/c-securite.js';
 import { analyserDependancesDistantes } from '../src/regles/e-dependances.js';
 import { construireContexte } from '../src/contexte/inventaire.js';
 
@@ -442,4 +442,163 @@ test("C-XSS-07 : new Worker(url) où url = URL.createObjectURL(blob) est assign�
   const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c, "l'analyse ne remonte pas au-delà de l'expression donnée à new Worker() : c'est le cas honnêtement documenté comme 'non résolue', pas un constat 'certain'");
   assert.equal(c.severite, 'majeur');
+});
+
+// ---------------------------------------------------------------------------
+// Deuxième relecture de la coordination (exécution réelle, Chromium 141) :
+// tout ce qui précède reconnaît des ÉCRITURES précises (Worker nu, URL nue,
+// Blob inline...) plutôt que ce qui s'exécute réellement — un alias global
+// (window./self./globalThis.), une forme d'appel équivalente (Function sans
+// new, eval indirect), ou une variable au lieu d'un littéral inline suffisent
+// à échapper à la détection ou à faire retomber en sévérité inférieure sans
+// raison de sécurité réelle. Corrigé ci-dessous, plus quelques sinks jamais
+// couverts (createContextualFragment, URL javascript:, setAttribute côté
+// C-EXFIL-05) que la coordination avait signalés comme non vérifiés.
+// ---------------------------------------------------------------------------
+
+test("C-XSS-07 : new window.Worker(...) (alias global) est détecté comme new Worker(...)", () => {
+  const ctx = { fichiers: [fichier('app.js', "const w = new window.Worker(URL.createObjectURL(new Blob(['x'])));")] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c);
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.titre.startsWith('Worker '), true, "l'alias ne doit pas fuiter dans le texte affiché (plus de \"undefined construit depuis...\")");
+});
+
+test("C-XSS-07 : self.URL.createObjectURL(...) (alias global sur URL) est traité comme URL.createObjectURL(...)", () => {
+  const ctx = { fichiers: [fichier('app.js', "const w = new Worker(self.URL.createObjectURL(monBlob));")] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c, "createObjectURL reste createObjectURL derrière un alias self./window./globalThis.");
+  assert.equal(c.severite, 'critique');
+});
+
+test("C-XSS-07 : createObjectURL(...) est critique quel que soit son propre argument (Blob déjà construit ailleurs, tableau depuis une variable, File...)", () => {
+  const ctx = { fichiers: [fichier('app.js', [
+    "const morceaux = ['importScripts(\"https://exemple.tiers/x.js\")'];",
+    'const blob = new Blob(morceaux);',
+    'const w = new Worker(URL.createObjectURL(blob));',
+  ].join('\n'))] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c, "tout appel à createObjectURL passé à un Worker est un code opaque à l'analyse statique, quel que soit ce qui lui est passé");
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test("C-XSS-07 : new URL('data:text/javascript,...') passé à Worker est critique — pas un chemin local sûr", () => {
+  const ctx = { fichiers: [fichier('app.js', "const w = new Worker(new URL('data:text/javascript,importScripts(1)'));")] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c, "le schéma du premier argument de new URL(...) doit décider, pas la seule présence d'un littéral");
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test("C-XSS-07 : new Worker(new URL('./local.js', location.href)) (base autre que import.meta.url) ne déclenche rien", () => {
+  const ctx = { fichiers: [fichier('app.js', "const w = new Worker(new URL('./local.js', location.href));")] };
+  assert.equal(analyserInjections(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0, "le schéma de x ('./local.js') décide, quelle que soit la base");
+});
+
+test("surface exécutée : new Worker(new URL('./w.js', location.href)) (base autre que import.meta.url) fait quand même entrer w.js dans la surface", () => {
+  const dir = depotTemporaire({
+    'index.html': '<!doctype html><script src="app.js"></script>',
+    'app.js': "const w = new Worker(new URL('./w.js', location.href));",
+    'w.js': "importScripts('https://exemple.tiers/lib.js');",
+  });
+  const ctx = construireContexte(dir);
+  const w = ctx.fichiers.find((f) => f.chemin === 'w.js');
+  assert.ok(w?.executee, "w.js doit être dans la surface même si la base n'est pas import.meta.url — c'est le chemin local qui compte, pas la base");
+});
+
+test("C-XSS-03 : Function(...) sans new est traité comme new Function(...)", () => {
+  const ctx = { fichiers: [fichier('app.js', "const f = Function('return document.cookie');")] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('sans new'));
+  assert.ok(c, 'Function(str) sans new compile aussi une chaîne en fonction exécutable');
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test("C-XSS-03 : eval indirect (0, eval)(...) est traité comme eval(...)", () => {
+  const ctx = { fichiers: [fichier('app.js', "(0, eval)('document.cookie');")] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('indirect'));
+  assert.ok(c, "l'eval indirect via l'opérateur virgule est un contournement courant des recherches sur eval(");
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test("C-XSS-01 : createContextualFragment(chaîneDynamique) est signalé comme innerHTML dynamique", () => {
+  const ctx = { fichiers: [fichier('app.js', 'const frag = range.createContextualFragment(html); conteneur.appendChild(frag);')] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-01' && x.titre.includes('createContextualFragment'));
+  assert.ok(c, "un fragment inséré ensuite se comporte exactement comme innerHTML dynamique");
+  assert.equal(c.severite, 'majeur');
+});
+
+test("C-XSS-01 : createContextualFragment(chaîneLittéraleConstante) ne se déclenche pas", () => {
+  const ctx = { fichiers: [fichier('app.js', "const frag = range.createContextualFragment('<b>x</b>');")] };
+  assert.equal(analyserInjections(ctx).filter((x) => x.titre?.includes('createContextualFragment')).length, 0);
+});
+
+test("C-XSS-03 : affectation d'une URL javascript: à .href exécute du code, comme eval()", () => {
+  const ctx = { fichiers: [fichier('app.js', "lien.href = 'javascript:' + document.cookie;")] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('javascript:'));
+  assert.ok(c, "une URL javascript: exécute son contenu comme du code, un déguisement courant pour échapper à une recherche de texte sur eval(");
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test("C-XSS-03 : setAttribute('href', 'javascript:...') est traité comme l'affectation directe", () => {
+  const ctx = { fichiers: [fichier('app.js', "lien.setAttribute('href', 'javascript:alert(document.cookie)');")] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('javascript:'));
+  assert.ok(c);
+});
+
+test("C-XSS-03 : une affectation .href ordinaire (pas javascript:) ne déclenche pas ce constat", () => {
+  const ctx = { fichiers: [fichier('app.js', "lien.href = 'https://exemple.example/page';")] };
+  assert.equal(analyserInjections(ctx).filter((x) => x.titre?.includes('javascript:')).length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// C-EXFIL-05 : setAttribute('src'/'href'), en plus de l'affectation directe,
+// et extension à un <link> créé dynamiquement (même défaut de traçabilité
+// qu'un <script>, pour un risque réel mais d'une autre nature : CSS plutôt
+// que code arbitraire — d'où un cran de sévérité en dessous, jamais bloquant).
+// ---------------------------------------------------------------------------
+
+test("C-EXFIL-05 : s.setAttribute('src', urlExterne) sur un <script> créé dynamiquement est détecté comme s.src = urlExterne", () => {
+  const ctx = { fichiers: [fichier('app.js', [
+    "const s = document.createElement('script');",
+    "s.setAttribute('src', 'https://cdn.malveillant.example/x.js');",
+    'document.body.appendChild(s);',
+  ].join('\n'))] };
+  const c = analyserScriptDynamique(ctx).find((x) => x.regle === 'C-EXFIL-05');
+  assert.ok(c);
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test("C-EXFIL-05 : un <link> créé dynamiquement et pointé en externe est détecté, en majeur non bloquant (pas comme un <script>)", () => {
+  const ctx = { fichiers: [fichier('app.js', [
+    "const l = document.createElement('link');",
+    "l.href = 'https://cdn.exemple.example/style.css';",
+    'document.head.appendChild(l);',
+  ].join('\n'))] };
+  const c = analyserScriptDynamique(ctx).find((x) => x.regle === 'C-EXFIL-05');
+  assert.ok(c, "un <link> externe est un risque réel (exfiltration CSS) mais d'une autre nature qu'un <script>");
+  assert.equal(c.severite, 'majeur');
+  assert.equal(c.bloquant, false, "jamais bloquant à lui seul, contrairement à un <script> : le risque n'est pas l'exécution de code arbitraire");
+});
+
+test("C-EXFIL-05 : l.setAttribute('href', urlExterne) sur un <link> créé dynamiquement est aussi détecté", () => {
+  const ctx = { fichiers: [fichier('app.js', [
+    "const l = document.createElement('link');",
+    "l.setAttribute('href', 'https://cdn.exemple.example/style.css');",
+  ].join('\n'))] };
+  const c = analyserScriptDynamique(ctx).find((x) => x.regle === 'C-EXFIL-05');
+  assert.ok(c);
+  assert.equal(c.severite, 'majeur');
+});
+
+test("C-EXFIL-05 : un <link> local ou Grist ne déclenche rien", () => {
+  const ctx = { fichiers: [fichier('app.js', [
+    "const l = document.createElement('link');",
+    "l.href = '/style.css';",
+  ].join('\n'))] };
+  assert.equal(analyserScriptDynamique(ctx).filter((x) => x.regle === 'C-EXFIL-05').length, 0);
 });

@@ -162,7 +162,7 @@ function calculerSurface(racine, fichiers, entrees) {
     surface.add(rel);
 
     for (const ref of referencesSortantes(f)) {
-      if (/^(https?:)?\/\//i.test(ref) || ref.startsWith('data:')) continue;
+      if (/^(https?:)?\/\//i.test(ref) || ref.startsWith('data:') || ref.startsWith('blob:')) continue;
       // `path.posix.*` ici aussi, même raison que dans trouverPointsDEntree().
       const cible = path.posix.normalize(path.posix.join(path.posix.dirname(rel), ref.split(/[?#]/)[0]));
       for (const candidat of [cible, `${cible}.js`, `${cible}.mjs`, path.posix.join(cible, 'index.js')]) {
@@ -181,20 +181,26 @@ function calculerSurface(racine, fichiers, entrees) {
  * `importScripts()` vers un domaine externe, par exemple — voir
  * C-EXFIL-01/02) n'entre jamais dans `surface`, quel que soit l'appel qu'il
  * contient. Couvre la forme directe (`new Worker('./w.js')`), celle que
- * produisent les empaqueteurs (`new Worker(new URL('./w.js',
- * import.meta.url))`, Vite/Webpack 5), et un gabarit statique sans
- * interpolation (`` new Worker(`./w.js`) ``) — jamais une expression
- * calculée, qu'aucune de ces trois formes syntaxiques ne couvre. Une URL
- * absolue (http(s):, data:) est déjà écartée plus bas par le même filtre
- * que pour les autres références ; `importScripts()` peut prendre plusieurs
- * arguments (tous chargés), on les suit tous, pas seulement le premier.
+ * produisent les empaqueteurs (`new Worker(new URL('./w.js', <base
+ * quelconque>))`, Vite/Webpack 5 — la base n'est pas vérifiée : c'est le
+ * premier argument, littéral ici par construction, qui reste local ou
+ * devient une URL absolue morte, jamais autre chose, quelle qu'elle soit),
+ * et un gabarit statique sans interpolation (`` new Worker(`./w.js`) ``) —
+ * jamais une expression calculée, qu'aucune de ces formes syntaxiques ne
+ * couvre. Un alias global de tête (`window.Worker`, `self.SharedWorker`,
+ * `globalThis.URL`) est reconnu au même titre que la forme nue. Une URL
+ * absolue (http(s):, data:, blob:) est déjà écartée plus bas par le même
+ * filtre que pour les autres références ; `importScripts()` peut prendre
+ * plusieurs arguments (tous chargés), on les suit tous, pas seulement le
+ * premier.
  */
 function referencesWorker(contenu) {
+  const ALIAS = '(?:(?:window|self|globalThis)\\.)?';
   const refs = [];
-  for (const m of contenu.matchAll(/\bnew\s+(?:Worker|SharedWorker)\s*\(\s*(?:["']([^"']+)["']|`([^`$]+)`)/g)) {
+  for (const m of contenu.matchAll(new RegExp(`\\bnew\\s+${ALIAS}(?:Worker|SharedWorker)\\s*\\(\\s*(?:["']([^"']+)["']|\`([^\`$]+)\`)`, 'g'))) {
     refs.push(m[1] ?? m[2]);
   }
-  for (const m of contenu.matchAll(/\bnew\s+(?:Worker|SharedWorker)\s*\(\s*new\s+URL\s*\(\s*(?:["']([^"']+)["']|`([^`$]+)`)\s*,\s*import\.meta\.url/g)) {
+  for (const m of contenu.matchAll(new RegExp(`\\bnew\\s+${ALIAS}(?:Worker|SharedWorker)\\s*\\(\\s*new\\s+${ALIAS}URL\\s*\\(\\s*(?:["']([^"']+)["']|\`([^\`$]+)\`)\\s*[,)]`, 'g'))) {
     refs.push(m[1] ?? m[2]);
   }
   for (const m of contenu.matchAll(/\bimportScripts\s*\(([^)]*)\)/g)) {
