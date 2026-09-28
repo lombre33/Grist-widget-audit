@@ -194,6 +194,55 @@ Ajoute pour chacun :
 
 ## 5. Référentiel détaillé, axe par axe
 
+### Périmètre : la surface exécutée
+
+Le référentiel ne juge pas tout le contenu du dépôt de la même façon. La
+plupart des règles ci-dessous qui portent sur du code JS/HTML/CSS (celles qui
+parlent de fichier « exécuté », ainsi que E-DEP-01) ne s'appliquent qu'à la
+**surface exécutée** : les fichiers réellement atteignables depuis un point
+d'entrée du widget — pas l'intégralité du dépôt. Un script de développement,
+un prototype jamais branché, ou une ancienne version gardée à côté n'en font
+pas partie.
+
+**Points d'entrée** : le fichier `index.html` à la racine du dépôt ou un
+niveau en dessous ; ou, si un `manifest.json` déclare des widgets avec une
+`url` relative (pas une URL absolue), chacun des fichiers HTML qu'elle
+désigne ; à défaut de l'un ou l'autre, le fichier HTML au chemin le plus
+court du dépôt.
+
+**Fermeture transitive** depuis ces points d'entrée, en suivant toute
+référence **locale** (jamais une URL absolue `http(s):` ou `data:`, qui sort
+du dépôt et n'entre donc jamais dans la surface) :
+- HTML : `<script src="...">`, `<link href="...">`.
+- CSS : `url(...)`.
+- JS/TS (`.js`, `.mjs`, `.cjs`, `.ts`, `.jsx`, `.tsx`) : `import ... from
+  '...'`, `import('...')` dynamique.
+- Dans un fichier HTML (y compris un `<script>` inline) ou JS : `new
+  Worker('./x.js')` / `new SharedWorker('./x.js')` — source littérale, ou
+  gabarit sans interpolation (`` `./x.js` `` mais jamais `` `./${x}.js` ``)
+  — et la forme que produisent les empaqueteurs, `new Worker(new
+  URL('./x.js', import.meta.url))` (idem `SharedWorker`).
+- Dans un fichier de worker atteint : `importScripts(...)` — **tous** ses
+  arguments littéraux, pas seulement le premier.
+- Résolution tolérante : le chemin cité tel quel, puis avec `.js`, `.mjs`,
+  ou `index.js` dans un dossier — en cas de doute le fichier entre dans la
+  surface (un faux positif ici coûte moins cher qu'un angle mort de
+  sécurité).
+
+**Exceptions qui lisent tout le dépôt, sans se limiter à cette surface** :
+C-GRIST-01 à 04 (la négociation d'accès Grist peut apparaître n'importe où
+dans le code JS du dépôt, pas seulement dans ce qui est chargé au premier
+écran) et C-SECRET-01 (un secret versionné est un risque même dans un
+fichier que le navigateur ne charge jamais). Les règles qui portent sur un
+document plutôt que sur du code exécuté (README pour B-DOC-*, LICENSE pour
+E-LIC-*) lisent aussi tout le dépôt, par construction, sans notion de
+surface.
+
+Applique donc une règle « surface » **seulement** aux fichiers qui en font
+partie, comme le fait l'outil. Un motif que tu repères ailleurs dans le
+dépôt (script de dev non branché, prototype) ne compte pas dans le score
+reproduit — note-le en section 8 si tu le juges digne d'attention.
+
 ### Axe A — Qualité du code (poids 20)
 
 | Règle | Déclenchement | Sévérité |
@@ -247,8 +296,8 @@ C'est l'axe le plus dense du référentiel — largement devant les autres rien 
 **C-EXFIL — sortie de données**
 | Règle | Déclenchement | Sévérité |
 |---|---|---|
-| C-EXFIL-01 | Requête sortante (`fetch`, XHR, `sendBeacon`, `importScripts`, `WebSocket`, `EventSource`, `import()` distant) vers un hôte externe **littéral** (non Grist, non local) | **critique, BLOQUANT** |
-| C-EXFIL-02 | Même chose mais destination **calculée à l'exécution** (variable, concaténation) — ne peut être tranché que par l'axe D | majeur, à_vérifier, non bloquant |
+| C-EXFIL-01 | Requête sortante (`fetch`, XHR, `sendBeacon`, `importScripts`, `WebSocket`, `EventSource`, `import()` distant) vers un hôte externe **littéral** (non Grist, non local). `importScripts(a, b, c)` charge **tous** ses arguments, pas seulement le premier : chaque argument littéral externe compte comme une occurrence distincte de cette règle | **critique, BLOQUANT** |
+| C-EXFIL-02 | Même chose mais destination **calculée à l'exécution** (variable, concaténation) — ne peut être tranché que par l'axe D. Même règle pour `importScripts` : chaque argument calculé compte séparément | majeur, à_vérifier, non bloquant |
 | C-EXFIL-03 | Ressource externe déclarée en HTML/CSS (`<script src>`, `<link>`, `<iframe>`, `<img>`, `<object data>`, `<embed src>`, `@import`, `url()` CSS) vers un hôte non Grist : `<script>` **sans** `integrity` → **critique, BLOQUANT** ; `<script>` avec `integrity`, ou autre type de ressource → majeur (feuille de style/iframe) ou mineur (image, objet, contenu embarqué, ressource CSS). S'applique aussi à une entrée d'un `<script type="importmap">` (clés `imports` et `scopes`) résolue vers un hôte externe : sans couverture par la clé `integrity` de premier niveau de l'import map → **critique, BLOQUANT** ; couverte → majeur (même logique qu'un `<script>` classique, l'import map n'étant jamais lue par les motifs HTML ci-dessus puisque son contenu est du JSON) |
 | C-EXFIL-04 | `grist-plugin-api.js` chargé depuis un domaine externe (ex. `docs.getgrist.com`) plutôt qu'en relatif depuis l'instance hôte | majeur |
 | C-EXFIL-05 | `<script>` créé dynamiquement (`createElement('script')` puis `.src =`) pointé vers un hôte externe littéral : sans `integrity` → **critique, BLOQUANT** ; avec `integrity` assigné sur le même élément → critique mais non bloquant ; source calculée à l'exécution → majeur, à_vérifier |
@@ -340,7 +389,7 @@ maximal), embarquées dans le dépôt (risque maîtrisé), de développement
 
 | Règle | Déclenchement | Sévérité |
 |---|---|---|
-| E-DEP-01 | `<script src="https://...">` chargeant une bibliothèque tierce à l'exécution (hors `grist-plugin-api.js`), **ou** entrée d'un `<script type="importmap">` (clés `imports`/`scopes`) résolue vers un hôte externe : sans `integrity` (attribut de balise, ou clé `integrity` de premier niveau de l'import map pour ce cas) → **critique, BLOQUANT** ; avec `integrity` mais version non figée dans l'URL → majeur |
+| E-DEP-01 | `<script src="https://...">` chargeant une bibliothèque tierce à l'exécution (hors `grist-plugin-api.js`), **ou** entrée d'un `<script type="importmap">` (clés `imports`/`scopes`) résolue vers un hôte externe : la sévérité dépend **uniquement** de `integrity` (attribut de balise, ou clé `integrity` de premier niveau de l'import map pour ce cas) — absent → **critique, BLOQUANT** ; présent → majeur, **que la version soit figée dans l'URL ou non**. Une version non figée n'apparaît que dans le texte du constat, jamais dans la sévérité |
 | E-DEP-02 | Bibliothèque tierce recopiée dans le dépôt (fichier « vendorisé ») : version ET licence identifiables en en-tête → info ; sinon → mineur |
 | E-DEP-03 | (neutre) Pas de `package.json` du tout | info |
 | E-DEP-04 | Dépendances npm déclarées sans fichier de verrouillage (`package-lock.json`/`yarn.lock`/`pnpm-lock.yaml`) | majeur |
