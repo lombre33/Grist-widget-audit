@@ -182,6 +182,8 @@ function grouperEtRendre(constats) {
   return sortie.join('\n');
 }
 
+const BADGE_BLOQUANT = '<span class="badge-bloquant" title="Un point bloquant suffit à rendre le verdict NON CONFORME ; il n’empêche pas d’installer ce widget, c’est un signal de risque, pas une interdiction.">BLOQUANT</span>';
+
 function carte(c) {
   const loc = c.fichier ? `<code class="loc">${echapper(c.fichier)}${c.ligne ? ':' + c.ligne : ''}</code>` : '';
   return `
@@ -192,7 +194,7 @@ function carte(c) {
           <span class="constat-corps">
             <span class="constat-ligne1">
               <code class="regle">${echapper(c.regle)}</code>
-              ${c.bloquant ? '<span class="badge-bloquant" title="Un point bloquant suffit à rendre le verdict NON CONFORME ; il n’empêche pas d’installer ce widget, c’est un signal de risque, pas une interdiction.">BLOQUANT</span>' : ''}
+              ${c.bloquant ? BADGE_BLOQUANT : ''}
               <span class="constat-titre">${echapper(c.titre)}</span>
             </span>
             ${loc ? `<span class="constat-ligne2">${loc}</span>` : ''}
@@ -220,6 +222,7 @@ function carteGroupee(groupe) {
           <span class="constat-corps">
             <span class="constat-ligne1">
               <code class="regle">${echapper(tete.regle)}</code>
+              ${groupe.some((g) => g.bloquant) ? BADGE_BLOQUANT : ''}
               <span class="constat-titre">${decompte(groupe)} — ${echapper(titreGenerique(tete.titre))}</span>
             </span>
           </span>
@@ -231,7 +234,7 @@ function carteGroupee(groupe) {
           <p class="constat-meta">Confiance : ${echapper(CONFIANCES[tete.confiance])}${tete.referentiels?.length ? ` · Référentiel(s) : ${echapper(tete.referentiels.join(' ; '))}` : ''}</p>
           <p class="occurrences-titre">Chaque occurrence :</p>
           <ul class="occurrences">
-            ${groupe.map((g) => `<li><code class="loc">${echapper(g.fichier ?? '')}${g.ligne ? ':' + g.ligne : ''}</code> — ${echapper(g.titre)}</li>`).join('\n            ')}
+            ${groupe.map((g) => `<li id="${g.uid}"><code class="loc">${echapper(g.fichier ?? '')}${g.ligne ? ':' + g.ligne : ''}</code> — ${echapper(g.titre)}</li>`).join('\n            ')}
           </ul>
         </div>
       </details>`;

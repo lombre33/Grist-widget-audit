@@ -124,7 +124,8 @@ function estMasque(balise) {
  * double, parse5 relit tous les attributs déjà lus de la balise, ce qui rend
  * une balise à des dizaines de milliers d'attributs quadratique. Un ensemble
  * de noms fait le même tri. Repose sur `_leaveAttrName`, `currentToken` et
- * `currentAttr`, internes à parse5 7 : un test chronométré le surveille.
+ * `currentAttr`, internes à parse5 : sa version est épinglée dans
+ * package.json, et un test chronométré surveille la sous-classe.
  */
 class Decoupeur extends Tokenizer {
   _leaveAttrName() {
@@ -191,7 +192,7 @@ function examinerPage(source) {
     return texte.length > LONGUEUR_MAX_EXTRAIT ? `${texte.slice(0, LONGUEUR_MAX_EXTRAIT)}…` : texte;
   };
   const fermerBouton = (fin) => {
-    if (!bouton.nomme) boutons.push({ ligne: bouton.ligne, extrait: extraire(bouton.debut, Math.max(fin, bouton.finOuvrante)), references: bouton.references });
+    if (!bouton.nomme) boutons.push({ debut: bouton.debut, ligne: bouton.ligne, extrait: extraire(bouton.debut, Math.max(fin, bouton.finOuvrante)), references: bouton.references });
     bouton = null;
   };
   const empiler = (element) => {
@@ -232,9 +233,17 @@ function examinerPage(source) {
         if (nom === 'html') balisesHtml.push({ ligne: startLine, extrait: extraire(startOffset, endOffset), lang: attribut(balise, 'lang') });
         if (nom === 'img' && attribut(balise, 'alt') === undefined) imagesSansAlt.push({ ligne: startLine, extrait: extraire(startOffset, endOffset) });
         if (nom === 'label' && attribut(balise, 'for')) idsEtiquetes.add(attribut(balise, 'for'));
-        if (CHAMPS_DE_FORMULAIRE.has(nom) && !TYPES_SANS_ETIQUETTE.has((attribut(balise, 'type') ?? '').trim().toLowerCase()) &&
+        const type = (attribut(balise, 'type') ?? '').trim().toLowerCase();
+        if (CHAMPS_DE_FORMULAIRE.has(nom) && !TYPES_SANS_ETIQUETTE.has(type) &&
           !renseigne(attribut(balise, 'aria-label')) && !renseigne(attribut(balise, 'title'))) {
           champs.push({ ligne: startLine, extrait: extraire(startOffset, endOffset), id, dansEtiquette: Boolean(ouverts.get('label')), references: idsReferences(attribut(balise, 'aria-labelledby')) });
+        }
+        // Un submit ou un reset a un nom par défaut ; un bouton `<input>` n'a
+        // pas de contenu, son nom ne vient que de ses attributs.
+        const nomInput = { button: 'value', image: 'alt' }[type];
+        if (nom === 'input' && nomInput && !renseigne(attribut(balise, nomInput)) &&
+          !renseigne(attribut(balise, 'aria-label')) && !renseigne(attribut(balise, 'title'))) {
+          boutons.push({ debut: startOffset, ligne: startLine, extrait: extraire(startOffset, endOffset), references: idsReferences(attribut(balise, 'aria-labelledby')) });
         }
       }
 
@@ -282,7 +291,8 @@ function examinerPage(source) {
     balisesHtml,
     imagesSansAlt,
     champsOrphelins: champs.filter((c) => !c.dansEtiquette && !(c.id && idsEtiquetes.has(c.id)) && !visePresent(c.references)),
-    boutonsMuets: boutons.filter((b) => !visePresent(b.references)),
+    // Un `<button>` n'est relevé qu'à sa fermeture : l'ordre du document est rétabli pour que le constat cite le premier.
+    boutonsMuets: boutons.filter((b) => !visePresent(b.references)).sort((x, y) => x.debut - y.debut),
   };
 }
 
@@ -353,9 +363,9 @@ export function analyserAccessibiliteStatique(ctx) {
         titre: `${boutonsMuets.length} bouton(s) sans intitulé accessible`,
         fichier: f.chemin, ligne: boutonsMuets[0].ligne,
         extrait: boutonsMuets[0].extrait,
-        constat: "Des boutons n'ont ni texte lu par un lecteur d'écran, ni `aria-label`, ni `aria-labelledby` vers un élément de la page, ni `title` : leur contenu se réduit à une icône, une image sans alternative, ou rien.",
+        constat: "Des boutons n'ont ni texte lu par un lecteur d'écran, ni `aria-label`, ni `aria-labelledby` vers un élément de la page, ni `title` : leur contenu se réduit à une icône, une image sans alternative, ou rien. Pour un `<input type=\"button\">`, le texte est sa `value` ; pour un `<input type=\"image\">`, son `alt`.",
         impact: "Le bouton est annoncé « bouton » sans indication de sa fonction.",
-        remediation: 'Ajouter un `aria-label` explicite sur chaque bouton à icône.',
+        remediation: 'Ajouter un `aria-label` explicite sur chaque bouton à icône, une `value` sur chaque `<input type="button">`, un `alt` sur chaque `<input type="image">`.',
         referentiels: ['RGAA 4.1 — critère 11.9', 'WCAG 2.1 — 4.1.2'],
       }));
     }

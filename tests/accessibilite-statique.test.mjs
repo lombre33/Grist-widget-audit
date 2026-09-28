@@ -116,6 +116,31 @@ test('F-RGAA-05 : le constat pointe la ligne du premier bouton signalé et en ci
   assert.equal(c.extrait, '<button class="x"><i></i></button>');
 });
 
+test('F-RGAA-05 : un <input type="button"> est nommé par sa value, un aria-label, un aria-labelledby présent ou un title, sinon il est signalé', () => {
+  assert.equal(boutonsMuets('<input type="button">'), 1);
+  assert.equal(boutonsMuets('<input type=BUTTON value="  ">'), 1);
+  assert.equal(boutonsMuets('<input type="button" aria-labelledby="absent">'), 1);
+  assert.equal(boutonsMuets('<input type="button" value="Valider">'), 0);
+  assert.equal(boutonsMuets('<input type="button" aria-label="Valider">'), 0);
+  assert.equal(boutonsMuets('<input type="button" title="Valider">'), 0);
+  assert.equal(boutonsMuets('<b id="l">Valider</b><input type="button" aria-labelledby="l">'), 0);
+});
+
+test('F-RGAA-05 : un submit ou un reset a un nom par défaut, un <input type="image"> a besoin d\'un alt non vide', () => {
+  assert.equal(boutonsMuets('<input type="submit"><input type="reset">'), 0);
+  assert.equal(boutonsMuets('<input type="image" src="ok.png">'), 1);
+  assert.equal(boutonsMuets('<input type="image" src="ok.png" alt="">'), 1);
+  assert.equal(boutonsMuets('<input type="image" src="ok.png" alt="Envoyer">'), 0);
+  assert.equal(boutonsMuets('<input type="image" src="ok.png" aria-label="Envoyer">'), 0);
+});
+
+test('F-RGAA-05 : boutons et <input> signalés sont comptés ensemble, et le constat cite le premier dans l\'ordre de la page', () => {
+  const c = analyserAccessibiliteStatique({ fichiers: [fichier(page('<button class="a"><i></i>\n<input type="button" class="b">\n</button><input type="image">'))], entrees: ['index.html'] }).find((x) => x.regle === 'F-RGAA-05');
+  assert.match(c.titre, /^3 /);
+  assert.equal(c.ligne, 2);
+  assert.match(c.extrait, /^<button class="a">/);
+});
+
 // F-RGAA-01, 03, 04 : même passe ----------------------------------------------------
 
 test('F-RGAA-01 : lang sans guillemets est une langue déclarée ; lang vide ou absent, non ; un lang écrit dans un script ne compte pas', () => {
