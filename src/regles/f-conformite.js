@@ -9,6 +9,7 @@
  * déclare pas dans le format attendu par le catalogue.
  */
 import path from 'node:path';
+import { Tokenizer, TokenizerMode, foreignContent } from 'parse5';
 import { constat } from '../moteur/modele.js';
 
 /**
@@ -93,33 +94,196 @@ export function analyserSouverainete(ctx) {
  * « conforme RGAA ».
  */
 
+const ELEMENTS_VIDES = new Set(['area', 'base', 'basefont', 'bgsound', 'br', 'col', 'embed', 'frame', 'hr', 'img', 'input', 'keygen', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
+
+// Éléments dont le contenu n'est pas du balisage : dans parse5, c'est le constructeur d'arbre qui bascule le découpeur, ici c'est à nous. `noscript` suit un navigateur où les scripts s'exécutent.
+const MODES_TEXTE_BRUT = new Map([
+  ['script', TokenizerMode.SCRIPT_DATA], ['style', TokenizerMode.RAWTEXT], ['xmp', TokenizerMode.RAWTEXT],
+  ['iframe', TokenizerMode.RAWTEXT], ['noembed', TokenizerMode.RAWTEXT], ['noframes', TokenizerMode.RAWTEXT],
+  ['noscript', TokenizerMode.RAWTEXT], ['textarea', TokenizerMode.RCDATA], ['title', TokenizerMode.RCDATA],
+  ['plaintext', TokenizerMode.PLAINTEXT],
+]);
+
+const CHAMPS_DE_FORMULAIRE = new Set(['input', 'select', 'textarea']);
+const TYPES_SANS_ETIQUETTE = new Set(['hidden', 'submit', 'button', 'reset', 'image']);
+const LONGUEUR_MAX_EXTRAIT = 300;
+
+const attribut = (balise, nom) => balise.attrs.find((a) => a.name === nom)?.value;
+const renseigne = (valeur) => typeof valeur === 'string' && valeur.trim() !== '';
+const idsReferences = (valeur) => (valeur ?? '').split(/\s+/).filter(Boolean);
+
+/** Sous-arbre absent de l'arbre d'accessibilité : son texte ne nomme rien. */
+function estMasque(balise) {
+  if (balise.attrs.some((a) => a.name === 'hidden')) return true;
+  if ((attribut(balise, 'aria-hidden') ?? '').trim().toLowerCase() === 'true') return true;
+  return /(^|;)\s*(display\s*:\s*none|visibility\s*:\s*hidden)/i.test(attribut(balise, 'style') ?? '');
+}
+
 /**
- * Boutons dont le seul contenu est une icône (`<i>`/`<span>`/`<svg>`), sans
- * texte ni `aria-label`. Écrit à dessein sans le motif `(?:\s*|<[^>]*>\s*)*`
- * qu'utilisait la version précédente : cette alternance, où chaque branche
- * peut matcher zéro caractère, répétée elle-même dans un groupe répété,
- * fait exploser le temps de l'engin de regex (retour arrière catastrophique)
- * dès qu'aucun `</button>` ne referme la construction — relevé par la
- * coordination le 2026-09-28 sur `flashcards/index.html`, un widget officiel
- * de Grist, qui faisait dépasser le délai de 240 s de l'audit entier. En V2,
- * n'importe quelle soumission anonyme aurait suffi à bloquer la file.
- *
- * Repose plutôt sur deux passes déterministes, sans quantificateur imbriqué
- * ambigu : une capture non gourmande (mais bornée par la présence d'un
- * `</button>` littéral, donc linéaire) de chaque bloc bouton, puis un retrait
- * textuel de ses icônes internes pour juger si ce qui reste est vide.
+ * Le découpeur de parse5, à un détail près : pour écarter un attribut en
+ * double, parse5 relit tous les attributs déjà lus de la balise, ce qui rend
+ * une balise à des dizaines de milliers d'attributs quadratique. Un ensemble
+ * de noms fait le même tri. Repose sur `_leaveAttrName`, `currentToken` et
+ * `currentAttr`, internes à parse5 7 : un test chronométré le surveille.
  */
-function trouverBoutonsMuets(c) {
-  const resultats = [];
-  for (const m of c.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/gi)) {
-    const bloc = m[0];
-    const ouverture = bloc.slice(0, bloc.indexOf('>') + 1);
-    if (/\baria-label\s*=/i.test(ouverture)) continue;
-    const interieur = bloc.slice(ouverture.length, bloc.length - '</button>'.length);
-    const sansIcones = interieur.replace(/<(i|span|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, '').replace(/\s+/g, '');
-    if (sansIcones === '') resultats.push(m);
+class Decoupeur extends Tokenizer {
+  _leaveAttrName() {
+    const balise = this.currentToken;
+    balise.nomsVus ??= new Set();
+    if (balise.nomsVus.has(this.currentAttr.name)) return;
+    balise.nomsVus.add(this.currentAttr.name);
+    balise.attrs.push(this.currentAttr);
   }
-  return resultats;
+}
+
+/** Élément étranger (SVG, MathML) dont les enfants sont de nouveau lus comme du HTML. */
+function estPointIntegration(ns, nom, balise) {
+  if (ns === 'svg') return nom === 'foreignobject' || nom === 'desc' || nom === 'title';
+  if (nom === 'annotation-xml') return /^(text\/html|application\/xhtml\+xml)$/i.test((attribut(balise, 'encoding') ?? '').trim());
+  return ['mi', 'mo', 'mn', 'ms', 'mtext'].includes(nom);
+}
+
+/** Ce qu'un élément apporte lui-même au nom d'un bouton : `aria-label`, `title` (en dernier recours), l'alternative d'une image. */
+function nommeParSesAttributs(balise) {
+  return renseigne(attribut(balise, 'aria-label')) || renseigne(attribut(balise, 'title')) || (balise.tagName === 'img' && renseigne(attribut(balise, 'alt')));
+}
+
+/**
+ * Une passe du découpeur de parse5 (l'automate du standard HTML) sur une
+ * page, qui relève ce qu'examinent F-RGAA-01, 03, 04 et 05. Le constructeur
+ * d'arbre de parse5 n'est pas utilisé : il est quadratique sur des pages
+ * piégées, comme l'étaient les expressions régulières de ces règles. Il est
+ * remplacé par une pile d'éléments simplifiée où chaque élément entre et sort
+ * une fois, et un compte des éléments ouverts par nom, qui fait ignorer en
+ * temps constant une balise fermante sans ouvrante. Ce que le constructeur
+ * faisait et qui change le résultat est repris ici : le contenu de `script`,
+ * `style`, `textarea`… n'est pas du balisage ; dans `svg` et `math`, `title`
+ * n'en est pas un et la barre oblique ferme l'élément ; une balise HTML y
+ * ramène au HTML ; les éléments vides ne s'empilent pas ; un `<button>`
+ * ferme celui qui est ouvert.
+ *
+ * Un bouton a un nom s'il porte un `aria-label` ou un `title`, si son
+ * `aria-labelledby` vise un id présent dans la page (résolu à la fin de la
+ * passe, sans relire le texte visé), ou si son contenu hors `aria-hidden`,
+ * `hidden` et `display: none` porte du texte (celui d'un `<span>`, même
+ * masqué visuellement, le `<title>` d'un `<svg>`, la ligature d'une police
+ * d'icônes comme `<i>delete</i>`), l'alternative d'une image ou un nom
+ * donné par ces mêmes attributs. Un seul bouton est suivi à la fois, et son
+ * nom est un booléen : aucun texte n'est accumulé.
+ *
+ * Simplification assumée : un bouton se ferme à sa balise fermante, à la
+ * fermeture d'un élément qui le contient, ou à l'ouverture d'un autre
+ * bouton, portée des tableaux mise à part.
+ */
+function examinerPage(source) {
+  const ids = new Set();
+  const idsEtiquetes = new Set();
+  const balisesHtml = [];
+  const imagesSansAlt = [];
+  const champs = [];
+  const boutons = [];
+  const pile = [];
+  const ouverts = new Map();
+  let bouton = null;
+
+  const extraire = (debut, fin) => {
+    const texte = source.slice(debut, fin);
+    return texte.length > LONGUEUR_MAX_EXTRAIT ? `${texte.slice(0, LONGUEUR_MAX_EXTRAIT)}…` : texte;
+  };
+  const fermerBouton = (fin) => {
+    if (!bouton.nomme) boutons.push({ ligne: bouton.ligne, extrait: extraire(bouton.debut, Math.max(fin, bouton.finOuvrante)), references: bouton.references });
+    bouton = null;
+  };
+  const empiler = (element) => {
+    pile.push(element);
+    ouverts.set(element.nom, (ouverts.get(element.nom) ?? 0) + 1);
+  };
+  const depiler = (fin) => {
+    const element = pile.pop();
+    ouverts.set(element.nom, ouverts.get(element.nom) - 1);
+    if (element.bouton) fermerBouton(fin);
+  };
+  const ajusterModeEtranger = () => {
+    const haut = pile.at(-1);
+    decoupeur.inForeignNode = Boolean(haut && haut.ns !== 'html' && !haut.integration);
+  };
+
+  const decoupeur = new Decoupeur({ sourceCodeLocationInfo: true }, {
+    onStartTag(balise) {
+      const nom = balise.tagName;
+      const { startOffset, endOffset, startLine } = balise.location;
+      const id = attribut(balise, 'id');
+      if (id) ids.add(id);
+
+      if (decoupeur.inForeignNode && foreignContent.causesExit(balise)) {
+        while (pile.length && pile.at(-1).ns !== 'html' && !pile.at(-1).integration) depiler(startOffset);
+        ajusterModeEtranger();
+      }
+      const ns = decoupeur.inForeignNode ? pile.at(-1).ns : nom === 'svg' || nom === 'math' ? nom : 'html';
+      if (ns === 'html' && nom === 'button' && bouton) {
+        while (!pile.at(-1).bouton) depiler(startOffset);
+        depiler(startOffset);
+        ajusterModeEtranger();
+      }
+      const parent = pile.at(-1);
+      const element = { nom, ns, integration: ns !== 'html' && estPointIntegration(ns, nom, balise), masque: Boolean(parent?.masque) || estMasque(balise), bouton: false, brut: false };
+
+      if (ns === 'html') {
+        if (nom === 'html') balisesHtml.push({ ligne: startLine, extrait: extraire(startOffset, endOffset), lang: attribut(balise, 'lang') });
+        if (nom === 'img' && attribut(balise, 'alt') === undefined) imagesSansAlt.push({ ligne: startLine, extrait: extraire(startOffset, endOffset) });
+        if (nom === 'label' && attribut(balise, 'for')) idsEtiquetes.add(attribut(balise, 'for'));
+        if (CHAMPS_DE_FORMULAIRE.has(nom) && !TYPES_SANS_ETIQUETTE.has((attribut(balise, 'type') ?? '').trim().toLowerCase()) &&
+          !renseigne(attribut(balise, 'aria-label')) && !renseigne(attribut(balise, 'title'))) {
+          champs.push({ ligne: startLine, extrait: extraire(startOffset, endOffset), id, dansEtiquette: Boolean(ouverts.get('label')), references: idsReferences(attribut(balise, 'aria-labelledby')) });
+        }
+      }
+
+      if (ns === 'html' && nom === 'button') {
+        bouton = { debut: startOffset, finOuvrante: endOffset, ligne: startLine, nomme: nommeParSesAttributs(balise), references: idsReferences(attribut(balise, 'aria-labelledby')) };
+        // Jugé comme s'il était affiché, même dans un conteneur masqué qu'un script révélera.
+        Object.assign(element, { bouton: true, masque: false });
+      } else if (bouton && !element.masque) {
+        if (nommeParSesAttributs(balise)) bouton.nomme = true;
+        else for (const reference of idsReferences(attribut(balise, 'aria-labelledby'))) bouton.references.push(reference);
+      }
+
+      if (ns === 'html' ? ELEMENTS_VIDES.has(nom) : balise.selfClosing) return;
+      if (ns === 'html' && MODES_TEXTE_BRUT.has(nom)) {
+        decoupeur.state = MODES_TEXTE_BRUT.get(nom);
+        element.brut = true;
+      }
+      empiler(element);
+      ajusterModeEtranger();
+    },
+    onEndTag(balise) {
+      const nom = balise.tagName;
+      if (!ouverts.get(nom)) return;
+      const fin = balise.location.endOffset;
+      while (pile.at(-1).nom !== nom) depiler(fin);
+      depiler(fin);
+      ajusterModeEtranger();
+    },
+    onCharacter(texte) {
+      const haut = pile.at(-1);
+      if (bouton && !haut.masque && !haut.brut && /\S/.test(texte.chars)) bouton.nomme = true;
+    },
+    onNullCharacter() {},
+    onWhitespaceCharacter() {},
+    onComment() {},
+    onDoctype() {},
+    onEof() {
+      if (bouton) fermerBouton(source.length);
+    },
+  });
+  decoupeur.write(source, true);
+
+  const visePresent = (references) => references.some((reference) => ids.has(reference));
+  return {
+    balisesHtml,
+    imagesSansAlt,
+    champsOrphelins: champs.filter((c) => !c.dansEtiquette && !(c.id && idsEtiquetes.has(c.id)) && !visePresent(c.references)),
+    boutonsMuets: boutons.filter((b) => !visePresent(b.references)),
+  };
 }
 
 export function analyserAccessibiliteStatique(ctx) {
@@ -129,13 +293,13 @@ export function analyserAccessibiliteStatique(ctx) {
     if (!f.executee || f.binaire || !['.html', '.htm'].includes(f.ext)) continue;
     const c = f.contenu;
     const entree = ctx.entrees.includes(f.chemin);
+    const page = examinerPage(c);
 
-    if (entree && !/<html[^>]+\blang\s*=\s*["'][a-z]{2}/i.test(c)) {
-      const balise = c.match(/<html\b[^>]*>/i);
+    if (entree && !page.balisesHtml.some((b) => /^[a-z]{2}/i.test((b.lang ?? '').trim()))) {
       constats.push(constat({
         regle: 'F-RGAA-01', axe: 'F', severite: 'mineur', confiance: 'certain',
         titre: "La langue de la page n'est pas déclarée",
-        fichier: f.chemin, ligne: balise ? c.slice(0, balise.index).split('\n').length : null,
+        fichier: f.chemin, ligne: page.balisesHtml[0]?.ligne ?? null,
         constat: "La balise `<html>` ne porte pas d'attribut `lang`.",
         impact: "Le lecteur d'écran prononce le contenu avec la mauvaise voix de synthèse, ce qui le rend souvent inintelligible.",
         remediation: 'Ajouter `<html lang="fr">`.',
@@ -154,13 +318,13 @@ export function analyserAccessibiliteStatique(ctx) {
       }));
     }
 
-    const imgsSansAlt = [...c.matchAll(/<img\b(?![^>]*\balt\s*=)[^>]*>/gi)];
+    const imgsSansAlt = page.imagesSansAlt;
     if (imgsSansAlt.length) {
       constats.push(constat({
         regle: 'F-RGAA-03', axe: 'F', severite: 'mineur', confiance: 'certain',
         titre: `${imgsSansAlt.length} image(s) sans attribut alt`,
-        fichier: f.chemin, ligne: c.slice(0, imgsSansAlt[0].index).split('\n').length,
-        extrait: imgsSansAlt[0][0],
+        fichier: f.chemin, ligne: imgsSansAlt[0].ligne,
+        extrait: imgsSansAlt[0].extrait,
         constat: "Des balises `<img>` ne portent pas d'attribut `alt`.",
         impact: "Le lecteur d'écran annonce le nom du fichier, ou rien. Une image décorative doit porter `alt=\"\"` explicitement pour être ignorée.",
         remediation: 'Ajouter `alt` : description brève pour une image porteuse de sens, `alt=""` pour une image décorative.',
@@ -168,35 +332,28 @@ export function analyserAccessibiliteStatique(ctx) {
       }));
     }
 
-    const champs = [...c.matchAll(/<(input|select|textarea)\b[^>]*>/gi)]
-      .filter((m) => !/\btype\s*=\s*["'](hidden|submit|button|reset|image)["']/i.test(m[0]))
-      .filter((m) => !/\b(aria-label|aria-labelledby|title)\s*=/i.test(m[0]));
-    const idsEtiquetes = new Set([...c.matchAll(/<label\b[^>]*\bfor\s*=\s*["']([^"']+)["']/gi)].map((m) => m[1]));
-    const orphelins = champs.filter((m) => {
-      const id = (m[0].match(/\bid\s*=\s*["']([^"']+)["']/i) || [])[1];
-      return !id || !idsEtiquetes.has(id);
-    });
+    const orphelins = page.champsOrphelins;
     if (orphelins.length) {
       constats.push(constat({
         regle: 'F-RGAA-04', axe: 'F', severite: 'mineur', confiance: 'probable',
         titre: `${orphelins.length} champ(s) de formulaire sans étiquette associée`,
-        fichier: f.chemin, ligne: c.slice(0, orphelins[0].index).split('\n').length,
-        extrait: orphelins[0][0],
-        constat: "Des champs n'ont ni `<label for>`, ni `aria-label`, ni `aria-labelledby`.",
+        fichier: f.chemin, ligne: orphelins[0].ligne,
+        extrait: orphelins[0].extrait,
+        constat: "Des champs n'ont ni `<label>` associé, ni `aria-label`, ni `aria-labelledby` vers un élément de la page, ni `title`.",
         impact: "À la tabulation, le lecteur d'écran annonce « zone d'édition » sans dire à quoi elle sert : le formulaire devient inutilisable.",
         remediation: 'Associer un `<label for="…">`, ou à défaut un `aria-label`.',
         referentiels: ['RGAA 4.1 — critère 11.1', 'WCAG 2.1 — 3.3.2'],
       }));
     }
 
-    const boutonsMuets = trouverBoutonsMuets(c);
+    const boutonsMuets = page.boutonsMuets;
     if (boutonsMuets.length) {
       constats.push(constat({
         regle: 'F-RGAA-05', axe: 'F', severite: 'mineur', confiance: 'probable',
         titre: `${boutonsMuets.length} bouton(s) sans intitulé accessible`,
-        fichier: f.chemin, ligne: c.slice(0, boutonsMuets[0].index).split('\n').length,
-        extrait: boutonsMuets[0][0],
-        constat: 'Des boutons ne contiennent qu\'une icône, sans texte ni `aria-label`.',
+        fichier: f.chemin, ligne: boutonsMuets[0].ligne,
+        extrait: boutonsMuets[0].extrait,
+        constat: "Des boutons n'ont ni texte lu par un lecteur d'écran, ni `aria-label`, ni `aria-labelledby` vers un élément de la page, ni `title` : leur contenu se réduit à une icône, une image sans alternative, ou rien.",
         impact: "Le bouton est annoncé « bouton » sans indication de sa fonction.",
         remediation: 'Ajouter un `aria-label` explicite sur chaque bouton à icône.',
         referentiels: ['RGAA 4.1 — critère 11.9', 'WCAG 2.1 — 4.1.2'],
