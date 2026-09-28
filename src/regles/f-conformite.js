@@ -92,6 +92,36 @@ export function analyserSouverainete(ctx) {
  * Le rapport doit dire clairement que « aucun constat » ne vaut pas
  * « conforme RGAA ».
  */
+
+/**
+ * Boutons dont le seul contenu est une icône (`<i>`/`<span>`/`<svg>`), sans
+ * texte ni `aria-label`. Écrit à dessein sans le motif `(?:\s*|<[^>]*>\s*)*`
+ * qu'utilisait la version précédente : cette alternance, où chaque branche
+ * peut matcher zéro caractère, répétée elle-même dans un groupe répété,
+ * fait exploser le temps de l'engin de regex (retour arrière catastrophique)
+ * dès qu'aucun `</button>` ne referme la construction — relevé par la
+ * coordination le 2026-09-28 sur `flashcards/index.html`, un widget officiel
+ * de Grist, qui faisait dépasser le délai de 240 s de l'audit entier. En V2,
+ * n'importe quelle soumission anonyme aurait suffi à bloquer la file.
+ *
+ * Repose plutôt sur deux passes déterministes, sans quantificateur imbriqué
+ * ambigu : une capture non gourmande (mais bornée par la présence d'un
+ * `</button>` littéral, donc linéaire) de chaque bloc bouton, puis un retrait
+ * textuel de ses icônes internes pour juger si ce qui reste est vide.
+ */
+function trouverBoutonsMuets(c) {
+  const resultats = [];
+  for (const m of c.matchAll(/<button\b[^>]*>[\s\S]*?<\/button>/gi)) {
+    const bloc = m[0];
+    const ouverture = bloc.slice(0, bloc.indexOf('>') + 1);
+    if (/\baria-label\s*=/i.test(ouverture)) continue;
+    const interieur = bloc.slice(ouverture.length, bloc.length - '</button>'.length);
+    const sansIcones = interieur.replace(/<(i|span|svg)\b[^>]*>[\s\S]*?<\/\1>/gi, '').replace(/\s+/g, '');
+    if (sansIcones === '') resultats.push(m);
+  }
+  return resultats;
+}
+
 export function analyserAccessibiliteStatique(ctx) {
   const constats = [];
 
@@ -159,7 +189,7 @@ export function analyserAccessibiliteStatique(ctx) {
       }));
     }
 
-    const boutonsMuets = [...c.matchAll(/<button\b(?![^>]*\baria-label)[^>]*>\s*(?:<(?:i|span|svg)\b[^>]*>(?:\s*|<[^>]*>\s*)*<\/(?:i|span|svg)>\s*)*<\/button>/gi)];
+    const boutonsMuets = trouverBoutonsMuets(c);
     if (boutonsMuets.length) {
       constats.push(constat({
         regle: 'F-RGAA-05', axe: 'F', severite: 'mineur', confiance: 'probable',

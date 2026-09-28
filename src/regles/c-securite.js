@@ -601,6 +601,70 @@ function estExecuteurPromise(fonction, parent, index) {
 }
 
 /**
+ * Motifs d'appel dont le paramètre reçoit une DONNÉE parvenue au widget —
+ * un enregistrement Grist, une réponse réseau, un message reçu — jamais du
+ * code écrit par son auteur. Reconnus par la seule forme du site d'appel
+ * (même principe qu'`estExecuteurPromise`), sans suivi de valeur au-delà
+ * d'un paramètre. Décision prise avec la coordination le 2026-09-28, après
+ * mesure sur 31 widgets honnêtes : `setTimeout(r.Formule, 0)` en clair
+ * notait CONFORME 87 avec un simple « à vérifier », quand `eval(r.Formule)`
+ * est NON CONFORME 72 pour la même donnée — un widget malveillant gagnait à
+ * préférer la première forme. Les deux doivent désormais recevoir le même
+ * traitement (calculé à l'exécution, critique et bloquant).
+ */
+function estParametreDonneeGrist(fonction, parent, index) {
+  return index === 0 && parent?.type === 'CallExpression' && /(^|\.)grist\.onRecords?$/.test(nomPointe(parent.callee) || '') && parent.arguments[0] === fonction;
+}
+
+/** Le paramètre d'un `.then(...)` enchaîné directement sur un appel réseau (`fetch`, `fetchTable`, `fetchSelectedTable`) reçoit la réponse — une donnée externe, jamais du code du widget. */
+function estParametreReponseReseau(fonction, parent, index) {
+  if (index !== 0 || parent?.type !== 'CallExpression' || nomFinal(parent.callee) !== 'then') return false;
+  const objet = parent.callee.type === 'MemberExpression' ? parent.callee.object : null;
+  return objet?.type === 'CallExpression' && /^(fetchTable|fetchSelectedTable|fetch)$/.test(nomFinal(objet.callee)) && parent.arguments[0] === fonction;
+}
+
+/** Le premier paramètre du gestionnaire d'un `addEventListener('message', …)` reçoit l'événement d'un message reçu — son contenu (`.data`) n'est jamais garanti par le widget lui-même. */
+function estParametreMessageRecu(fonction, parent, index) {
+  return index === 0 && parent?.type === 'CallExpression' && nomFinal(parent.callee) === 'addEventListener' &&
+    chaineLitterale(parent.arguments[0]) === 'message' && parent.arguments[1] === fonction;
+}
+
+function estParametreDonneeWidget(fonction, parent, index) {
+  return estParametreDonneeGrist(fonction, parent, index) || estParametreReponseReseau(fonction, parent, index) || estParametreMessageRecu(fonction, parent, index);
+}
+
+/** `location`/`window.location`/`self.location`, quel que soit l'alias global de tête : son contenu (query, hash, href…) est fourni par qui ouvre la page, jamais par le widget. */
+function estAccesLocation(noeud) {
+  return noeud?.type === 'MemberExpression' && /(^|\.)location\./.test(nomPointe(noeud) || '');
+}
+
+/** `localStorage.getItem(...)`/`sessionStorage.getItem(...)` : une donnée déposée par n'importe quel script ayant tourné sur cette origine, jamais garantie par le widget. */
+function estLectureStockageLocal(noeud) {
+  return noeud?.type === 'CallExpression' && /(^|\.)(localStorage|sessionStorage)\.getItem$/.test(nomPointe(noeud.callee) || '');
+}
+
+/**
+ * Vrai si `noeud` — l'argument d'un minuteur, ou la base d'un accès de
+ * membre sur cet argument (`r.Formule`) — provient d'une donnée reçue par
+ * le widget : un paramètre reconnu par `estParametreDonneeWidget`
+ * (directement, ou via un seul accès de membre dessus), un accès à
+ * `location`, ou une lecture de `localStorage`/`sessionStorage`. Ne suit
+ * qu'un seul niveau depuis le site d'appel : la base d'un accès de membre
+ * doit être l'identifiant lui-même, pas une expression plus profonde — un
+ * choix délibérément conservateur, cohérent avec le reste de cette
+ * résolution (voir `resoudreArgument`) : plus sûr de manquer une donnée
+ * réattribuée à travers plusieurs variables que de suivre un flux que
+ * l'analyse ne peut pas garantir.
+ */
+function estSourceDonneeWidget(noeud, ancetres) {
+  if (estAccesLocation(noeud) || estLectureStockageLocal(noeud)) return true;
+  const base = noeud?.type === 'MemberExpression' ? noeud.object : noeud;
+  if (base?.type !== 'Identifier') return false;
+  const liaison = trouverLiaisonVisible(base.name, ancetres);
+  return liaison?.type === 'parametre' && estParametreDonneeWidget(liaison.fonction, liaison.parent, liaison.index);
+}
+
+/**
  * Vrai si `nom` est réaffecté n'importe où dans `ast` : une affectation
  * directe ou composée (`nom = …`, `nom += …`), ou une mise à jour
  * (`nom++`). Une variable ou un paramètre réaffecté ne peut plus être
@@ -827,9 +891,21 @@ function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, ast, walkAcor
   }).constats;
 }
 
+/**
+ * Sévérité du palier « source non résolue » de `constatMinuteurNonResolu`,
+ * gardée à cet unique endroit : décision de la coordination du 2026-09-28,
+ * mesurée sur 31 widgets honnêtes (25 widgets officiels de Grist et leurs
+ * sous-modules, plus les dépôts de référence) — un « à vérifier » en majeur
+ * ajoutait du bruit sur du code entièrement honnête (paramètres de callback,
+ * polyfills, minifiés), jusqu'à 35 constats supplémentaires sur les gros
+ * bundles. Ramené en simple signal pour la relecture humaine, sans pénalité ;
+ * si Antoine choisit de pénaliser ce palier, ce seul mot change.
+ */
+const SEVERITE_MINUTEUR_NON_RESOLU = 'info';
+
 function constatMinuteurNonResolu({ unite, ligneDe, n, nom, motif }) {
   return constat({
-    regle: 'C-XSS-04', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
+    regle: 'C-XSS-04', axe: 'C', severite: SEVERITE_MINUTEUR_NON_RESOLU, bloquant: false, confiance: 'a_verifier',
     titre: `Source de ${nom} non résolue par l'analyse statique`,
     fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
     constat: motif,
@@ -864,10 +940,23 @@ function traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBru
  * reçoit un palier « à vérifier » plutôt que le silence d'avant :
  * `setTimeout(String.fromCharCode(...))`, `setTimeout(f())`,
  * `setTimeout(obj.m)` restaient muets (relevé par la coordination le
- * 2026-09-28) faute d'appartenir aux trois formes syntaxiques reconnues.
+ * 2026-09-28) faute d'appartenir aux trois formes syntaxiques reconnues. Ce
+ * palier est resté en simple info sans pénalité (voir
+ * `SEVERITE_MINUTEUR_NON_RESOLU`) SAUF quand l'analyse reconnaît que la
+ * valeur provient d'une donnée reçue par le widget (`estSourceDonneeWidget`)
+ * : dans ce cas précis, elle est traitée exactement comme un eval() calculé
+ * — critique et bloquant — sans quoi cacher `eval(r.Formule)` derrière
+ * `setTimeout(r.Formule, 0)` notait mieux que l'écrire en clair (décision de
+ * la coordination le 2026-09-28, après mesure sur 31 widgets honnêtes).
  */
 function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, ancetres, profondeur }) {
   if (!arg) return [];
+
+  if (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression') return [];
+
+  if (estSourceDonneeWidget(arg, ancetres)) {
+    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: null, profondeur });
+  }
 
   // Un identifiant est le seul cas où « inconnu » veut dire : peut-être une
   // fonction (le motif `setTimeout(callback, delai)`, très courant) — d'où
@@ -883,8 +972,6 @@ function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, anc
       motif: `Le premier argument de \`${nom}\` est un identifiant qui ne résout, dans ce fichier, ni vers une fonction ni vers une chaîne littérale : son contenu réel n'est connu qu'à l'exécution.`,
     })];
   }
-
-  if (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression') return [];
 
   // Formes qui produisent TOUJOURS une chaîne, quel que soit leur contenu
   // (littéral, gabarit, concaténation, atob()/String.fromCharCode()) : si le

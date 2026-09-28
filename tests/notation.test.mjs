@@ -95,3 +95,50 @@ test('E-DEP-03 (pas de package.json, rien à mesurer) ne plafonne jamais le verd
   assert.equal(n.verdict, 'CONFORME');
   assert.equal(n.axesPartiels.length, 0, 'l\'absence de dépendances ne doit jamais faire basculer un widget par ailleurs sain');
 });
+
+// ---------------------------------------------------------------------------
+// D4 (relevé par la coordination le 2026-09-28) : la pénalité d'une règle
+// suivait la sévérité de sa PREMIÈRE occurrence dans l'ordre d'itération —
+// un ordre arbitraire, sans rapport avec la sévérité réelle des occurrences.
+// Ajouter une occurrence plus légère APRÈS une occurrence plus grave de la
+// même règle pouvait donc faire RETOMBER la pénalité totale : mesuré par la
+// coordination, un majeur puis un critique donnait 20,3, un critique puis un
+// majeur (mêmes deux occurrences, ordre inversé) donnait 59,3.
+// ---------------------------------------------------------------------------
+
+test("D4 : la pénalité d'une règle suit sa pire occurrence, pas la première rencontrée — l'ordre des deux mêmes occurrences ne doit rien changer", () => {
+  const majeurPuisCritique = [
+    constat({ regle: 'X', axe: 'C', titre: 't', severite: 'majeur', constat: 'c' }),
+    constat({ regle: 'X', axe: 'C', titre: 't', severite: 'critique', constat: 'c' }),
+  ];
+  const critiquePuisMajeur = [...majeurPuisCritique].reverse();
+  const n1 = noter(majeurPuisCritique, new Set());
+  const n2 = noter(critiquePuisMajeur, new Set());
+  assert.equal(n1.parAxe.C.penaliteBrute, n2.parAxe.C.penaliteBrute, "l'ordre d'itération ne doit jamais changer la pénalité calculée");
+  // La pénalité doit refléter le CRITIQUE (35 * facteurOccurrences(2)), jamais
+  // le majeur (12 * facteurOccurrences(2)) : avant ce correctif, l'ordre
+  // « majeur puis critique » retenait à tort le majeur.
+  const attendu = Math.round(35 * (1 + Math.log(2)) * 10) / 10;
+  assert.equal(n1.parAxe.C.penaliteBrute, attendu);
+});
+
+test("D4 : ajouter une occurrence plus légère AVANT une occurrence critique déjà présente (donc désormais première dans l'ordre d'itération) ne doit jamais FAIRE BAISSER la pénalité", () => {
+  const critiqueSeul = [constat({ regle: 'X', axe: 'C', titre: 't', severite: 'critique', constat: 'c' })];
+  // Le majeur est ajouté EN TÊTE de liste : occ[0] devient le majeur, alors
+  // que la pire occurrence reste le critique — exactement le cas que l'ancien
+  // code (qui retenait occ[0]) notait à tort plus clément.
+  const majeurAvantCritique = [constat({ regle: 'X', axe: 'C', titre: 't', severite: 'majeur', constat: 'c' }), ...critiqueSeul];
+  const p1 = noter(critiqueSeul, new Set()).parAxe.C.penaliteBrute;
+  const p2 = noter(majeurAvantCritique, new Set()).parAxe.C.penaliteBrute;
+  assert.ok(p2 >= p1, `ajouter un constat, même moins sévère et même placé en tête, ne doit jamais faire baisser la pénalité (${p1} → ${p2})`);
+});
+
+test('D4 : le détail de pénalité par règle (detailPenalites) rapporte la sévérité de la pire occurrence', () => {
+  const constats = [
+    constat({ regle: 'X', axe: 'C', titre: 't', severite: 'majeur', constat: 'c' }),
+    constat({ regle: 'X', axe: 'C', titre: 't', severite: 'critique', constat: 'c' }),
+  ];
+  const n = noter(constats, new Set());
+  const d = n.parAxe.C.detailPenalites.find((d) => d.regle === 'X');
+  assert.equal(d.severite, 'critique');
+});

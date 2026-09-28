@@ -49,6 +49,29 @@ test("F-RGAA-01 localise la balise <html> sans attribut lang", () => {
   assert.equal(c.ligne, 2, 'la balise <html> est en ligne 2');
 });
 
+test('F-RGAA-05 : bouton avec seulement une icône (span/svg/i), sans texte ni aria-label, est détecté', () => {
+  const html = ['<!doctype html>', '<html><body>', '<button><svg></svg></button>', '</body></html>'].join('\n');
+  const ctx = { fichiers: [fichier('index.html', html)], entrees: ['index.html'] };
+  const c = analyserAccessibiliteStatique(ctx).find((x) => x.regle === 'F-RGAA-05');
+  assert.ok(c);
+});
+
+test('F-RGAA-05 : un bouton avec du texte, ou avec aria-label, ne déclenche rien', () => {
+  const html = ['<!doctype html>', '<html><body>', '<button><i></i>Fermer</button>', '<button aria-label="Fermer"><i></i></button>', '</body></html>'].join('\n');
+  const ctx = { fichiers: [fichier('index.html', html)], entrees: ['index.html'] };
+  assert.equal(analyserAccessibiliteStatique(ctx).filter((x) => x.regle === 'F-RGAA-05').length, 0);
+});
+
+test("F-RGAA-05 : du HTML sans </button> qui referme la construction ne doit jamais faire exploser le temps d'analyse (retour arrière catastrophique relevé par la coordination le 2026-09-28 sur flashcards/index.html, un widget officiel de Grist qui dépassait le délai de 240 s de l'audit entier)", () => {
+  const piege = '<button>' + '<i> '.repeat(2000) + 'X'; // jamais de </button>
+  const html = ['<!doctype html>', '<html><body>', piege, '</body></html>'].join('\n');
+  const ctx = { fichiers: [fichier('index.html', html)], entrees: ['index.html'] };
+  const debut = Date.now();
+  analyserAccessibiliteStatique(ctx);
+  const duree = Date.now() - debut;
+  assert.ok(duree < 1000, `doit rester linéaire (${duree} ms) — l'ancienne regex à quantificateurs imbriqués aurait explosé bien avant ce volume`);
+});
+
 test('F-GUIDE-03/04 localisent l\'entrée fautive dans le manifest.json brut', () => {
   const manifesteTexte = [
     '[',

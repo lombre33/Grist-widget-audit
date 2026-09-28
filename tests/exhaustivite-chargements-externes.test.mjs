@@ -593,7 +593,7 @@ test("C-XSS-04 : setTimeout(callback, délai) où callback est un PARAMÈTRE (mo
   const ctx = { fichiers: [fichier('app.js', 'function armer(callback, delai) { setTimeout(callback, delai); }')] };
   const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
   assert.ok(c, "un paramètre ne résout ni vers une fonction déclarée ni vers un littéral dans ce seul fichier : ni silence ni faux positif");
-  assert.equal(c.severite, 'majeur');
+  assert.equal(c.severite, 'info', "palier d'information pour la relecture humaine, sans pénalité — décision de la coordination le 2026-09-28 après mesure sur 31 widgets honnêtes : ce motif est omniprésent dans du code honnête (callbacks génériques)");
   assert.equal(c.bloquant, false);
   assert.equal(c.confiance, 'a_verifier');
 });
@@ -884,7 +884,7 @@ test("C-XSS-04 (D2) : new Promise(resolve => { resolve = donnée; setTimeout(res
   const ctx = { fichiers: [fichier('app.js', 'new Promise(resolve => { resolve = window.name; setTimeout(resolve, 0); });')] };
   const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
   assert.ok(c, "avant ce correctif, l'exemption « exécuteur de Promise » couvrait resolve même réaffecté : silence total malgré un contenu qui n'est plus garanti être une fonction");
-  assert.equal(c.severite, 'majeur');
+  assert.equal(c.severite, 'info', "window.name n'est pas une source de donnée du widget reconnue : palier générique d'information, pas d'escalade");
   assert.equal(c.bloquant, false);
 });
 
@@ -908,7 +908,7 @@ test("C-XSS-04 (2a) : setTimeout(cb, délai) où cb est une variable LOCALE homo
   const ctx = { fichiers: [fichier('app.js', contenu)] };
   const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
   assert.ok(c, "avant ce correctif, la variable locale `cb` était masquée par la fonction homonyme du fichier trouvée par une recherche globale sans portée : silence à tort");
-  assert.equal(c.severite, 'majeur');
+  assert.equal(c.severite, 'info');
   assert.equal(c.confiance, 'a_verifier');
 });
 
@@ -917,7 +917,7 @@ test("C-XSS-04 (2a) : setTimeout(cb, délai) où cb est un paramètre DÉSTRUCTU
   const ctx = { fichiers: [fichier('app.js', contenu)] };
   const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
   assert.ok(c, "un paramètre déstructuré n'était pas reconnu par l'ancienne recherche (qui ne testait que p.type === 'Identifier'), laissant la fonction homonyme du fichier résoudre à tort");
-  assert.equal(c.severite, 'majeur');
+  assert.equal(c.severite, 'info');
 });
 
 test("C-XSS-04 (2a) : setTimeout(cb, délai) où cb est un paramètre à valeur PAR DÉFAUT homonyme d'une fonction déclarée ailleurs doit être « à vérifier »", () => {
@@ -925,7 +925,7 @@ test("C-XSS-04 (2a) : setTimeout(cb, délai) où cb est un paramètre à valeur 
   const ctx = { fichiers: [fichier('app.js', contenu)] };
   const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
   assert.ok(c);
-  assert.equal(c.severite, 'majeur');
+  assert.equal(c.severite, 'info');
 });
 
 test("C-XSS-04 (2a) : setTimeout(cb, délai) où cb est le paramètre d'un catch homonyme d'une fonction déclarée ailleurs doit être « à vérifier »", () => {
@@ -933,5 +933,79 @@ test("C-XSS-04 (2a) : setTimeout(cb, délai) où cb est le paramètre d'un catch
   const ctx = { fichiers: [fichier('app.js', contenu)] };
   const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
   assert.ok(c);
-  assert.equal(c.severite, 'majeur');
+  assert.equal(c.severite, 'info');
+});
+
+// ---------------------------------------------------------------------------
+// Palier du minuteur non résolu (décision de la coordination le 2026-09-28,
+// après mesure sur 31 widgets honnêtes) : ramené en simple info sans
+// pénalité pour la relecture humaine — SAUF quand l'analyse reconnaît que la
+// valeur vient d'une donnée reçue par le widget (enregistrement Grist,
+// réponse réseau, message reçu, location, stockage local), auquel cas elle
+// reçoit le même traitement qu'un eval() calculé : critique et bloquant.
+// Sans quoi `setTimeout(r.Formule, 0)` notait CONFORME avec un simple « à
+// vérifier », quand `eval(r.Formule)` est NON CONFORME pour la même donnée.
+// ---------------------------------------------------------------------------
+
+test('C-XSS-04 : setTimeout(r.Formule, délai) où r est le paramètre de grist.onRecord doit être critique et bloquant, comme un eval() calculé', () => {
+  const ctx = { fichiers: [fichier('app.js', "grist.onRecord(r => { setTimeout(r.Formule, 0); });")] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c, "avant ce correctif, ce motif tombait dans le palier générique « à vérifier » : aucune escalade malgré une donnée du document passée directement à un minuteur");
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test('C-XSS-04 : setTimeout(x, délai) où x est un champ du paramètre de grist.onRecords (tableau d\'enregistrements) doit aussi être critique et bloquant', () => {
+  const ctx = { fichiers: [fichier('app.js', 'grist.onRecords(rs => { setTimeout(rs.x, 0); });')] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c);
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test("C-XSS-04 : setTimeout(data, délai) où data est le paramètre d'un .then() enchaîné sur fetchTable/fetchSelectedTable/fetch doit être critique et bloquant (réponse réseau, pas du code du widget)", () => {
+  for (const appel of ["fetchTable('T')", "fetchSelectedTable()", "fetch('/x')"]) {
+    const ctx = { fichiers: [fichier('app.js', `${appel}.then(data => { setTimeout(data, 0); });`)] };
+    const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+    assert.ok(c, `${appel} : devrait être reconnu comme une source de donnée réseau`);
+    assert.equal(c.severite, 'critique');
+    assert.equal(c.bloquant, true);
+  }
+});
+
+test("C-XSS-04 : setTimeout(e.data, délai) où e est l'événement d'un addEventListener('message', …) doit être critique et bloquant", () => {
+  const ctx = { fichiers: [fichier('app.js', "window.addEventListener('message', e => { setTimeout(e.data, 0); });")] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c);
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test('C-XSS-04 : setTimeout(location.hash, délai) doit être critique et bloquant (fourni par qui ouvre la page, pas par le widget)', () => {
+  const ctx = { fichiers: [fichier('app.js', 'setTimeout(location.hash, 0);')] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c);
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test("C-XSS-04 : setTimeout(localStorage.getItem('x'), délai) doit être critique et bloquant", () => {
+  const ctx = { fichiers: [fichier('app.js', "setTimeout(localStorage.getItem('x'), 0);")] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c);
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test('C-XSS-04 (témoin) : une donnée Grist utilisée normalement (jamais passée à un minuteur) ne déclenche toujours rien', () => {
+  const ctx = { fichiers: [fichier('app.js', 'grist.onRecord(r => { console.log(r.Formule); });')] };
+  assert.equal(preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-04').length, 0);
+});
+
+test("C-XSS-04 (témoin) : setTimeout(unObjet.methode, délai) sans rapport avec une source de donnée reconnue reste au palier générique « à vérifier », en info, pas critique", () => {
+  const ctx = { fichiers: [fichier('app.js', 'setTimeout(unObjet.methode, 10);')] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c);
+  assert.equal(c.severite, 'info');
+  assert.equal(c.bloquant, false);
 });

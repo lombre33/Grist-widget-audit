@@ -62,10 +62,20 @@ export function noter(constats, axesNonExecutes = new Set()) {
     let penalite = 0;
     const detail = [];
     for (const [regle, occ] of Object.entries(parRegle)) {
-      const sev = SEVERITES[occ[0].severite];
+      // La pénalité d'une règle suit sa PIRE occurrence, jamais la première
+      // rencontrée dans l'ordre d'itération (arbitraire, sans rapport avec la
+      // sévérité) : sinon, ajouter un nouveau constat plus léger — par
+      // exemple un `setTimeout` à vérifier ajouté après un `eval()` critique
+      // déjà présent pour la même règle — pouvait faire RETOMBER la pénalité
+      // totale, l'inverse de ce que doit produire un constat supplémentaire.
+      // Relevé par la coordination le 2026-09-28 (mesuré : majeur puis
+      // critique donnait 20,3, critique puis majeur 59,3, pour les mêmes deux
+      // occurrences).
+      const pire = occ.reduce((a, b) => (SEVERITES[b.severite].rang > SEVERITES[a.severite].rang ? b : a));
+      const sev = SEVERITES[pire.severite];
       const p = sev.penalite * facteurOccurrences(occ.length);
       penalite += p;
-      if (p > 0) detail.push({ regle, severite: occ[0].severite, occurrences: occ.length, penalite: Math.round(p * 10) / 10 });
+      if (p > 0) detail.push({ regle, severite: pire.severite, occurrences: occ.length, penalite: Math.round(p * 10) / 10 });
     }
     detail.sort((a, b) => b.penalite - a.penalite);
     parAxe[code] = {
