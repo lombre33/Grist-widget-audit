@@ -311,15 +311,14 @@ lecture du code ne les soutient :
    où elle doit l'être plutôt qu'au niveau de chaque client (git, npm, un
    futur outil qui ignorerait lui aussi `HTTP_PROXY`).
 
-**Un point resté ouvert, plus fonctionnel que sécurité :** je ne vois pas,
-dans `docker-compose.v2-execution.yml`, de `HTTP_PROXY`/`HTTPS_PROXY`
-injectées dans l'environnement d'`execution-audit` pointant vers
-`egress-proxy:3128` — seul `HOME=/tmp` y figure. Si rien ne les pose
-ailleurs (l'orchestrateur du §5, pas encore écrit), `git clone
-https://...` n'aurait tout simplement aucune route de sortie et
-échouerait au lancement, faute de proxy configuré — pas un trou de
-sécurité (le réseau fermé empêche justement toute fuite), mais un point à
-vérifier avant le premier essai réel sur le VPS.
+**Point fonctionnel signalé ci-dessus : corrigé.** `HTTP_PROXY`/`HTTPS_PROXY`
+manquaient bien dans l'environnement d'`execution-audit` — ajoutées depuis
+(commit `3b48de4`), avec le cas SSH (`git@hôte:chemin`, qui ignore ces deux
+variables) explicitement documenté à côté : pas un trou, parce que
+`reseau-ferme` n'a de route que vers `egress-proxy`, qui ne relaie pas SSH
+— mais une affirmation qui reste, comme le reste de cette pile, écrite et
+non éprouvée. Une checklist de vérification dédiée est apparue au même
+commit (`docker/README-V2-VERIFICATIONS.md`) : voir §10.
 
 **Correction sur la conclusion ci-dessus (§9, point 2).** Je l'ai écrite
 comme si l'isolation réseau fermait la question — c'est ce que le fichier
@@ -353,17 +352,36 @@ isolé de `npm audit` (`e-dependances.js:233`) et celui de l'axe D
 `RACINE_OUTIL` — seul le clone d'URL dans `bin/gwaudit.js` ne l'a pas
 encore. `--sortie /out` (`entrypoint.sh`) évite le même problème pour le
 rapport en pointant vers un volume monté, en dehors du système de
-fichiers en lecture seule du conteneur.
+fichiers en lecture seule du conteneur. **Ce défaut est signalé, pris en
+charge ailleurs (portabilité du code — écrire à côté de son répertoire
+d'installation serait tout aussi mauvais sous Windows) : rien à ajouter
+ici, je referme ce point.**
 
-Le reste dépend réellement d'un premier démarrage pour être su, pas
-seulement lu :
+**Une checklist dédiée est apparue depuis** (`docker/README-V2-VERIFICATIONS.md`,
+commit `3b48de4`) : elle couvre déjà, pour cinq points, exactement le
+critère qui rend une checklist utile — pas seulement quoi vérifier, mais
+comment reconnaître un échec qui ne crierait pas assez fort pour être cru
+cassé (le piège déjà payé sur l'axe D). Je ne les reproduis pas ici pour
+ne pas créer deux versions qui divergent :
 
-| Ce qui est écrit | Comment le premier démarrage le confirme |
+- filtre Squid (`dstdomain`/`dst`) contre une cible autorisée et une cible
+  piège (§1 de la checklist) ;
+- `reseau-ferme: internal: true` : une sortie directe doit échouer par
+  absence de route, pas par simple refus HTTP (§2) ;
+- `git clone`/`npm audit` passent réellement par `egress-proxy`, dans un
+  sens comme dans l'autre — hôte autorisé qui doit réussir, hors liste qui
+  doit échouer (§3) ;
+- SSH (`git@hôte:chemin`) doit échouer par absence de route, pas par
+  absence de clé — la checklist insiste sur cette distinction précise,
+  parce qu'un échec de credentials ne prouve rien sur l'isolation (§4) ;
+- `mem_limit: 768m` doit se traduire par un conteneur tué (`OOMKilled`
+  visible), pas par un Chromium qui dégrade en silence ou tourne
+  indéfiniment (§5).
+
+Deux points de mon tableau initial n'y figurent pas encore — je les garde
+ici avec le même critère :
+
+| Ce qui est écrit | Comment un échec silencieux se distinguerait d'un échec franc |
 |---|---|
-| Filtre Squid (`dstdomain`/`dst`, jamais essayé contre un vrai `CONNECT`) | `git ls-remote` vers une cible autorisée et une cible piège (nom trompeur, IP privée) depuis le conteneur d'exécution |
-| `reseau-ferme: internal: true` bloque toute sortie hors du proxy | Tentative de connexion directe (curl, `nc`, SSH) vers une cible externe depuis `execution-audit`, sans passer par `egress-proxy` |
-| Sandbox natif de Chromium sous `cap_drop: ALL` + `no-new-privileges` + `pwuser` (incertitude déjà notée dans le Dockerfile) | Lancer un audit réel et vérifier que Chromium démarre sans repli sur `--no-sandbox` |
-| `mem_limit: 768m` tue réellement un Chromium qui dépasse (déjà marqué « à vérifier, pas supposé » dans `ARCHITECTURE-V2.md`) | Widget de test qui consomme délibérément plus que la limite, confirmer l'arrêt côté cgroup |
-| `pids_limit: 128` suffisant pour un widget légitime et contraignant pour un widget hostile | Lancer le widget-fixture (légitime) et un widget qui multiplie les processus, comparer |
-| Résolution de `GWAUDIT_CHROMIUM_PATH` (`ls -d /ms-playwright/chromium-*/chrome-linux/chrome \| head -n1`) sur la mise en page réelle de l'image `mcr.microsoft.com/playwright:v1.63.0-jammy` | Journaliser le chemin résolu au premier build, confirmer une correspondance unique |
-| `HTTP_PROXY`/`HTTPS_PROXY` posées pour `git`/`npm` (absentes de ce fichier, §9 ci-dessus) | Confirmer que l'orchestrateur (§5, pas encore écrit) les injecte avant le premier job réel |
+| `pids_limit: 128`, censé suffire à un widget légitime et contraindre un widget hostile | Chromium est lui-même multi-processus (rendu, GPU, réseau) : un dépassement peut faire échouer la création d'un seul processus de rendu sans tuer le conteneur — l'axe D se terminerait alors avec un résultat partiel plutôt qu'une erreur explicite. À vérifier : que le widget-fixture (légitime) ne s'approche pas de la limite, et que le dépassement délibéré produise soit un `OOMKilled`/`pids` explicite, soit un `D-INDISPONIBLE` franc — jamais un rapport qui a l'air complet et ne l'est pas |
+| Résolution de `GWAUDIT_CHROMIUM_PATH` (`ls -d /ms-playwright/chromium-*/chrome-linux/chrome \| head -n1` dans `entrypoint.sh`) | Lisible sans exécuter : le script n'échoue que si **aucune** correspondance n'est trouvée (`-z`) — s'il y en avait deux (l'image de base embarque un jour un second binde `chromium-*`), `head -n1` en choisirait une arbitrairement, sans erreur ni journal. Ce n'est pas un cas connu aujourd'hui, mais le garde-fou du script est asymétrique : à surveiller au premier build (journaliser le chemin résolu, confirmer une correspondance unique) plutôt qu'à supposer réglé parce que ça démarre |
