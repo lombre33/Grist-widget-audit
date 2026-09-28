@@ -120,3 +120,36 @@ export function estDynamique(noeud) {
   if (noeud.type === 'BinaryExpression' && noeud.operator === '+') return estDynamique(noeud.left) || estDynamique(noeud.right);
   return true;
 }
+
+/**
+ * Extrait les entrées d'un `<script type="importmap">` : chaque spécificateur
+ * mappé (`imports`, et chaque bloc de `scopes`) avec l'URL cible et si elle
+ * est couverte par la clé `integrity` de premier niveau (WHATWG — Import
+ * Maps). Ce contenu est du JSON, jamais exécuté comme du JS (`unitesJs`
+ * l'exclut explicitement), donc invisible à toute règle qui lit du JS ou qui
+ * ne regarde que l'attribut `src` d'un `<script>` : une bibliothèque résolue
+ * par un import nu après une entrée d'import map est pourtant chargée à
+ * l'exécution comme n'importe quel `<script src>`.
+ * @returns {Array<{spec:string, url:string, sri:boolean, index:number}>}
+ *   `index` est le décalage du `<script>` dans `contenu`, pour que l'appelant
+ *   calcule fichier/ligne comme pour les autres motifs HTML.
+ */
+export function extraireImportMaps(contenu) {
+  const entrees = [];
+  for (const m of contenu.matchAll(/<script\b[^>]*\btype\s*=\s*["']importmap["'][^>]*>([\s\S]*?)<\/script\s*>/gi)) {
+    let carte;
+    try { carte = JSON.parse(m[1]); } catch { continue; }        // JSON invalide : rien à affirmer
+    const integrites = carte && typeof carte.integrity === 'object' && carte.integrity ? carte.integrity : {};
+    const parUrl = new Map();                                    // dédoublonne : plusieurs spécificateurs peuvent viser la même URL
+    const ajouter = (table) => {
+      if (!table || typeof table !== 'object') return;
+      for (const [spec, url] of Object.entries(table)) if (typeof url === 'string') parUrl.set(url, spec);
+    };
+    ajouter(carte?.imports);
+    for (const portee of Object.values(carte?.scopes ?? {})) ajouter(portee);
+    for (const [url, spec] of parUrl) {
+      entrees.push({ spec, url, sri: Object.prototype.hasOwnProperty.call(integrites, url), index: m.index });
+    }
+  }
+  return entrees;
+}

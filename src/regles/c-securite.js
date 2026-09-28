@@ -15,7 +15,7 @@
  */
 import path from 'node:path';
 import { constat } from '../moteur/modele.js';
-import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique } from '../moteur/analyse-js.js';
+import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique, extraireImportMaps } from '../moteur/analyse-js.js';
 
 /** Hôtes considérés comme faisant partie de l'infrastructure Grist elle-même. */
 const HOTES_GRIST = [/(^|\.)getgrist\.com$/i, /(^|\.)grist\.numerique\.gouv\.fr$/i, /(^|\.)gristlabs\.com$/i];
@@ -224,6 +224,8 @@ export function analyserRessourcesExternes(ctx) {
       [/<link\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>/gi, 'feuille de style ou préchargement', 'majeur'],
       [/<iframe\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi, 'iframe', 'majeur'],
       [/<img\b[^>]*\bsrc\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*>/gi, 'image', 'mineur'],
+      [/<object\b[^>]*\bdata\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*>/gi, 'objet (<object>)', 'mineur'],
+      [/<embed\b[^>]*\bsrc\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*>/gi, 'contenu embarqué (<embed>)', 'mineur'],
       [/@import\s+(?:url\()?["']?(https?:\/\/[^"')]+)/gi, '@import CSS', 'majeur'],
       [/url\(\s*["']?(https?:\/\/[^"')]+)/gi, 'ressource CSS', 'mineur'],
     ];
@@ -270,6 +272,29 @@ export function analyserRessourcesExternes(ctx) {
           referentiels: [REF_ANSSI, 'OWASP Top 10 A08:2021 — Intégrité logicielle', REF_GUIDE],
         }));
       }
+    }
+
+    // Import map (<script type="importmap">) : le contenu est du JSON, jamais
+    // exécuté (voir `unitesJs`), donc invisible aux motifs ci-dessus comme à
+    // toute règle qui lit du JS. Une bibliothèque résolue par un import nu
+    // après une entrée d'import map est chargée à l'exécution comme un
+    // <script src>, avec la même exigence d'intégrité — les import maps
+    // prévoient une clé `integrity` de premier niveau à cet effet (WHATWG).
+    for (const e of extraireImportMaps(f.contenu)) {
+      const h = hote(e.url);
+      if (estLocal(h) || estGrist(h)) continue;
+      enregistrerDestination(ctx, h);
+      constats.push(constat({
+        regle: 'C-EXFIL-03', axe: 'C',
+        severite: e.sri ? 'majeur' : 'critique', bloquant: !e.sri,
+        confiance: 'certain',
+        titre: `Import map : dépendance chargée depuis ${h} (${e.spec})`,
+        fichier: f.chemin, ligne: numeroLigne(f.contenu, e.index), extrait: `"${e.spec}": "${e.url}"`,
+        constat: `L'import map fait résoudre \`${e.spec}\` vers \`${e.url}\`${e.sri ? " (couverte par la clé `integrity` de l'import map)" : ' sans entrée `integrity`'}.`,
+        impact: "Un import nu résolu par cette carte s'exécute avec tous les privilèges du widget, exactement comme une balise <script src> : si ce domaine est compromis ou remplacé, le document entier l'est aussi. C'est le scénario type d'attaque par la chaîne d'approvisionnement.",
+        remediation: "Héberger la bibliothèque dans le dépôt (vendoring) et la faire résoudre vers un chemin relatif, ou ajouter une entrée `integrity` pour cette URL dans l'import map et documenter le domaine dans le README.",
+        referentiels: [REF_ANSSI, 'OWASP Top 10 A08:2021 — Intégrité logicielle', REF_GUIDE],
+      }));
     }
   }
   return constats;
@@ -1046,6 +1071,68 @@ export function analyserImportDynamique(ctx) {
 }
 
 // ---------------------------------------------------------------------------
+// C-EXFIL-07 — Worker / SharedWorker chargé depuis un service externe
+// ---------------------------------------------------------------------------
+
+/**
+ * `new Worker(url)` / `new SharedWorker(url)` chargent et exécutent du code
+ * avec les mêmes privilèges que le widget, mais échappent entièrement aux
+ * règles C-EXFIL-03/05 (qui ne regardent que `<script>`) : ni `src`, ni
+ * `createElement('script')`. Contrairement à un `<script src>` ou à un
+ * élément `<script>` créé dynamiquement, ni le constructeur `Worker` ni
+ * `importScripts()` n'offrent de mécanisme d'intégrité natif (pas
+ * d'équivalent à l'attribut `integrity`) : un worker externe ne peut donc
+ * être mis en conformité qu'en le rapatriant dans le dépôt, jamais en le
+ * protégeant sur place — d'où l'absence de branche « protégé ».
+ */
+export function analyserWorkerExterne(ctx) {
+  const constats = [];
+  const vus = new Set();
+
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+    if (!ast) return;
+    walk.simple(ast, {
+      NewExpression(n) {
+        if (!/^(Worker|SharedWorker)$/.test(nomPointe(n.callee) ?? '')) return;
+        const arg = n.arguments[0];
+        const litterale = chaineLitterale(arg);
+        const dynamique = litterale === null && estDynamique(arg);
+        if (litterale === null && !dynamique) return;             // ni littéral ni dynamique reconnu : rien à affirmer
+
+        const h = hote(litterale ?? '');
+        if (!dynamique && (estLocal(h) || estGrist(h))) return;
+
+        const cle = `${unite.chemin}:${ligneDe(n)}`;
+        if (vus.has(cle)) return;
+        vus.add(cle);
+
+        if (!dynamique) enregistrerDestination(ctx, h);
+
+        constats.push(constat({
+          regle: 'C-EXFIL-07', axe: 'C', severite: dynamique ? 'majeur' : 'critique', bloquant: !dynamique,
+          confiance: dynamique ? 'a_verifier' : 'certain',
+          titre: dynamique
+            ? `${n.callee.name} créé avec une source calculée à l'exécution`
+            : `${n.callee.name} chargé depuis un service externe : ${h}`,
+          fichier: unite.chemin, ligne: ligneDe(n),
+          extrait: extraireSource(unite.source, n),
+          constat: dynamique
+            ? `Le code instancie un \`${n.callee.name}\` avec une source construite à l'exécution : la lecture du code seule ne permet pas de savoir quel script sera réellement exécuté.`
+            : `Le code instancie un \`${n.callee.name}\` pointé vers \`${h}\`, un service extérieur à l'instance Grist.`,
+          impact: "Le script exécuté dans le worker a les mêmes privilèges réseau et le même accès aux API du navigateur que le widget. Contrairement à un <script> classique, ni le constructeur Worker/SharedWorker ni importScripts() ne proposent d'attribut d'intégrité : si ce domaine est compromis ou remplacé, rien ne le détecte à l'exécution.",
+          remediation: dynamique
+            ? "Restreindre la source à une liste blanche de constantes, et documenter dans le README la liste exhaustive des workers chargés dynamiquement."
+            : `Héberger le script du worker dans le dépôt du widget et l'instancier en relatif (\`new ${n.callee.name}('./chemin/local.js')\`) : c'est la seule mise en conformité possible, aucun attribut d'intégrité n'existe pour ce constructeur.`,
+          referentiels: [REF_ANSSI, 'OWASP Top 10 A08:2021 — Intégrité logicielle', REF_GUIDE],
+        }));
+      },
+    });
+  });
+
+  return constats;
+}
+
+// ---------------------------------------------------------------------------
 // Utilitaires locaux
 // ---------------------------------------------------------------------------
 
@@ -1067,5 +1154,5 @@ export const reglesC = [
   analyserStockage, analyserSecrets, analyserAlea,
   analyserEmpreinteAutomatisation, analyserPersistanceHorsWidget,
   analyserEmissionPostMessage, analyserPressePapiers, analyserScriptDynamique,
-  analyserImportDynamique,
+  analyserImportDynamique, analyserWorkerExterne,
 ];

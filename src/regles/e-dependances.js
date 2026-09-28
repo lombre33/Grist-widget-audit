@@ -19,6 +19,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import { constat } from '../moteur/modele.js';
+import { extraireImportMaps } from '../moteur/analyse-js.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -51,6 +52,24 @@ export function analyserDependancesDistantes(ctx) {
         versionFigee: /@\d+\.\d+\.\d+/.test(url) || /\/\d+\.\d+\.\d+\//.test(url),
         cdn: CDN_CONNUS.test(url),
         balise: m[0],
+      });
+    }
+    // Import map (<script type="importmap">) : une bibliothèque résolue par
+    // un import nu après une entrée d'import map est chargée à l'exécution
+    // au même titre qu'un <script src>, mais la boucle ci-dessus ne la voit
+    // jamais — ni `src`, ni contenu JS (c'est du JSON, voir `unitesJs`).
+    // L'intégrité s'y vérifie via la clé `integrity` de premier niveau de
+    // l'import map, pas un attribut de balise.
+    for (const e of extraireImportMaps(f.contenu)) {
+      if (!/^https?:\/\//i.test(e.url) || /grist-plugin-api\.js/.test(e.url)) continue;
+      distantes.push({
+        fichier: f.chemin,
+        ligne: f.contenu.slice(0, e.index).split('\n').length,
+        url: e.url,
+        sri: e.sri,
+        versionFigee: /@\d+\.\d+\.\d+/.test(e.url) || /\/\d+\.\d+\.\d+\//.test(e.url),
+        cdn: CDN_CONNUS.test(e.url),
+        balise: `"${e.spec}": "${e.url}"`,
       });
     }
   }
