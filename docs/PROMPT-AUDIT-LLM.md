@@ -249,7 +249,7 @@ C'est l'axe le plus dense du référentiel — largement devant les autres rien 
 |---|---|---|
 | C-EXFIL-01 | Requête sortante (`fetch`, XHR, `sendBeacon`, `importScripts`, `WebSocket`, `EventSource`, `import()` distant) vers un hôte externe **littéral** (non Grist, non local) | **critique, BLOQUANT** |
 | C-EXFIL-02 | Même chose mais destination **calculée à l'exécution** (variable, concaténation) — ne peut être tranché que par l'axe D | majeur, à_vérifier, non bloquant |
-| C-EXFIL-03 | Ressource externe déclarée en HTML/CSS (`<script src>`, `<link>`, `<iframe>`, `<img>`, `@import`, `url()` CSS) vers un hôte non Grist : `<script>` **sans** `integrity` → **critique, BLOQUANT** ; `<script>` avec `integrity`, ou autre type de ressource → majeur (feuille de style/iframe) ou mineur (image, ressource CSS) |
+| C-EXFIL-03 | Ressource externe déclarée en HTML/CSS (`<script src>`, `<link>`, `<iframe>`, `<img>`, `<object data>`, `<embed src>`, `@import`, `url()` CSS) vers un hôte non Grist : `<script>` **sans** `integrity` → **critique, BLOQUANT** ; `<script>` avec `integrity`, ou autre type de ressource → majeur (feuille de style/iframe) ou mineur (image, objet, contenu embarqué, ressource CSS). S'applique aussi à une entrée d'un `<script type="importmap">` (clés `imports` et `scopes`) résolue vers un hôte externe : sans couverture par la clé `integrity` de premier niveau de l'import map → **critique, BLOQUANT** ; couverte → majeur (même logique qu'un `<script>` classique, l'import map n'étant jamais lue par les motifs HTML ci-dessus puisque son contenu est du JSON) |
 | C-EXFIL-04 | `grist-plugin-api.js` chargé depuis un domaine externe (ex. `docs.getgrist.com`) plutôt qu'en relatif depuis l'instance hôte | majeur |
 | C-EXFIL-05 | `<script>` créé dynamiquement (`createElement('script')` puis `.src =`) pointé vers un hôte externe littéral : sans `integrity` → **critique, BLOQUANT** ; avec `integrity` assigné sur le même élément → critique mais non bloquant ; source calculée à l'exécution → majeur, à_vérifier |
 | C-EXFIL-06 | `import()` dynamique à source calculée (ni littéral simple, ni chemin relatif certain de type découpage de code `./chunk-${x}.js`) | majeur, à_vérifier |
@@ -340,7 +340,7 @@ maximal), embarquées dans le dépôt (risque maîtrisé), de développement
 
 | Règle | Déclenchement | Sévérité |
 |---|---|---|
-| E-DEP-01 | `<script src="https://...">` chargeant une bibliothèque tierce à l'exécution (hors `grist-plugin-api.js`) : sans `integrity` → **critique, BLOQUANT** ; avec `integrity` mais version non figée dans l'URL → majeur |
+| E-DEP-01 | `<script src="https://...">` chargeant une bibliothèque tierce à l'exécution (hors `grist-plugin-api.js`), **ou** entrée d'un `<script type="importmap">` (clés `imports`/`scopes`) résolue vers un hôte externe : sans `integrity` (attribut de balise, ou clé `integrity` de premier niveau de l'import map pour ce cas) → **critique, BLOQUANT** ; avec `integrity` mais version non figée dans l'URL → majeur |
 | E-DEP-02 | Bibliothèque tierce recopiée dans le dépôt (fichier « vendorisé ») : version ET licence identifiables en en-tête → info ; sinon → mineur |
 | E-DEP-03 | (neutre) Pas de `package.json` du tout | info |
 | E-DEP-04 | Dépendances npm déclarées sans fichier de verrouillage (`package-lock.json`/`yarn.lock`/`pnpm-lock.yaml`) | majeur |
