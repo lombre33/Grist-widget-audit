@@ -211,8 +211,8 @@ désigne ; à défaut de l'un ou l'autre, le fichier HTML au chemin le plus
 court du dépôt.
 
 **Fermeture transitive** depuis ces points d'entrée, en suivant toute
-référence **locale** (jamais une URL absolue `http(s):` ou `data:`, qui sort
-du dépôt et n'entre donc jamais dans la surface) :
+référence **locale** (jamais une URL absolue `http(s):`, `data:` ou
+`blob:`, qui sort du dépôt et n'entre donc jamais dans la surface) :
 - HTML : `<script src="...">`, `<link href="...">`.
 - CSS : `url(...)`.
 - JS/TS (`.js`, `.mjs`, `.cjs`, `.ts`, `.jsx`, `.tsx`) : `import ... from
@@ -221,7 +221,10 @@ du dépôt et n'entre donc jamais dans la surface) :
   Worker('./x.js')` / `new SharedWorker('./x.js')` — source littérale, ou
   gabarit sans interpolation (`` `./x.js` `` mais jamais `` `./${x}.js` ``)
   — et la forme que produisent les empaqueteurs, `new Worker(new
-  URL('./x.js', import.meta.url))` (idem `SharedWorker`).
+  URL('./x.js', <base quelconque>))` (idem `SharedWorker`) : seul compte le
+  premier argument littéral de `URL(...)`, la base n'est jamais vérifiée.
+  Un alias global de tête (`window.Worker`, `self.SharedWorker`,
+  `globalThis.URL`…) est reconnu au même titre que la forme nue.
 - Dans un fichier de worker atteint : `importScripts(...)` — **tous** ses
   arguments littéraux, pas seulement le premier.
 - Résolution tolérante : le chemin cité tel quel, puis avec `.js`, `.mjs`,
@@ -242,6 +245,37 @@ Applique donc une règle « surface » **seulement** aux fichiers qui en font
 partie, comme le fait l'outil. Un motif que tu repères ailleurs dans le
 dépôt (script de dev non branché, prototype) ne compte pas dans le score
 reproduit — note-le en section 8 si tu le juges digne d'attention.
+
+### Cas particulier : code fourni sous forme de chaîne (eval, Function, Worker)
+
+`eval()`, `Function(...)`/`new Function(...)`, `setTimeout`/`setInterval`
+avec une chaîne, et un `Worker`/`SharedWorker` construit depuis une chaîne
+(`data:`, ou `Blob([...])` via `URL.createObjectURL`) sont tous jugés selon
+le **même modèle**, détaillé une seule fois ici et référencé depuis les
+règles C-XSS-03/04/07 :
+
+- Si l'argument est **calculé** (variable, concaténation avec une variable,
+  `atob()`…), ou un littéral qui **ne se parse pas** comme du JS valide :
+  c'est LE risque, sévérité maximale de la règle concernée, inchangée par
+  ce qui suit.
+- Si l'argument est un littéral (chaîne, gabarit sans interpolation, ou —
+  pour un Worker en `data:` base64 ou en `Blob([...])` — un contenu
+  entièrement composé de littéraux) qui **SE PARSE comme du JS valide** :
+  ce contenu n'est plus une boîte noire. Il devient un fichier de plus dans
+  la surface analysée, et **chaque règle de l'axe C s'y applique à sa
+  propre sévérité** — un `eval()` ou un `fetch()` externe imbriqué dedans
+  redevient critique, exactement comme s'il était écrit dans un fichier du
+  dépôt. Seules C-GRIST-01 à 04 sont exclues de cette analyse imbriquée
+  (elles portent sur le widget entier, pas sur un fragment isolé). La
+  construction elle-même (`eval`, `Function`, ou le Worker en chaîne) ne
+  reste alors qu'un rappel **mineur, non bloquant** : un obstacle inutile à
+  une CSP stricte et à la lisibilité, pas un risque en soi puisque le
+  contenu a pu être lu. Pour `Function`/`new Function`, enveloppe
+  mentalement le texte dans `(function(){ ... })` avant de l'analyser (son
+  `return` s'y exécute comme dans un corps de fonction).
+- Borne : au-delà de 5 niveaux d'imbrication (un littéral contenant lui-même
+  un `eval()` d'un littéral, etc.), n'analyse pas plus profond — signale un
+  constat séparé, majeur, non bloquant, à_vérifier.
 
 ### Axe A — Qualité du code (poids 20)
 
@@ -300,18 +334,19 @@ C'est l'axe le plus dense du référentiel — largement devant les autres rien 
 | C-EXFIL-02 | Même chose mais destination **calculée à l'exécution** (variable, concaténation) — ne peut être tranché que par l'axe D. Même règle pour `importScripts` : chaque argument calculé compte séparément | majeur, à_vérifier, non bloquant |
 | C-EXFIL-03 | Ressource externe déclarée en HTML/CSS (`<script src>`, `<link>`, `<iframe>`, `<img>`, `<object data>`, `<embed src>`, `@import`, `url()` CSS) vers un hôte non Grist : `<script>` **sans** `integrity` → **critique, BLOQUANT** ; `<script>` avec `integrity`, ou autre type de ressource → majeur (feuille de style/iframe) ou mineur (image, objet, contenu embarqué, ressource CSS). S'applique aussi à une entrée d'un `<script type="importmap">` (clés `imports` et `scopes`) résolue vers un hôte externe : sans couverture par la clé `integrity` de premier niveau de l'import map → **critique, BLOQUANT** ; couverte → majeur (même logique qu'un `<script>` classique, l'import map n'étant jamais lue par les motifs HTML ci-dessus puisque son contenu est du JSON) |
 | C-EXFIL-04 | `grist-plugin-api.js` chargé depuis un domaine externe (ex. `docs.getgrist.com`) plutôt qu'en relatif depuis l'instance hôte | majeur |
-| C-EXFIL-05 | `<script>` créé dynamiquement (`createElement('script')` puis `.src =`) pointé vers un hôte externe littéral : sans `integrity` → **critique, BLOQUANT** ; avec `integrity` assigné sur le même élément → critique mais non bloquant ; source calculée à l'exécution → majeur, à_vérifier |
+| C-EXFIL-05 | `<script>` ou `<link>` créé dynamiquement (`createElement('script'\|'link')`, puis `.src`/`.href` affecté **ou** passé à `setAttribute`, peu importe l'ordre avec un éventuel `integrity`) pointé vers un hôte externe : `<script>` statique externe sans `integrity` → **critique, BLOQUANT** ; `<script>` statique externe avec `integrity` (affecté ou via `setAttribute('integrity', ...)`) → critique, non bloquant ; `<script>` à destination calculée → majeur, à_vérifier, non bloquant ; `<link>` statique externe → majeur, jamais bloquant ; `<link>` à destination calculée → mineur, à_vérifier |
 | C-EXFIL-06 | `import()` dynamique à source calculée (ni littéral simple, ni chemin relatif certain de type découpage de code `./chunk-${x}.js`) | majeur, à_vérifier |
 
 **C-XSS — injection et exécution dynamique**
 | Règle | Déclenchement | Sévérité |
 |---|---|---|
-| C-XSS-01 | `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`srcdoc` affecté avec une valeur **dynamique** (non constante) | majeur, probable |
+| C-XSS-01 | `innerHTML`/`outerHTML`/`insertAdjacentHTML`/`srcdoc` affecté avec une valeur **dynamique** (non constante), ou `createContextualFragment()` appelé avec un argument dynamique (même risque) | majeur, probable |
 | C-XSS-02 | `document.write()`/`writeln()` | majeur |
-| C-XSS-03 | `eval()` ou `new Function()` | **critique, BLOQUANT** |
-| C-XSS-04 | `setTimeout`/`setInterval` appelé avec une chaîne comme premier argument (équivalent à `eval`) | majeur |
+| C-XSS-03 | `eval()` (direct, ou indirect via `(0, eval)(...)`), `Function(...)`/`new Function(...)` (avec ou sans `new`, alias `window.`/`self.`/`globalThis.` reconnus), ou une URL `javascript:` donnée à `href`/`src`/`action`/`formaction` (par affectation ou `setAttribute`). Voir le modèle « code fourni sous forme de chaîne » ci-dessus pour `eval`/`Function` : calculé ou illisible → **critique, BLOQUANT** ; littéral qui se parse → mineur, non bloquant (contenu audité comme un fichier de plus). Une URL `javascript:` reste toujours **critique, BLOQUANT**, quel que soit son contenu | **critique, BLOQUANT** (sauf littéral audité pour eval/Function, voir ci-dessus) |
+| C-XSS-04 | `setTimeout`/`setInterval` appelé avec une chaîne (ou gabarit, ou concaténation) comme premier argument plutôt qu'une fonction. Même modèle « code fourni sous forme de chaîne » : calculé ou illisible → majeur (jamais bloquant, inchangé) ; littéral qui se parse → mineur (contenu audité comme un fichier de plus) | majeur, ou mineur si littéral audité |
 | C-XSS-05 | `.html(valeur)` façon jQuery avec valeur dynamique | mineur, probable |
 | C-XSS-06 | (neutre) `innerHTML` avec du HTML **constant** — aucun risque, pour mémoire | info |
+| C-XSS-07 | `new Worker(...)`/`new SharedWorker(...)` (alias globaux reconnus) construit depuis du code fourni en chaîne plutôt qu'un fichier séparé : une URL `data:` littérale (base64 ou non), ou `URL.createObjectURL(new Blob([...]))` où tous les éléments du tableau sont littéraux. Même modèle « code fourni sous forme de chaîne » : contenu entièrement littéral qui se parse → mineur, non bloquant (audité comme un fichier de plus) ; contenu partiellement calculé ou illisible (variable, `atob()`, concaténation) → **critique, BLOQUANT** ; source du Worker elle-même non résolue par l'analyse statique (variable, gabarit interpolé) → majeur, non bloquant, à_vérifier | voir déclenchement |
 
 **C-DOM / C-CSP**
 | Règle | Déclenchement | Sévérité |
