@@ -8,7 +8,8 @@
  * chargés dans le navigateur de l'agent : les remonter comme du risque de
  * sécurité noierait les vrais points durs. On sépare donc :
  *   - la SURFACE EXÉCUTÉE : fichiers atteignables depuis les points d'entrée
- *     HTML (transitivement, via <script src> et import ES) ;
+ *     HTML (transitivement, via <script src>, import ES, new Worker()/
+ *     new SharedWorker() à source locale, et importScripts()) ;
  *   - le RESTE du dépôt.
  */
 import fs from 'node:fs';
@@ -172,28 +173,50 @@ function calculerSurface(racine, fichiers, entrees) {
   return surface;
 }
 
-/** Références locales sortantes d'un fichier (script src, link href, import, url()). */
+/**
+ * Références vers un worker ou un sous-script de worker, à source locale
+ * résolvable statiquement. Un fichier de worker n'est référencé par aucun
+ * <script> ni import ES, mais il est pleinement exécuté dans le navigateur
+ * de l'agent dès que le constructeur tourne : sans ceci, son contenu (un
+ * `importScripts()` vers un domaine externe, par exemple — voir
+ * C-EXFIL-01/02) n'entre jamais dans `surface`, quel que soit l'appel qu'il
+ * contient. Couvre la forme directe (`new Worker('./w.js')`), celle que
+ * produisent les empaqueteurs (`new Worker(new URL('./w.js',
+ * import.meta.url))`, Vite/Webpack 5), et un gabarit statique sans
+ * interpolation (`` new Worker(`./w.js`) ``) — jamais une expression
+ * calculée, qu'aucune de ces trois formes syntaxiques ne couvre. Une URL
+ * absolue (http(s):, data:) est déjà écartée plus bas par le même filtre
+ * que pour les autres références ; `importScripts()` peut prendre plusieurs
+ * arguments (tous chargés), on les suit tous, pas seulement le premier.
+ */
+function referencesWorker(contenu) {
+  const refs = [];
+  for (const m of contenu.matchAll(/\bnew\s+(?:Worker|SharedWorker)\s*\(\s*(?:["']([^"']+)["']|`([^`$]+)`)/g)) {
+    refs.push(m[1] ?? m[2]);
+  }
+  for (const m of contenu.matchAll(/\bnew\s+(?:Worker|SharedWorker)\s*\(\s*new\s+URL\s*\(\s*(?:["']([^"']+)["']|`([^`$]+)`)\s*,\s*import\.meta\.url/g)) {
+    refs.push(m[1] ?? m[2]);
+  }
+  for (const m of contenu.matchAll(/\bimportScripts\s*\(([^)]*)\)/g)) {
+    for (const s of m[1].matchAll(/["']([^"']+)["']/g)) refs.push(s[1]);
+  }
+  return refs;
+}
+
+/** Références locales sortantes d'un fichier (script src, link href, import, url(), worker). */
 function referencesSortantes(f) {
   const refs = [];
   const c = f.contenu ?? '';
   if (f.ext === '.html' || f.ext === '.htm') {
     for (const m of c.matchAll(/<script[^>]+src\s*=\s*["']([^"']+)["']/gi)) refs.push(m[1]);
     for (const m of c.matchAll(/<link[^>]+href\s*=\s*["']([^"']+)["']/gi)) refs.push(m[1]);
+    refs.push(...referencesWorker(c)); // couvre un new Worker(...) écrit dans un <script> inline
   }
   if (f.ext === '.css') for (const m of c.matchAll(/url\(\s*["']?([^"')]+)/gi)) refs.push(m[1]);
   if (['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'].includes(f.ext)) {
     for (const m of c.matchAll(/\bfrom\s+["']([^"']+)["']/g)) refs.push(m[1]);
     for (const m of c.matchAll(/\bimport\s*\(\s*["']([^"']+)["']/g)) refs.push(m[1]);
-    // `new Worker('./worker.js')` / `new SharedWorker(...)` : un fichier de
-    // worker n'est référencé par aucun <script> ni import ES, mais il est
-    // pleinement exécuté dans le navigateur de l'agent dès que ce constructeur
-    // tourne. Sans cette ligne, son contenu (un `importScripts()` vers un
-    // domaine externe, par exemple — voir C-EXFIL-01/02) n'est jamais vu par
-    // aucune règle : il n'entre jamais dans `surface`, quel que soit l'appel
-    // qu'il contient. Seule une source littérale locale est suivie ici ; une
-    // URL absolue (http(s):, data:) est déjà écartée plus bas par le même
-    // filtre que pour les autres références.
-    for (const m of c.matchAll(/\bnew\s+(?:Worker|SharedWorker)\s*\(\s*["']([^"']+)["']/g)) refs.push(m[1]);
+    refs.push(...referencesWorker(c));
   }
   return refs;
 }

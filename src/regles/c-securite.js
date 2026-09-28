@@ -151,7 +151,10 @@ export function analyserSortiesReseau(ctx) {
       const h = hote(cible);
       if (estLocal(h) && !dynamique) return;                 // requête sur soi-même
       if (estGrist(h)) return;                               // API Grist : hors périmètre de ce constat
-      const cle = `${unite.chemin}:${ligneDe(n)}:${canal}`;
+      // `cible` fait partie de la clé : `importScripts('./a.js', 'https://x')`
+      // signale les deux arguments sur le même nœud, avec le même `canal` —
+      // sans elle, le second argument serait pris pour un doublon du premier.
+      const cle = `${unite.chemin}:${ligneDe(n)}:${canal}:${cible}`;
       if (vus.has(cle)) return;
       vus.add(cle);
       if (!dynamique) enregistrerDestination(ctx, h);
@@ -194,7 +197,15 @@ export function analyserSortiesReseau(ctx) {
           if (v !== null || estDynamique(arg)) signaler(n, 'XMLHttpRequest', v ?? '(URL calculée)', estDynamique(arg));
         }
         if (/sendBeacon$/.test(nom)) signaler(n, 'navigator.sendBeacon()', chaineLitterale(n.arguments[0]) ?? '(URL calculée)', estDynamique(n.arguments[0]));
-        if (/importScripts$/.test(nom)) signaler(n, 'importScripts()', chaineLitterale(n.arguments[0]) ?? '(URL calculée)', estDynamique(n.arguments[0]));
+        if (/importScripts$/.test(nom)) {
+          // `importScripts(a, b, c)` charge TOUS ses arguments, pas seulement
+          // le premier — un seul appel avec une source sûre en tête et une
+          // source externe en second argument échappait entièrement à ce
+          // constat avant cette boucle.
+          for (const arg of n.arguments) {
+            signaler(n, 'importScripts()', chaineLitterale(arg) ?? '(URL calculée)', estDynamique(arg));
+          }
+        }
       },
       NewExpression(n) {
         const nom = nomPointe(n.callee) || '';

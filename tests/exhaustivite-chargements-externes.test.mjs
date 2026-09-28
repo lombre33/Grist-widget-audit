@@ -247,3 +247,103 @@ test("new Worker(url http(s) absolue) ne fait entrer aucun fichier dans la surfa
     fs.rmSync(dir, { recursive: true, force: true });
   }
 });
+
+// ---------------------------------------------------------------------------
+// Angles morts trouvés par la coordination (2026-09-28, vérifiés par
+// l'exécution de construireContexte() sur de vraies fixtures) : un new
+// Worker écrit dans un <script> inline HTML, la forme que produisent les
+// empaqueteurs (new URL(..., import.meta.url)), un gabarit statique, et un
+// importScripts() local chaîné depuis un worker déjà dans la surface.
+// ---------------------------------------------------------------------------
+
+test("un new Worker('./local.js') écrit dans un <script> INLINE (pas un fichier .js séparé) fait aussi entrer le worker dans la surface", () => {
+  const dir = depotTemporaire({
+    'index.html': "<script>const w = new Worker('./worker.js');</script>",
+    'worker.js': '',
+  });
+  try {
+    const ctx = construireContexte(dir);
+    assert.ok(ctx.surface.has('worker.js'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("new Worker(new URL('./worker.js', import.meta.url)) — forme produite par les empaqueteurs (Vite, Webpack 5) — est suivie", () => {
+  const dir = depotTemporaire({
+    'index.html': '<script type="module" src="app.js"></script>',
+    'app.js': "const w = new Worker(new URL('./worker.js', import.meta.url));",
+    'worker.js': '',
+  });
+  try {
+    const ctx = construireContexte(dir);
+    assert.ok(ctx.surface.has('worker.js'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("un gabarit statique sans interpolation (\\`./worker.js\\`) est suivi comme un littéral", () => {
+  const dir = depotTemporaire({
+    'index.html': '<script src="app.js"></script>',
+    'app.js': 'const w = new Worker(`./worker.js`);',
+    'worker.js': '',
+  });
+  try {
+    const ctx = construireContexte(dir);
+    assert.ok(ctx.surface.has('worker.js'));
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('un gabarit AVEC interpolation reste traité comme une source calculée (pas de faux chemin résolu, pas de plantage)', () => {
+  const dir = depotTemporaire({
+    'index.html': '<script src="app.js"></script>',
+    'app.js': 'const nom = "worker"; const w = new Worker(`./${nom}.js`);',
+  });
+  try {
+    assert.doesNotThrow(() => construireContexte(dir));
+    const ctx = construireContexte(dir);
+    assert.equal(ctx.surface.size, 2, 'seuls index.html et app.js : une source interpolée ne doit résoudre aucun chemin inventé');
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("un importScripts('./sous-script.js') À L'INTÉRIEUR d'un worker chaîne ce sous-script dans la surface", () => {
+  const dir = depotTemporaire({
+    'index.html': '<script src="app.js"></script>',
+    'app.js': "const w = new Worker('./worker.js');",
+    'worker.js': "importScripts('./sous-script.js');",
+    'sous-script.js': "importScripts('https://exemple.tiers/lib.js');",
+  });
+  try {
+    const ctx = construireContexte(dir);
+    assert.ok(ctx.surface.has('worker.js'));
+    assert.ok(ctx.surface.has('sous-script.js'), "avant ce correctif, importScripts() n'était jamais suivi pour la surface : sous-script.js restait invisible même une fois worker.js inclus");
+    const constats = analyserSortiesReseau(ctx);
+    assert.ok(constats.some((c) => c.regle === 'C-EXFIL-01' && c.fichier === 'sous-script.js'), "l'appel externe dans sous-script.js doit être vu une fois ce fichier dans la surface");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// ---------------------------------------------------------------------------
+// C-EXFIL-01/02 : importScripts() avec plusieurs arguments
+// ---------------------------------------------------------------------------
+
+test("importScripts('./local.js', 'https://exemple.tiers/lib.js') : l'argument externe est vu même en second, sans être masqué par le premier (dédoublonnage par argument, pas par ligne)", () => {
+  const ctx = { fichiers: [fichier('app.js', "importScripts('./local.js', 'https://exemple.tiers/lib.js');")] };
+  const constats = analyserSortiesReseau(ctx).filter((c) => c.regle === 'C-EXFIL-01' || c.regle === 'C-EXFIL-02');
+  assert.equal(constats.length, 1, "un seul argument est externe ('./local.js' est local, donc écarté)");
+  assert.ok(constats[0].constat.includes('exemple.tiers'));
+});
+
+test('importScripts() avec DEUX arguments externes distincts sur le même appel produit deux constats, pas un seul (régression du dédoublonnage par ligne)', () => {
+  const ctx = { fichiers: [fichier('app.js', "importScripts('https://exemple-un.tiers/a.js', 'https://exemple-deux.tiers/b.js');")] };
+  const constats = analyserSortiesReseau(ctx).filter((c) => c.regle === 'C-EXFIL-01');
+  assert.equal(constats.length, 2, "avant ce correctif, la clé de dédoublonnage (fichier:ligne:canal) aurait fait disparaître le second argument, identique au premier sur ces trois critères");
+  assert.ok(constats.some((c) => c.constat.includes('exemple-un.tiers')));
+  assert.ok(constats.some((c) => c.constat.includes('exemple-deux.tiers')));
+});
