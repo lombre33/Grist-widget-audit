@@ -175,8 +175,11 @@ export function analyserAccessibiliteStatique(ctx) {
 /** Sobriété : poids réellement envoyé au navigateur de l'agent. */
 export function analyserSobriete(ctx) {
   const constats = [];
-  const poids = ctx.fichiers.filter((f) => f.executee).reduce((s, f) => s + f.taille, 0);
-  const lourds = ctx.fichiers.filter((f) => f.executee && f.taille > 500 * 1024)
+  // `litteralImbrique` (axe C) est un fichier synthétique dont le contenu est
+  // déjà compté dans le poids du fichier source qui le contient : l'inclure
+  // ici compterait ces octets une seconde fois.
+  const poids = ctx.fichiers.filter((f) => f.executee && !f.litteralImbrique).reduce((s, f) => s + f.taille, 0);
+  const lourds = ctx.fichiers.filter((f) => f.executee && !f.litteralImbrique && f.taille > 500 * 1024)
     .sort((a, b) => b.taille - a.taille);
 
   if (poids > 2 * 1024 * 1024) {

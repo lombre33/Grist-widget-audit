@@ -408,16 +408,19 @@ function estPrefixeCodeEnChaine(noeud) {
  * concaténation avec une variable) : ce contenu reste hors de portée, comme
  * avant — c'est là qu'est le vrai risque, pas dans un littéral qu'on peut lire.
  */
+function decoderDataLitteral(lit) {
+  const m = /^data:([^,]*),([\s\S]*)$/i.exec(lit.trim());
+  if (!m) return null;
+  if (/;base64\s*$/i.test(m[1])) {
+    try { return Buffer.from(m[2], 'base64').toString('utf8'); } catch { return null; }
+  }
+  try { return decodeURIComponent(m[2]); } catch { return m[2]; }
+}
+
 function extraireCodeLitteralWorker(arg) {
   const lit = chaineLitterale(arg);
-  if (lit !== null) {
-    const m = /^data:([^,]*),([\s\S]*)$/i.exec(lit.trim());
-    if (!m) return null;
-    if (/;base64\s*$/i.test(m[1])) {
-      try { return Buffer.from(m[2], 'base64').toString('utf8'); } catch { return null; }
-    }
-    try { return decodeURIComponent(m[2]); } catch { return m[2]; }
-  }
+  if (lit !== null) return decoderDataLitteral(lit);
+
   if (arg.type === 'CallExpression' && nomFinal(arg.callee) === 'createObjectURL') {
     const blob = arg.arguments[0];
     if (blob?.type === 'NewExpression' && nomFinal(blob.callee) === 'Blob' && blob.arguments[0]?.type === 'ArrayExpression') {
@@ -425,6 +428,17 @@ function extraireCodeLitteralWorker(arg) {
       if (morceaux.length && morceaux.every((m) => m !== null)) return morceaux.join('');
     }
   }
+
+  // `new URL('data:...')` : classifierSourceWorker fait déjà dépendre la
+  // classification du seul premier argument, quelle que soit la base
+  // (voir sa documentation) — extraire le contenu suit le même
+  // raisonnement, en ignorant `arg.arguments[1]` de la même façon. Sans
+  // cette branche, ce cas précis retombait à tort dans le texte « contenu
+  // pas entièrement littéral », alors qu'il l'est.
+  if (arg.type === 'NewExpression' && nomFinal(arg.callee) === 'URL') {
+    return extraireCodeLitteralWorker(arg.arguments[0]);
+  }
+
   return null;
 }
 
@@ -451,112 +465,329 @@ function classifierSourceWorker(arg) {
 const MAX_PROFONDEUR_CODE_IMBRIQUE = 5;
 
 /**
- * Un argument littéral (chaîne ou gabarit sans interpolation) qui SE PARSE
- * comme du JS valide n'est plus une boîte noire : c'est un fichier de plus
- * dans la surface auditée, où chaque règle de l'axe C s'applique à sa propre
- * sévérité — un eval() imbriqué y redevient critique, un fetch() vers un
- * domaine externe y est vu par C-EXFIL-01/02 — au lieu de traiter la seule
- * construction comme LE risque, quel que soit son contenu.
- *
- * Revu avec la coordination le 2026-09-28 : l'unconditionnalité posait un
- * faux positif qu'aucune propriété de sécurité réelle ne justifie —
- * `Function("return this")`, l'idiome lodash de détection du global (une
- * chaîne figée et lisible, sans donnée ni réseau), que l'API Grist elle-même
- * bundle. Le référentiel le reconnaît déjà : C-CSP-01 épargne 'unsafe-eval'
- * pour cette API, et C-EXFIL-04 recommande justement de l'embarquer plutôt
- * que de la charger depuis docs.getgrist.com — un widget qui suit ce
- * conseil ne doit pas devenir NON CONFORME pour le lodash qu'elle bundle.
- *
- * Un argument calculé, ou un littéral qui ne se parse pas comme du JS, reste
- * hors de portée de cette analyse : c'est LÀ le vrai risque (du code que
- * l'audit ne lit pas), pas dans un littéral qu'il peut lire — l'appelant
- * garde alors le traitement critique/bloquant inchangé. Retourne null dans
- * ce cas.
- *
- * Bornée en profondeur (`ctx._profondeurCodeImbrique`) : un widget
- * malveillant pourrait sinon empiler des littéraux emboîtés pour épuiser
- * l'analyse plutôt que pour échapper à une détection précise.
+ * Replie une concaténation de `+` entre littéraux/gabarits statiques en une
+ * seule chaîne : `'al' + 'ert(1)'` vaut alors comme le littéral `'alert(1)'`,
+ * pas comme une valeur « calculée à l'exécution » — le texte que produisait
+ * `chaineLitterale` seul (qui ne traite pas `BinaryExpression`) était inexact
+ * sur ce cas précis, relevé par la coordination le 2026-09-28 : une
+ * concaténation de constantes n'est pas une inconnue, c'est un peu
+ * d'arithmétique de chaînes qu'on peut faire soi-même à l'analyse. Retourne
+ * null dès qu'une partie n'est pas entièrement littérale (variable, appel).
  */
-function analyserSiCodeLitteral(ctx, texte, { fichier, ligne, profondeur }) {
+function plierLitteraux(noeud) {
+  if (!noeud) return null;
+  const direct = chaineLitterale(noeud);
+  if (direct !== null) return direct;
+  if (noeud.type === 'BinaryExpression' && noeud.operator === '+') {
+    const gauche = plierLitteraux(noeud.left);
+    if (gauche === null) return null;
+    const droite = plierLitteraux(noeud.right);
+    if (droite === null) return null;
+    return gauche + droite;
+  }
+  return null;
+}
+
+/** `atob(x)` retourne toujours une chaîne : si `x` est lui-même littéral (ou une concaténation qui se replie), son décodage est aussi peu une boîte noire qu'un littéral direct. */
+function decoderAtobLitteral(noeud) {
+  if (noeud?.type !== 'CallExpression' || nomFinal(noeud.callee) !== 'atob' || noeud.arguments.length !== 1) return null;
+  const arg = plierLitteraux(noeud.arguments[0]);
+  if (arg === null) return null;
+  try { return Buffer.from(arg, 'base64').toString('utf8'); } catch { return null; }
+}
+
+/**
+ * Vrai si `noeud` est manifestement une fonction : littéralement une
+ * fonction fléchée/expression, ou un identifiant qui résout — dans la MÊME
+ * unité — vers une déclaration de fonction ou une variable initialisée par
+ * une fonction. C'est la seule forme sûre pour `setTimeout`/`setInterval` :
+ * on ne signale JAMAIS ce cas, quel que soit le nom, pour ne pas noyer le
+ * motif `setTimeout(callback, delai)` — de très loin le plus fréquent — sous
+ * du bruit.
+ */
+function estFonctionResolue(noeud, ast, walkAcorn) {
+  if (!noeud) return false;
+  if (noeud.type === 'ArrowFunctionExpression' || noeud.type === 'FunctionExpression') return true;
+  if (noeud.type !== 'Identifier') return false;
+  let trouve = false;
+  walkAcorn.simple(ast, {
+    FunctionDeclaration(n) { if (n.id?.name === noeud.name) trouve = true; },
+    VariableDeclarator(n) {
+      if (n.id.type === 'Identifier' && n.id.name === noeud.name &&
+          (n.init?.type === 'ArrowFunctionExpression' || n.init?.type === 'FunctionExpression')) trouve = true;
+    },
+  });
+  return trouve;
+}
+
+/**
+ * Cœur du modèle « littéral audité, pas puni » (revu avec la coordination le
+ * 2026-09-28 : `Function("return this")`, l'idiome lodash bundlé par l'API
+ * Grist officielle elle-même, ne justifiait aucune sanction — C-CSP-01
+ * épargne déjà `'unsafe-eval'` pour cette API, et C-EXFIL-04 recommande
+ * justement de l'embarquer). Si `texteBrut` se parse comme du JS valide, il
+ * devient un fichier de PLUS dans la surface réellement auditée
+ * (`ctx.fichiers`, pas une copie isolée) : chaque règle de l'axe C s'y
+ * applique à sa propre sévérité (un eval() imbriqué y redevient critique),
+ * ET les règles qui portent sur le WIDGET ENTIER (C-GRIST, qui agrège
+ * `usagesGrist` sur tout `ctx.fichiers`, ou C-STOCK-01, dont la sévérité
+ * dépend du README présent dans `ctx.fichiers`) le voient exactement comme
+ * n'importe quel autre fichier — sans traitement spécial, donc sans
+ * incitation inversée à cacher un appel dangereux dans une chaîne.
+ *
+ * Le fichier synthétique porte son PROPRE nom (« … (code littéral, ligne
+ * N) ») et sa propre numérotation de ligne : un constat trouvé dedans
+ * rapporte SA ligne dans le texte décodé, jamais une ligne recalculée par
+ * rapport au fichier source — c'est le point précis que corrige cette
+ * réécriture (l'ancien `analyserSiCodeLitteral` remappait
+ * `ligne + c.ligne - 1`, faux dès que le littéral décodé ne correspond pas
+ * ligne à ligne au texte source, par exemple un contenu base64 décodé).
+ * Marqué `vendorise: true` : ni l'auteur du widget ni un tiers ne l'ont écrit
+ * comme du code source à relire tel quel, donc hors du jugement de qualité
+ * (axe A) et de lisibilité (axe B) — même raisonnement déjà appliqué au code
+ * tiers embarqué. `litteralImbrique: true` l'exclut en plus des deux
+ * endroits où « vendorise » aurait un sens différent du voulu : E-DEP-02 (ce
+ * n'est pas une bibliothèque tierce à documenter) et F-ECO-01 (son poids est
+ * déjà compté dans le fichier source qui le contient ; le compter une
+ * deuxième fois gonflerait le poids réseau rapporté sans rapport avec la
+ * réalité).
+ *
+ * Bornée en profondeur (`profondeur`) : un widget malveillant pourrait
+ * sinon empiler des littéraux emboîtés pour épuiser l'analyse plutôt que
+ * pour échapper à une détection précise.
+ *
+ * Retourne `{ constats, fichier? }` — `fichier` est le fichier synthétique
+ * créé (utile à l'appelant pour poursuivre l'extraction en profondeur),
+ * absent quand l'argument est calculé ou ne se parse pas.
+ */
+function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, extrait, texteBrut, profondeur, regle, titreConstruction, texteConstruction, remediationSupprimer, impactConstruction, referentielsSupp = [] }) {
+  const constatCalculeOuIllisible = (motif) => constat({
+    regle, axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
+    titre: titreConstruction, fichier: fichierOrigine, ligne: ligneAppel, extrait,
+    constat: `${texteConstruction} ${motif}`,
+    impact: impactConstruction,
+    remediation: remediationSupprimer,
+    referentiels: ['CWE-95', REF_ANSSI, 'OWASP Top 10 A03:2021', ...referentielsSupp],
+  });
+
+  if (texteBrut === null) {
+    return { constats: [constatCalculeOuIllisible("Son argument est calculé à l'exécution : rien de ce qui sera réellement exécuté n'est lu par l'analyse statique.")] };
+  }
+
   if (profondeur >= MAX_PROFONDEUR_CODE_IMBRIQUE) {
-    return [constat({
+    return { constats: [constat({
       regle: 'C-XSS-03', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
       titre: 'Imbrication de code littéral trop profonde pour être auditée',
-      fichier, ligne,
+      fichier: fichierOrigine, ligne: ligneAppel,
       constat: `Ce code contient une chaîne exécutable elle-même imbriquée au-delà de ${MAX_PROFONDEUR_CODE_IMBRIQUE} niveaux.`,
       impact: "Aucune raison légitime à ce niveau d'imbrication ; peut viser à épuiser l'analyse automatique plutôt qu'à échapper à une détection précise.",
       remediation: 'Supprimer cette construction en cascade.',
       referentiels: ['CWE-95'],
-    })];
+    })] };
   }
-  const ast = parser(texte);
-  if (!ast) return null;
 
-  ctx.destinationsExternes ??= new Set(); // partagé avec l'appel imbriqué, voir enregistrerDestination()
-  const pseudoFichier = { chemin: fichier, contenu: texte, lignes: texte.split('\n'), ext: '.js', binaire: false, executee: true, vendorise: false };
-  const pseudoCtx = { ...ctx, fichiers: [pseudoFichier], entrees: [fichier], _profondeurCodeImbrique: profondeur + 1 };
+  if (!parser(texteBrut)) {
+    return { constats: [constatCalculeOuIllisible("Son contenu littéral ne se parse pas comme du JS valide : l'analyse ne peut pas l'auditer comme le reste du code.")] };
+  }
 
-  const constats = [];
-  for (const regle of reglesC) {
-    // analyserAccesGrist (C-GRIST-01 à 04) porte sur le WIDGET ENTIER (a-t-il
-    // appelé grist.ready() quelque part, quel niveau d'accès a-t-il négocié) :
-    // un fragment isolé ne peut par construction jamais satisfaire une
-    // vérification qui porte sur l'ensemble de la surface. Le faire tourner
-    // dessus ne produirait qu'un « n'appelle jamais grist.ready() »
-    // systématique, sans rapport avec le fragment — vérifié à l'exécution.
-    if (regle === analyserAccesGrist) continue;
-    constats.push(...regle(pseudoCtx));
-  }
-  for (const c of constats) {
-    c.ligne = ligne + (c.ligne ?? 1) - 1; // la ligne 1 du littéral correspond au site d'appel
-    c.titre = `[Code littéral audité] ${c.titre}`;
-  }
-  return constats;
+  const chemin = `${fichierOrigine} (code littéral, ligne ${ligneAppel})`;
+  const fichier = {
+    chemin, contenu: texteBrut, lignes: texteBrut.split('\n'), ext: '.js',
+    binaire: false, executee: true, vendorise: true, litteralImbrique: true,
+    taille: Buffer.byteLength(texteBrut, 'utf8'),
+  };
+  ctx.fichiers.push(fichier);
+
+  return {
+    fichier,
+    constats: [constat({
+      regle, axe: 'C', severite: 'mineur', bloquant: false, confiance: 'certain',
+      titre: `${titreConstruction} (contenu littéral, audité comme du code du dépôt)`,
+      fichier: fichierOrigine, ligne: ligneAppel, extrait,
+      constat: `${texteConstruction} Son contenu est un littéral qui a pu être analysé comme le reste du code : chaque règle de sécurité s'y applique déjà, à sa propre sévérité (voir \`${chemin}\`).`,
+      impact: "Reste un obstacle inutile à une politique de sécurité de contenu stricte, et une source de confusion en relecture, mais le contenu lui-même est audité comme n'importe quel autre fichier du dépôt.",
+      remediation: remediationSupprimer,
+      referentiels: ['CWE-95', ...referentielsSupp],
+    })],
+  };
 }
 
+const IMPACT_EXECUTION_CHAINE = "Toute donnée qui atteint cet appel devient du code exécuté avec l'accès du widget au document. C'est rédhibitoire pour un hébergement sur instance officielle, et cela empêche toute politique de sécurité de contenu stricte.";
+
 /**
- * eval()/Function() (directs ou indirects) : signale la construction, puis —
- * si l'argument est littéral et parse comme du JS — analyse son contenu
- * comme du code de la surface (`analyserSiCodeLitteral`) plutôt que de
- * traiter la seule construction comme LE risque. `envelopper` corrige la
+ * eval()/Function() (directs ou indirects). `envelopper` corrige la
  * sémantique de `Function`/`new Function` : leur corps s'exécute comme
  * l'intérieur d'une fonction (où `return` est valide), contrairement à
  * `eval()` ou au script d'un worker, qui s'exécutent en portée de script.
  */
-function traiterExecutionDeChaine(ctx, { unite, ligneDe, n, argument, titreConstruction, texteConstruction, remediationSupprimer, envelopper = false }) {
-  const profondeur = ctx._profondeurCodeImbrique ?? 0;
-  const texteBrut = chaineLitterale(argument);
-  const texteAnalyse = texteBrut !== null && envelopper ? `(function(){${texteBrut}})` : texteBrut;
-  const sousConstats = texteAnalyse !== null
-    ? analyserSiCodeLitteral(ctx, texteAnalyse, { fichier: unite.chemin, ligne: ligneDe(n), profondeur })
-    : null;
+function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, profondeur, titreConstruction, texteConstruction, remediationSupprimer, envelopper = false }) {
+  const brut = plierLitteraux(argument) ?? decoderAtobLitteral(argument);
+  const texteAnalyse = brut !== null && envelopper ? `(function(){${brut}})` : brut;
+  return traiterSiteConstruction(ctx, {
+    fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), extrait: extraireSource(unite.source, n),
+    texteBrut: texteAnalyse, profondeur, regle: 'C-XSS-03',
+    titreConstruction, texteConstruction, remediationSupprimer,
+    impactConstruction: IMPACT_EXECUTION_CHAINE,
+  }).constats;
+}
 
-  if (sousConstats) {
-    return [
-      ...sousConstats,
-      constat({
-        regle: 'C-XSS-03', axe: 'C', severite: 'mineur', bloquant: false, confiance: 'certain',
-        titre: `${titreConstruction} (contenu littéral, audité comme du code du dépôt)`,
-        fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-        constat: `${texteConstruction} Son contenu est un littéral qui a pu être analysé comme le reste du code : chaque règle de sécurité s'y applique déjà, à sa propre sévérité.`,
-        impact: "Reste un obstacle inutile à une politique de sécurité de contenu stricte, et une source de confusion en relecture, mais le contenu lui-même est audité comme n'importe quel autre fichier du dépôt.",
-        remediation: remediationSupprimer,
-        referentiels: ['CWE-95'],
-      }),
-    ];
+/**
+ * `setTimeout`/`setInterval` : Chromium compile en code TOUT argument qui
+ * évalue en une chaîne, quelle que soit la syntaxe qui la produit
+ * (`atob(...)`, concaténation, gabarit interpolé) — un texte de chaîne, pas
+ * seulement les trois formes syntaxiques reconnues jusqu'ici. Une fonction
+ * (fléchée, ou un identifiant qui en résout une dans ce fichier) n'est
+ * jamais signalée. Un identifiant qui ne résout ni vers une fonction ni vers
+ * un littéral reçoit un palier « à vérifier » (comme la source `non-resolue`
+ * d'un Worker) plutôt que le silence d'avant ou une critique systématique :
+ * le motif `setTimeout(callback, delai)` où `callback` est un paramètre —
+ * bien réel dans du code embarqué comme lodash — resterait sinon noyé sous
+ * du bruit.
+ */
+function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, profondeur }) {
+  if (!arg || estFonctionResolue(arg, ast, walkAcorn)) return [];
+
+  const estAtob = arg.type === 'CallExpression' && nomFinal(arg.callee) === 'atob';
+  const estCandidat = arg.type === 'Literal' || arg.type === 'TemplateLiteral' || arg.type === 'BinaryExpression' || estAtob;
+
+  if (!estCandidat) {
+    if (arg.type !== 'Identifier') return [];
+    return [constat({
+      regle: 'C-XSS-04', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
+      titre: `Source de ${nom} non résolue par l'analyse statique`,
+      fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+      constat: `Le premier argument de \`${nom}\` est un identifiant qui ne résout, dans ce fichier, ni vers une fonction déclarée ni vers une chaîne littérale : son contenu réel n'est connu qu'à l'exécution.`,
+      impact: "Si cette variable contient une chaîne au moment de l'appel, elle est évaluée comme du code, avec les mêmes conséquences qu'eval(). L'analyse statique ne peut ni le confirmer ni l'exclure depuis ce seul fichier.",
+      remediation: `Passer directement une fonction à ${nom}, ou documenter dans le README la provenance de cette variable.`,
+      referentiels: ['CWE-95', REF_GUIDE],
+    })];
   }
 
-  return [constat({
-    regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
-    titre: titreConstruction,
-    fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-    constat: texteBrut === null
-      ? `${texteConstruction} Son argument est calculé à l'exécution : rien de ce qui sera réellement exécuté n'est lu par l'analyse statique.`
-      : `${texteConstruction} Son contenu littéral ne se parse pas comme du JS valide : l'analyse ne peut pas l'auditer comme le reste du code.`,
-    impact: "Toute donnée qui atteint cet appel devient du code exécuté avec l'accès du widget au document. C'est rédhibitoire pour un hébergement sur instance officielle, et cela empêche toute politique de sécurité de contenu stricte.",
-    remediation: remediationSupprimer,
-    referentiels: ['CWE-95', REF_ANSSI, 'OWASP Top 10 A03:2021'],
-  })];
+  const texteBrut = estAtob ? decoderAtobLitteral(arg) : plierLitteraux(arg);
+  return traiterSiteConstruction(ctx, {
+    fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), extrait: extraireSource(unite.source, n),
+    texteBrut, profondeur, regle: 'C-XSS-04',
+    titreConstruction: `Chaîne de caractères passée à ${nom} (équivalent à eval)`,
+    texteConstruction: `Le premier argument de \`${nom}\` est une chaîne, pas une fonction.`,
+    remediationSupprimer: `Passer une fonction : \`${nom}(() => …, délai)\`.`,
+    impactConstruction: IMPACT_EXECUTION_CHAINE,
+  }).constats;
+}
+
+/** `new Worker(...)`/`new SharedWorker(...)` construit depuis du code en chaîne (voir `classifierSourceWorker`). */
+function traiterWorker(ctx, { unite, ligneDe, n, profondeur }) {
+  const nomWorker = nomFinal(n.callee);
+  const categorie = classifierSourceWorker(n.arguments[0]);
+
+  if (categorie === 'code-en-chaine') {
+    return traiterSiteConstruction(ctx, {
+      fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), extrait: extraireSource(unite.source, n),
+      texteBrut: extraireCodeLitteralWorker(n.arguments[0]), profondeur, regle: 'C-XSS-07',
+      titreConstruction: `${nomWorker} construit depuis du code assemblé en chaîne dans le dépôt`,
+      texteConstruction: `Le code exécuté par ce ${nomWorker} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé.`,
+      remediationSupprimer: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${nomWorker}('./chemin/local.js')\` : il redevient un fichier du dépôt, lisible et audité comme le reste du widget.`,
+      impactConstruction: "Équivalent fonctionnel d'eval() : ce code s'exécute avec les privilèges réseau du widget dès la construction du worker, et rien de son contenu — par exemple un appel vers un domaine externe — n'est lu par l'analyse statique, qui ne lit que des fichiers.",
+    }).constats;
+  }
+
+  if (categorie === 'non-resolue') {
+    return [constat({
+      regle: 'C-XSS-07', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
+      titre: `Source de ${nomWorker} non résolue par l'analyse statique`,
+      fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+      constat: `La source passée à ${nomWorker} n'est ni un chemin de fichier littéral ni un motif reconnu : elle peut provenir d'une variable construite ailleurs dans le code.`,
+      impact: "L'analyse statique ne lit que des fichiers déclarés en clair : une source calculée peut pointer vers du code jamais vu par aucune règle, y compris une URL blob: ou data: assemblée dans une instruction précédente.",
+      remediation: `Utiliser un chemin de fichier littéral (\`new ${nomWorker}('./chemin/local.js')\`), ou documenter dans le README la provenance exacte de cette source.`,
+      referentiels: [REF_GUIDE, 'CWE-95'],
+    })];
+  }
+
+  return [];
+}
+
+/**
+ * Matérialise en tête de l'axe C (premier élément de `reglesC`, avant même
+ * `analyserAccesGrist`) tout code littéral fourni en chaîne — à
+ * `eval`/eval indirect/`Function()`/`new Function()`/`setTimeout`/
+ * `setInterval`/`new Worker(...)` — comme des fichiers de plus dans
+ * `ctx.fichiers`, avant que la moindre autre règle de cet axe (ou de l'axe B)
+ * ne s'exécute. Itère à profondeur croissante (un littéral peut lui-même
+ * contenir un eval()) jusqu'à `MAX_PROFONDEUR_CODE_IMBRIQUE`.
+ */
+export function preparerCodeExecuteEnChaine(ctx) {
+  const constats = [];
+  let frontiere = ctx.fichiers.filter((f) => f.executee && !f.binaire);
+  let profondeur = 0;
+
+  // `<=` et non `<` : le dernier passage, à `profondeur === MAX`, ne
+  // matérialise plus rien (voir le garde-fou dans `traiterSiteConstruction`)
+  // mais scanne quand même la dernière frontière pour émettre le constat
+  // « imbrication trop profonde » — sans ce passage, un littéral qui
+  // dépasse la limite serait tronqué en silence plutôt que signalé.
+  while (frontiere.length && profondeur <= MAX_PROFONDEUR_CODE_IMBRIQUE) {
+    const nouveaux = [];
+    for (const f of frontiere) {
+      pourChaqueUniteJs({ fichiers: [f] }, {}, ({ ast, ligneDe, walk: walkAcorn, unite }) => {
+        if (!ast) return;
+        const avant = ctx.fichiers.length;
+        walkAcorn.simple(ast, {
+          CallExpression(n) {
+            const nom = nomPointe(n.callee) || '';
+            if (/(^|\.)eval$/.test(nom)) {
+              constats.push(...traiterAppelExecution(ctx, {
+                unite, ligneDe, n, argument: n.arguments[0], profondeur,
+                titreConstruction: 'Exécution de code arbitraire via eval()',
+                texteConstruction: '`eval()` est appelé dans le code exécuté du widget.',
+                remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
+              }));
+            } else if (n.callee.type === 'SequenceExpression' && n.callee.expressions.at(-1)?.type === 'Identifier' && n.callee.expressions.at(-1).name === 'eval') {
+              constats.push(...traiterAppelExecution(ctx, {
+                unite, ligneDe, n, argument: n.arguments[0], profondeur,
+                titreConstruction: 'Exécution de code arbitraire via eval() indirect',
+                texteConstruction: "La forme `(0, eval)(...)` (ou équivalente) appelle `eval` indirectement.",
+                remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
+              }));
+            }
+
+            if (nom.split('.').pop() === 'Function') {
+              constats.push(...traiterAppelExecution(ctx, {
+                unite, ligneDe, n, argument: n.arguments.at(-1), profondeur, envelopper: true,
+                titreConstruction: 'Construction de code à la volée via Function() (sans new)',
+                texteConstruction: '`Function(...)` sans `new` compile une chaîne en fonction exécutable, exactement comme `new Function(...)` : l\'appel fonctionne dans les deux cas.',
+                remediationSupprimer: 'Supprimer cet usage.',
+              }));
+            }
+
+            if (/^(setTimeout|setInterval)$/.test(nom.split('.').pop())) {
+              constats.push(...traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg: n.arguments[0], ast, walkAcorn, profondeur }));
+            }
+          },
+          NewExpression(n) {
+            if (nomFinal(n.callee) === 'Function') {
+              constats.push(...traiterAppelExecution(ctx, {
+                unite, ligneDe, n, argument: n.arguments.at(-1), profondeur, envelopper: true,
+                titreConstruction: 'Construction de code à la volée via new Function()',
+                texteConstruction: '`new Function(...)` compile une chaîne en fonction exécutable.',
+                remediationSupprimer: 'Supprimer cet usage.',
+              }));
+            }
+            if (/^(Worker|SharedWorker)$/.test(nomFinal(n.callee))) {
+              constats.push(...traiterWorker(ctx, { unite, ligneDe, n, profondeur }));
+            }
+          },
+        });
+        // Tout fichier ajouté pendant ce passage (par traiterSiteConstruction,
+        // via traiterAppelExecution/traiterMinuteur/traiterWorker) entre dans
+        // la frontière du niveau suivant, pour détecter un eval() imbriqué
+        // dans un eval() déjà littéral.
+        for (let i = avant; i < ctx.fichiers.length; i++) nouveaux.push(ctx.fichiers[i]);
+      });
+    }
+    frontiere = nouveaux;
+    profondeur++;
+  }
+
+  return constats;
 }
 
 export function analyserInjections(ctx) {
@@ -630,33 +861,11 @@ export function analyserInjections(ctx) {
           }));
         }
 
-        if (/(^|\.)eval$/.test(nom)) {
-          constats.push(...traiterExecutionDeChaine(ctx, {
-            unite, ligneDe, n, argument: n.arguments[0],
-            titreConstruction: 'Exécution de code arbitraire via eval()',
-            texteConstruction: '`eval()` est appelé dans le code exécuté du widget.',
-            remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
-          }));
-        } else if (n.callee.type === 'SequenceExpression' && n.callee.expressions.at(-1)?.type === 'Identifier' && n.callee.expressions.at(-1).name === 'eval') {
-          // Eval indirect : `(0, eval)(...)` exécute dans la portée globale plutôt que locale,
-          // mais reste un eval — un contournement courant des analyseurs qui ne cherchent que
-          // l'appel direct `eval(...)`.
-          constats.push(...traiterExecutionDeChaine(ctx, {
-            unite, ligneDe, n, argument: n.arguments[0],
-            titreConstruction: 'Exécution de code arbitraire via eval() indirect',
-            texteConstruction: "La forme `(0, eval)(...)` (ou équivalente) appelle `eval` indirectement.",
-            remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
-          }));
-        }
-
-        if (nom.split('.').pop() === 'Function') {
-          constats.push(...traiterExecutionDeChaine(ctx, {
-            unite, ligneDe, n, argument: n.arguments.at(-1), envelopper: true,
-            titreConstruction: 'Construction de code à la volée via Function() (sans new)',
-            texteConstruction: '`Function(...)` sans `new` compile une chaîne en fonction exécutable, exactement comme `new Function(...)` : l\'appel fonctionne dans les deux cas.',
-            remediationSupprimer: 'Supprimer cet usage.',
-          }));
-        }
+        // eval()/eval indirect/Function()/new Function()/setTimeout/setInterval/
+        // new Worker(code en chaîne) : détectés et matérialisés en tête de
+        // l'axe C par `preparerCodeExecuteEnChaine`, avant que cette règle ne
+        // s'exécute — voir sa documentation pour le raisonnement (le widget
+        // entier doit voir ce code, pas seulement un fragment isolé).
 
         if (/(^|\.)createContextualFragment$/.test(nom) && estDynamique(n.arguments[0])) {
           constats.push(constat({
@@ -684,37 +893,6 @@ export function analyserInjections(ctx) {
           }));
         }
 
-        if (/^(setTimeout|setInterval)$/.test(nom.split('.').pop()) && n.arguments[0] &&
-            (n.arguments[0].type === 'Literal' || n.arguments[0].type === 'TemplateLiteral' ||
-             (n.arguments[0].type === 'BinaryExpression'))) {
-          const profondeur = ctx._profondeurCodeImbrique ?? 0;
-          const texte = chaineLitterale(n.arguments[0]);
-          const sousConstats = texte !== null
-            ? analyserSiCodeLitteral(ctx, texte, { fichier: unite.chemin, ligne: ligneDe(n), profondeur })
-            : null;
-          if (sousConstats) {
-            constats.push(...sousConstats, constat({
-              regle: 'C-XSS-04', axe: 'C', severite: 'mineur', bloquant: false, confiance: 'certain',
-              titre: `Chaîne de caractères passée à ${nom} (contenu littéral, audité comme du code du dépôt)`,
-              fichier: unite.chemin, ligne: ligneDe(n),
-              constat: `Le premier argument de \`${nom}\` est une chaîne, pas une fonction. Son contenu est un littéral qui a pu être analysé comme le reste du code.`,
-              impact: "Reste un style à éviter (un passage par le moteur d'évaluation de chaînes plutôt qu'un appel de fonction), mais le contenu lui-même est audité comme n'importe quel autre fichier du dépôt.",
-              remediation: 'Passer une fonction : `setTimeout(() => …, delai)`.',
-              referentiels: ['CWE-95'],
-            }));
-          } else {
-            constats.push(constat({
-              regle: 'C-XSS-04', axe: 'C', severite: 'majeur', confiance: 'certain',
-              titre: `Chaîne de caractères passée à ${nom} (équivalent à eval)`,
-              fichier: unite.chemin, ligne: ligneDe(n),
-              constat: `Le premier argument de \`${nom}\` est une chaîne, pas une fonction.`,
-              impact: 'Le moteur évalue cette chaîne comme du code, avec les mêmes conséquences que `eval()`.',
-              remediation: 'Passer une fonction : `setTimeout(() => …, delai)`.',
-              referentiels: ['CWE-95'],
-            }));
-          }
-        }
-
         // jQuery .html(x) avec argument dynamique
         if (/\.html$/.test(nom) && n.arguments.length === 1 && estDynamique(n.arguments[0])) {
           constats.push(constat({
@@ -726,59 +904,6 @@ export function analyserInjections(ctx) {
             remediation: 'Utiliser `.text()` pour du texte.',
             referentiels: ['CWE-79'],
           }));
-        }
-      },
-      NewExpression(n) {
-        if (nomFinal(n.callee) === 'Function') {
-          constats.push(...traiterExecutionDeChaine(ctx, {
-            unite, ligneDe, n, argument: n.arguments.at(-1), envelopper: true,
-            titreConstruction: 'Construction de code à la volée via new Function()',
-            texteConstruction: '`new Function(...)` compile une chaîne en fonction exécutable.',
-            remediationSupprimer: 'Supprimer cet usage.',
-          }));
-        }
-
-        if (/^(Worker|SharedWorker)$/.test(nomFinal(n.callee))) {
-          const nomWorker = nomFinal(n.callee); // affichage : nom nu même pour `new window.Worker(...)`
-          const categorie = classifierSourceWorker(n.arguments[0]);
-          if (categorie === 'code-en-chaine') {
-            const texteCode = extraireCodeLitteralWorker(n.arguments[0]);
-            const profondeur = ctx._profondeurCodeImbrique ?? 0;
-            const sousConstats = texteCode !== null
-              ? analyserSiCodeLitteral(ctx, texteCode, { fichier: unite.chemin, ligne: ligneDe(n), profondeur })
-              : null;
-            if (sousConstats) {
-              constats.push(...sousConstats, constat({
-                regle: 'C-XSS-07', axe: 'C', severite: 'mineur', bloquant: false, confiance: 'certain',
-                titre: `${nomWorker} construit depuis du code en chaîne, entièrement littéral et audité`,
-                fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-                constat: `Le code exécuté par ce ${nomWorker} est fourni sous forme de chaîne écrite dans le dépôt, mais son contenu est entièrement littéral : il a pu être analysé comme un fichier de plus, avec les mêmes règles que le reste du dépôt.`,
-                impact: "Reste un obstacle inutile à la lisibilité (un fichier de worker séparé serait plus clair et permettrait de le suivre comme le reste de la surface), mais le contenu lui-même est audité comme n'importe quel autre fichier du dépôt.",
-                remediation: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${nomWorker}('./chemin/local.js')\`, pour une lisibilité optimale.`,
-                referentiels: ['CWE-95'],
-              }));
-            } else {
-              constats.push(constat({
-                regle: 'C-XSS-07', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
-                titre: `${nomWorker} construit depuis du code assemblé en chaîne dans le dépôt`,
-                fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-                constat: `Le code exécuté par ce ${nomWorker} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé, et son contenu n'est pas entièrement littéral (variable, \`atob()\`, concaténation).`,
-                impact: "Équivalent fonctionnel d'eval() : ce code s'exécute avec les privilèges réseau du widget dès la construction du worker, et rien de son contenu — par exemple un appel vers un domaine externe — n'est lu par l'analyse statique, qui ne lit que des fichiers.",
-                remediation: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${nomWorker}('./chemin/local.js')\` : il redevient un fichier du dépôt, lisible et audité comme le reste du widget.`,
-                referentiels: ['CWE-95', REF_ANSSI],
-              }));
-            }
-          } else if (categorie === 'non-resolue') {
-            constats.push(constat({
-              regle: 'C-XSS-07', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
-              titre: `Source de ${nomWorker} non résolue par l'analyse statique`,
-              fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-              constat: `La source passée à ${nomWorker} n'est ni un chemin de fichier littéral ni un motif reconnu : elle peut provenir d'une variable construite ailleurs dans le code.`,
-              impact: "L'analyse statique ne lit que des fichiers déclarés en clair : une source calculée peut pointer vers du code jamais vu par aucune règle, y compris une URL blob: ou data: assemblée dans une instruction précédente.",
-              remediation: `Utiliser un chemin de fichier littéral (\`new ${nomWorker}('./chemin/local.js')\`), ou documenter dans le README la provenance exacte de cette source.`,
-              referentiels: [REF_GUIDE, 'CWE-95'],
-            }));
-          }
         }
       },
     });
@@ -1491,6 +1616,13 @@ function masquer(s) {
 }
 
 export const reglesC = [
+  // En tête : matérialise tout code littéral fourni en chaîne (eval,
+  // Function, setTimeout/setInterval, Worker) comme des fichiers de plus de
+  // `ctx.fichiers`, AVANT `analyserAccesGrist` — pour que les règles qui
+  // portent sur le widget entier (C-GRIST) ou qui consultent d'autres
+  // fichiers (C-STOCK-01 et le README) le voient comme n'importe quel autre
+  // fichier du dépôt, sans angle mort ni traitement spécial.
+  preparerCodeExecuteEnChaine,
   analyserAccesGrist, analyserSortiesReseau, analyserRessourcesExternes,
   analyserInjections, analyserHtmlDangereux, analyserCspPermissive, analyserPostMessage,
   analyserStockage, analyserSecrets, analyserAlea,

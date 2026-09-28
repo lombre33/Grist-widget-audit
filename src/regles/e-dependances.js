@@ -104,7 +104,10 @@ export function analyserDependancesDistantes(ctx) {
  */
 export function analyserDependancesEmbarquees(ctx) {
   const constats = [];
-  const suspects = ctx.fichiers.filter((f) => f.vendorise);
+  // `litteralImbrique` (axe C, voir preparerCodeExecuteEnChaine) est aussi
+  // marqué `vendorise` pour hériter de l'exemption A/B, mais ce n'est pas une
+  // bibliothèque tierce à documenter : à exclure ici spécifiquement.
+  const suspects = ctx.fichiers.filter((f) => f.vendorise && !f.litteralImbrique);
 
   for (const f of suspects) {
     const version = (f.contenu.slice(0, 2000).match(/v?\d+\.\d+\.\d+/) || [])[0];
