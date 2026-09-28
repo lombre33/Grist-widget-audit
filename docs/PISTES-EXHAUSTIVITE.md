@@ -320,3 +320,50 @@ https://...` n'aurait tout simplement aucune route de sortie et
 échouerait au lancement, faute de proxy configuré — pas un trou de
 sécurité (le réseau fermé empêche justement toute fuite), mais un point à
 vérifier avant le premier essai réel sur le VPS.
+
+**Correction sur la conclusion ci-dessus (§9, point 2).** Je l'ai écrite
+comme si l'isolation réseau fermait la question — c'est ce que le fichier
+*demande*, pas ce qui a été *observé* : personne n'a jamais construit ni
+démarré cette pile (Docker Hub inatteignable depuis cet environnement de
+développement). Le raisonnement lu dans `docker-compose.v2-execution.yml`
+tient, mais reste à confirmer à la première exécution réelle sur le VPS,
+comme le fichier le dit lui-même dans ses propres commentaires.
+
+## 10. Ce qui, dans la pile V2, n'est aujourd'hui vrai que par écrit
+
+Demandé après la correction ci-dessus : lister ce qui repose sur une
+directive déclarative jamais éprouvée, et dire pour chacune comment on le
+saurait au premier démarrage réel. Étude de ce qui est déjà écrit dans
+`docker/` et `docs/ARCHITECTURE-V2.md` — rien modifié.
+
+**Un point qui n'a pas besoin d'être exécuté pour être tranché**, parce
+que ce n'est pas une question de comportement Docker mais de sémantique
+de système de fichiers : `bin/gwaudit.js:231` crée le clone temporaire
+d'une cible distante avec `fs.mkdtempSync(path.join(RACINE_OUTIL,
+'.tmp-clone-'))`, où `RACINE_OUTIL` vaut `/app` dans l'image V2
+(`docker/execution/Dockerfile`, `WORKDIR /app`). Or
+`docker-compose.v2-execution.yml` déclare `read_only: true` avec pour
+seul espace inscriptible `/tmp` (tmpfs). Une soumission anonyme est
+toujours une URL (jamais un chemin local) : chaque job passerait donc par
+cette ligne, qui écrirait dans un système de fichiers en lecture seule —
+`EROFS` garanti par le noyau, pas une hypothèse à vérifier sur le VPS.
+Pour comparaison, le reste du code a déjà appris cette leçon : le dossier
+isolé de `npm audit` (`e-dependances.js:233`) et celui de l'axe D
+(`dynamique.js:441`) utilisent tous les deux `os.tmpdir()`, pas
+`RACINE_OUTIL` — seul le clone d'URL dans `bin/gwaudit.js` ne l'a pas
+encore. `--sortie /out` (`entrypoint.sh`) évite le même problème pour le
+rapport en pointant vers un volume monté, en dehors du système de
+fichiers en lecture seule du conteneur.
+
+Le reste dépend réellement d'un premier démarrage pour être su, pas
+seulement lu :
+
+| Ce qui est écrit | Comment le premier démarrage le confirme |
+|---|---|
+| Filtre Squid (`dstdomain`/`dst`, jamais essayé contre un vrai `CONNECT`) | `git ls-remote` vers une cible autorisée et une cible piège (nom trompeur, IP privée) depuis le conteneur d'exécution |
+| `reseau-ferme: internal: true` bloque toute sortie hors du proxy | Tentative de connexion directe (curl, `nc`, SSH) vers une cible externe depuis `execution-audit`, sans passer par `egress-proxy` |
+| Sandbox natif de Chromium sous `cap_drop: ALL` + `no-new-privileges` + `pwuser` (incertitude déjà notée dans le Dockerfile) | Lancer un audit réel et vérifier que Chromium démarre sans repli sur `--no-sandbox` |
+| `mem_limit: 768m` tue réellement un Chromium qui dépasse (déjà marqué « à vérifier, pas supposé » dans `ARCHITECTURE-V2.md`) | Widget de test qui consomme délibérément plus que la limite, confirmer l'arrêt côté cgroup |
+| `pids_limit: 128` suffisant pour un widget légitime et contraignant pour un widget hostile | Lancer le widget-fixture (légitime) et un widget qui multiplie les processus, comparer |
+| Résolution de `GWAUDIT_CHROMIUM_PATH` (`ls -d /ms-playwright/chromium-*/chrome-linux/chrome \| head -n1`) sur la mise en page réelle de l'image `mcr.microsoft.com/playwright:v1.63.0-jammy` | Journaliser le chemin résolu au premier build, confirmer une correspondance unique |
+| `HTTP_PROXY`/`HTTPS_PROXY` posées pour `git`/`npm` (absentes de ce fichier, §9 ci-dessus) | Confirmer que l'orchestrateur (§5, pas encore écrit) les injecte avant le premier job réel |
