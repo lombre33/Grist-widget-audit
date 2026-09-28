@@ -277,44 +277,46 @@ sans backend propre, et n'est pas listée.
 
 Antoine a confirmé le 2026-09-28 une soumission anonyme (pas de compte) sur
 la V2 : n'importe qui peut donc fournir l'URL du dépôt à cloner sur
-l'infrastructure d'Antoine, sous son nom. Ce qui suit étudie ce scénario
-précis à partir de `docs/ARCHITECTURE-V2.md` §4 (lu, pas modifié — ce
-fichier et `docker/` appartiennent à un autre chantier). Aucune des deux
-observations n'est vérifiée à l'exécution : le proxy CONNECT décrit n'est
-pas encore construit, le document le dit lui-même. Ce sont des trous
-possibles dans la conception, pas des trous prouvés dans un système qui
-tourne.
+l'infrastructure d'Antoine, sous son nom. J'ai cherché un chemin où le
+proxy CONNECT décrit en §4 ne tient pas — deux hypothèses posées puis
+vérifiées contre le code réellement poussé entre-temps
+(`docker/egress-proxy/squid.conf`, `docker/execution/`,
+`docker-compose.v2-execution.yml`, commit `8052c8b`), donc daté et
+vérifié, pas seulement supposé sur la base du document de conception.
+Fichiers lus, pas modifiés — `docker/` et `docs/ARCHITECTURE-V2.md`
+restent hors de mon périmètre.
 
-1. **La précision du filtre par nom d'hôte devient, pour la première fois,
-   le seul rempart — pas une défense en profondeur.** V1 (`validerHoteClone`,
-   `bin/gwaudit.js`) n'exclut que les adresses internes ; tout hôte public
-   est accepté, parce qu'Antoine choisit lui-même les dépôts à auditer.
-   La V2 change de modèle : le §4 restreint pour la première fois à des
-   hôtes nommément désignés (`github.com`, `gitlab.com`,
-   `registry.npmjs.org`). Si cette comparaison est une recherche de
-   sous-chaîne ou une regexp non ancrée plutôt qu'une égalité stricte de
-   l'hôte (ou de son suffixe précédé d'un point), un domaine entièrement
-   possédé par l'attaquant — `github.com.attaquant.example`,
-   `evilgithub.com` — la satisfait aussi bien que le vrai `github.com`.
-   L'attaquant n'a alors même plus besoin de contourner l'exclusion des
-   plages internes : son propre serveur, public, répond à la place du
-   dépôt attendu. Le document marque déjà « la syntaxe exacte du filtre...
-   n'a pas été confirmée » — je le confirme à mon tour : ce n'est pas
-   encore prouvé, et c'est exactement la même leçon que le contournement
-   `\`/userinfo déjà fermé (constat 1), appliquée à un nouvel endroit.
-2. **`git@hôte:chemin` (SSH) n'est mentionné nulle part dans la description
-   du proxy.** Le §4 ne décrit le proxy de sortie que pour du trafic
-   HTTP(S) (`HTTP_PROXY`/`HTTPS_PROXY`, consommé par `git`/`npm`). Mais
-   `resoudreCible` (`bin/gwaudit.js`) accepte aussi bien `https://` que
-   `git@hôte:chemin` comme cible de clonage valide — et le transport SSH
-   que git utilise pour cette seconde forme ne respecte pas `HTTP_PROXY`
-   par défaut. Si une soumission anonyme peut encore fournir une URL
-   `git@...`, elle dispose d'une sortie réseau directe vers n'importe quel
-   hôte:port joignable en SSH depuis le conteneur, non filtrée par le
-   proxy CONNECT — le canal que la liste blanche visait justement à
-   fermer, par un protocole différent. Deux fermetures possibles, pas
-   implémentées ici : refuser `git@...` en entrée pour une soumission
-   anonyme (n'accepter que `https://`), ou bloquer toute sortie réseau du
-   conteneur qui ne passe pas par le proxy, au niveau du réseau Docker
-   plutôt qu'au niveau de l'application — ce qui fermerait aussi toute
-   variante non prévue ici.
+**Les deux hypothèses ne tiennent pas contre ce qui a été écrit** — à
+confirmer une fois construit pour de vrai sur le VPS, mais rien dans la
+lecture du code ne les soutient :
+
+1. *Un domaine possédé par l'attaquant (`github.com.attaquant.example`,
+   `evilgithub.com`) passerait-il le filtre par nom d'hôte ?* Non : la
+   liste blanche (`squid.conf`) utilise `acl domaines_autorises dstdomain
+   .github.com .gitlab.com registry.npmjs.org` — la syntaxe Squid à point
+   initial (`.github.com`) est un filtre par suffixe ancré sur les
+   frontières de labels, pas une recherche de sous-chaîne : elle exige que
+   le nom se termine exactement par `.github.com`, ce qu'aucun des deux
+   noms ci-dessus ne fait. `registry.npmjs.org` sans point initial exclut
+   même ses propres sous-domaines, volontairement.
+2. *`git@hôte:chemin` (SSH), qui ne respecte pas `HTTP_PROXY`,
+   contournerait-il le proxy CONNECT ?* Sans objet, pour une raison plus
+   solide qu'une simple absence de mention : `execution-audit` n'a
+   qu'un seul réseau, `reseau-ferme`, déclaré `internal: true` — aucune
+   route par défaut vers l'extérieur. Seul `egress-proxy` a une seconde
+   patte sur `reseau-sortie-controlee`. Le conteneur d'exécution ne peut
+   donc atteindre *aucun* hôte externe par *aucun* protocole, SSH compris,
+   qu'il passe ou non par une variable d'environnement — l'isolation est
+   réseau, pas seulement applicative, ce qui ferme la question au niveau
+   où elle doit l'être plutôt qu'au niveau de chaque client (git, npm, un
+   futur outil qui ignorerait lui aussi `HTTP_PROXY`).
+
+**Un point resté ouvert, plus fonctionnel que sécurité :** je ne vois pas,
+dans `docker-compose.v2-execution.yml`, de `HTTP_PROXY`/`HTTPS_PROXY`
+injectées dans l'environnement d'`execution-audit` pointant vers
+`egress-proxy:3128` — seul `HOME=/tmp` y figure. Si rien ne les pose
+ailleurs (l'orchestrateur du §5, pas encore écrit), `git clone
+https://...` n'aurait tout simplement aucune route de sortie et
+échouerait au lancement, faute de proxy configuré — pas un trou de
+sécurité (le réseau fermé empêche justement toute fuite), mais un point à
+vérifier avant le premier essai réel sur le VPS.
