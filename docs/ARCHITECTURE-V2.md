@@ -381,10 +381,13 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
    zone « site » (§5, pas encore écrit) : quotas par IP faute de compte,
    et l'affichage doit dire clairement à l'utilisateur que rien ne
    garantit qui a soumis quoi.
-2. Le verdict doit-il être figé sur un hash de commit précis, avec
+2. ~~Le verdict doit-il être figé sur un hash de commit précis, avec
    invalidation automatique si le mainteneur pousse du nouveau code sous
-   la même URL (§3) ? Posée à nouveau dans le fil du projet le
-   2026-09-28.
+   la même URL (§3) ?~~ **Tranché le 2026-09-28.** Antoine : « oui l'audit
+   c'est forcément figé à l'instant t. Pas de solution miracle à ce
+   sujet. » Confirme ce que §3 supposait déjà — pas d'invalidation
+   automatique à construire, le verdict porte le commit examiné et se
+   présente comme périmé si le dépôt a bougé depuis.
 3. ~~Volume attendu — Docker durci ou microVM ?~~ **Tranché le
    2026-09-28 : volume faible, avec mise en attente si deux jobs arrivent
    en même temps.** Ferme la question en faveur du Docker durci (§4), pas
@@ -395,10 +398,20 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
    leur durée. Une file qui sérialise à un job à la fois répond
    littéralement à sa demande et ferme cette exposition du même geste —
    reste à écrire (§5).
-4. Le score/verdict doit-il seulement informer l'utilisateur avant
+4. ~~Le score/verdict doit-il seulement informer l'utilisateur avant
    installation, ou doit-il pouvoir bloquer techniquement une
-   installation en dessous d'un certain seuil ? Posée à nouveau dans le
-   fil du projet le 2026-09-28.
+   installation en dessous d'un certain seuil ?~~ **Tranché le
+   2026-09-28 : informer, jamais bloquer.** Antoine : « on ne peut pas
+   bloquer quoi que ce soit, les gens installeront les widgets sur leur
+   Grist. On est juste là pour informer. Et un widget peut être non
+   conforme et tout à fait fonctionnel, et c'est ok sur des données non
+   sensibles par exemple. » Ne change rien à l'isolation (§4) : aucun
+   mécanisme de blocage à construire côté V2. La deuxième phrase dépasse
+   le choix technique — le verdict mesure un risque, il ne prononce pas
+   une sentence, et ne veut rien dire sans l'usage qu'en fait celui qui
+   décide. Ça concerne la présentation du rapport (ton, formulation), pas
+   l'enveloppe V2 — hors du périmètre de ce document, propriété du fil
+   qui possède `src/rapport/`.
 
 ## 7. Prochaines étapes concrètes
 

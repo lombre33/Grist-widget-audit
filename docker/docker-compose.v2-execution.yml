@@ -51,6 +51,26 @@ services:
       - reseau-ferme   # pas de route par défaut vers Internet
     environment:
       - HOME=/tmp
+      # Sans ces deux variables, git clone et npm audit n'ont tout
+      # simplement aucun moyen de sortir (reseau-ferme est "internal:
+      # true", voir plus bas) — ce n'est pas une option, c'est ce qui fait
+      # marcher le job. git respecte HTTP_PROXY/HTTPS_PROXY nativement
+      # pour un remote https:// (aucune config supplémentaire côté
+      # gwaudit) ; npm audit les reçoit via la liste explicite que
+      # npmAudit() transmet à son environnement isolé (src/regles/
+      # e-dependances.js, déjà en place). Manque relevé le 2026-09-28 par
+      # une revue RSSI sur ce fichier, corrigé ici.
+      - HTTP_PROXY=http://egress-proxy:3128
+      - HTTPS_PROXY=http://egress-proxy:3128
+      # Une URL git@hôte:chemin (SSH) ignore HTTP_PROXY/HTTPS_PROXY —
+      # relevé par la même revue. Pas un trou pour autant : resoudreCible()
+      # valide déjà ce format exactement comme https:// (bin/gwaudit.js,
+      # résolution DNS + rejet des plages internes avant tout clonage), et
+      # côté réseau, reseau-ferme n'a de route que vers egress-proxy — un
+      # SSH (port 22) n'a nulle part où aller, quelle que soit la
+      # variable d'environnement. Affirmation lue dans ce fichier, jamais
+      # éprouvée : à vérifier au premier démarrage réel (voir la liste de
+      # vérifications en tête de docker/README-V2-VERIFICATIONS.md).
     volumes:
       - ./out:/out   # emplacement illustratif : l'orchestrateur (§5) choisit le vrai montage par job
     # Volontairement aucune variable héritée du service "site" (secrets,
