@@ -839,3 +839,99 @@ test('C-XSS-03 : Function("return this") (idiome lodash de détection du global)
   assert.equal(c.bloquant, false);
   assert.equal(constats.some((x) => x.bloquant), false, "aucun constat bloquant : ce fichier ne doit plus, à lui seul, faire échouer la conformité");
 });
+
+// ---------------------------------------------------------------------------
+// D1/D2 (relevés par la coordination le 2026-09-28, seconde vérification
+// indépendante de c4c57ba puis de 5e79a2c) : la résolution d'un identifiant
+// vers un littéral ou une fonction ne doit valoir que pour une liaison
+// VISIBLE depuis le site d'appel et JAMAIS réaffectée. L'ancienne résolution
+// (recherche globale dans tout le fichier, sans portée ni vérification de
+// réaffectation) laissait `let code = 'void 0'; code = donnee; eval(code)`
+// résolu vers `'void 0'`, et le premier ou dernier `var code = …` du fichier
+// l'emportait quelle que soit sa portée réelle — un widget malveillant
+// masquant son contenu derrière une variable réaffectée notait alors MIEUX
+// qu'écrit en clair (axe D réel : CONFORME 89 au lieu de NON CONFORME ~75),
+// ce que l'invariant du projet interdit explicitement.
+// ---------------------------------------------------------------------------
+
+test("C-XSS-03 (D1) : eval(code) où code est une var RÉAFFECTÉE puis REDÉCLARÉE plus loin dans le fichier doit être traité comme calculé à l'exécution, pas résolu vers l'une ou l'autre valeur", () => {
+  const ctx = { fichiers: [fichier('app.js', 'var code = "1+1"; eval(code); var code = "2+2";')] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-03');
+  assert.ok(c);
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+  assert.ok(c.constat.includes('calculé'), "une var redéclarée ailleurs dans le fichier n'est pas une valeur fiable : ni « 1+1 » ni « 2+2 » ne doit être pris pour argent comptant");
+});
+
+test("C-XSS-03 (D1) : eval(code) où code est un let réaffecté depuis une donnée d'enregistrement Grist avant l'appel doit être traité comme calculé à l'exécution, pas résolu vers sa valeur initiale", () => {
+  const contenu = "function surRecord(r) { let code = 'void 0'; code = r.Formule; eval(code); }";
+  const ctx = { fichiers: [fichier('app.js', contenu)] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-03');
+  assert.ok(c, "avant ce correctif, `code` résolvait à tort vers son affectation initiale 'void 0' : ce cas restait invisible");
+  assert.equal(c.severite, 'critique');
+  assert.equal(c.bloquant, true);
+});
+
+test("C-XSS-03 (D1, témoin) : eval(code) où code est un const JAMAIS réaffecté ni redéclaré reste résolu vers son littéral (le correctif ne doit pas punir le cas honnête)", () => {
+  const ctx = { fichiers: [fichier('app.js', 'const code = "1+1"; eval(code);')] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-03');
+  assert.ok(c);
+  assert.equal(c.severite, 'mineur', "un const jamais réaffecté est une liaison fiable : son contenu doit rester audité comme un littéral direct");
+  assert.equal(c.bloquant, false);
+});
+
+test("C-XSS-04 (D2) : new Promise(resolve => { resolve = donnée; setTimeout(resolve, délai); }) doit produire un constat — resolve réaffecté n'est plus garanti être une fonction", () => {
+  const ctx = { fichiers: [fichier('app.js', 'new Promise(resolve => { resolve = window.name; setTimeout(resolve, 0); });')] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c, "avant ce correctif, l'exemption « exécuteur de Promise » couvrait resolve même réaffecté : silence total malgré un contenu qui n'est plus garanti être une fonction");
+  assert.equal(c.severite, 'majeur');
+  assert.equal(c.bloquant, false);
+});
+
+test("C-XSS-04 (D2, témoin) : new Promise(resolve => { setTimeout(resolve, délai); }) sans réaffectation reste silencieux (l'idiome d'attente le plus courant ne doit rien produire)", () => {
+  const ctx = { fichiers: [fichier('app.js', 'new Promise(resolve => { setTimeout(resolve, 0); });')] };
+  assert.equal(preparerCodeExecuteEnChaine(ctx).filter((x) => x.regle === 'C-XSS-04').length, 0);
+});
+
+// ---------------------------------------------------------------------------
+// 2a (conséquence directe de la même analyse de portée) : une liaison plus
+// proche du site d'appel — variable de bloc, paramètre déstructuré, à valeur
+// par défaut, ou de catch — doit masquer une fonction homonyme déclarée
+// ailleurs dans le fichier, jamais l'inverse. L'ancienne recherche ne
+// reconnaissait qu'un paramètre `Identifier` simple comme masquant ; toute
+// autre forme de liaison locale laissait la recherche globale trouver, à
+// tort, la fonction homonyme du fichier.
+// ---------------------------------------------------------------------------
+
+test("C-XSS-04 (2a) : setTimeout(cb, délai) où cb est une variable LOCALE homonyme d'une fonction déclarée ailleurs dans le fichier doit être « à vérifier », pas résolu vers cette fonction sans rapport", () => {
+  const contenu = 'function cb() { return 1; }\nfunction armer() { const cb = window.name; setTimeout(cb, 10); }';
+  const ctx = { fichiers: [fichier('app.js', contenu)] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c, "avant ce correctif, la variable locale `cb` était masquée par la fonction homonyme du fichier trouvée par une recherche globale sans portée : silence à tort");
+  assert.equal(c.severite, 'majeur');
+  assert.equal(c.confiance, 'a_verifier');
+});
+
+test("C-XSS-04 (2a) : setTimeout(cb, délai) où cb est un paramètre DÉSTRUCTURÉ homonyme d'une fonction déclarée ailleurs doit être « à vérifier », pas résolu vers cette fonction", () => {
+  const contenu = 'function cb() { return 1; }\nfunction armer({cb}) { setTimeout(cb, 10); }';
+  const ctx = { fichiers: [fichier('app.js', contenu)] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c, "un paramètre déstructuré n'était pas reconnu par l'ancienne recherche (qui ne testait que p.type === 'Identifier'), laissant la fonction homonyme du fichier résoudre à tort");
+  assert.equal(c.severite, 'majeur');
+});
+
+test("C-XSS-04 (2a) : setTimeout(cb, délai) où cb est un paramètre à valeur PAR DÉFAUT homonyme d'une fonction déclarée ailleurs doit être « à vérifier »", () => {
+  const contenu = 'function cb() { return 1; }\nfunction armer(cb = window.name) { setTimeout(cb, 10); }';
+  const ctx = { fichiers: [fichier('app.js', contenu)] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c);
+  assert.equal(c.severite, 'majeur');
+});
+
+test("C-XSS-04 (2a) : setTimeout(cb, délai) où cb est le paramètre d'un catch homonyme d'une fonction déclarée ailleurs doit être « à vérifier »", () => {
+  const contenu = 'function cb() { return 1; }\nfunction armer() { try {} catch (cb) { setTimeout(cb, 10); } }';
+  const ctx = { fichiers: [fichier('app.js', contenu)] };
+  const c = preparerCodeExecuteEnChaine(ctx).find((x) => x.regle === 'C-XSS-04');
+  assert.ok(c);
+  assert.equal(c.severite, 'majeur');
+});

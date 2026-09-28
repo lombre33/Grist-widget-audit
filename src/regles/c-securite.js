@@ -503,24 +503,78 @@ function decoderAtobLitteral(noeud) {
 }
 
 /**
- * Cherche, du site d'appel vers l'extérieur, la fonction (fléchée ou
- * classique) la plus proche qui déclare un paramètre appelé `nom`. La
- * portée JS veut qu'un tel paramètre masque toute déclaration homonyme plus
- * large (une fonction ou une variable du même nom ailleurs dans le
- * fichier) : sans ce garde-fou, un paramètre `cb` qui masque une
- * `function cb() {}` sans rapport passait à tort pour résolu — relevé par
- * la coordination le 2026-09-28. `ancetres` vient de `walk.ancestor` sur le
- * site d'appel (le nœud lui-même en dernier élément). Retourne la fonction,
- * la position du paramètre et le nœud parent de cette fonction (pour
- * reconnaître un exécuteur de `new Promise(...)`), ou `null` si aucune
- * fonction ancêtre ne déclare ce nom en paramètre.
+ * Noms liés par un motif de paramètre ou de déclaration, récursivement
+ * (`Identifier`, `AssignmentPattern` — valeur par défaut —, `ObjectPattern`,
+ * `ArrayPattern`, `RestElement`) : un paramètre déstructuré ou à valeur par
+ * défaut (`function f({code}) {}`, `function f(code = x) {}`) ou une
+ * variable déstructurée (`const {code} = x`) LIE bien ce nom dans sa portée,
+ * même si sa valeur n'est jamais résolvable par ce mécanisme — sans cette
+ * liste, une telle liaison était invisible à la recherche de portée, qui ne
+ * testait qu'`Identifier`, et laissait la portée continuer vers l'extérieur
+ * jusqu'à masquer, par erreur, une déclaration homonyme sans rapport
+ * (relevé par la coordination le 2026-09-28).
  */
-function trouverParametreEnglobant(nom, ancetres) {
+function nomsLies(motif) {
+  if (!motif) return [];
+  if (motif.type === 'Identifier') return [motif.name];
+  if (motif.type === 'AssignmentPattern') return nomsLies(motif.left);
+  if (motif.type === 'RestElement') return nomsLies(motif.argument);
+  if (motif.type === 'ObjectPattern') return motif.properties.flatMap((p) => nomsLies(p.type === 'RestElement' ? p : p.value));
+  if (motif.type === 'ArrayPattern') return motif.elements.flatMap((e) => nomsLies(e));
+  return [];
+}
+
+/**
+ * Cherche, du site d'appel vers l'extérieur, la portée la plus proche qui
+ * lie `nom` : un paramètre de fonction (y compris déstructuré/par défaut),
+ * un paramètre de `catch`, la variable d'un `for`/`for…of`/`for…in`, une
+ * déclaration `function`/`const`/`let`/`var` d'un bloc ou du programme.
+ * Une seule marche d'ancêtres pour tous les cas : la portée JS veut que la
+ * plus proche masque tout le reste, quelle que soit sa nature (un paramètre
+ * masque une fonction homonyme du fichier, une variable de bloc masque à
+ * son tour un paramètre plus extérieur) — les traiter séparément avait
+ * laissé passer un paramètre déstructuré/par défaut/de catch, ou une
+ * variable locale homonyme d'une fonction du fichier (c-securite.js:522
+ * avant cette révision ne voyait que les paramètres `Identifier` et
+ * ignorait les portées de bloc et de `var`), relevé par la coordination le
+ * 2026-09-28. `ancetres` vient de `walk.ancestor` sur le site d'appel (le
+ * nœud lui-même en dernier élément).
+ *
+ * Retourne `null` si aucune portée visible ne lie ce nom (probablement une
+ * globale, ou une déclaration d'une autre unité) ; sinon l'une des formes :
+ *   - `{type:'parametre', fonction, index, parent}` : paramètre positionnel
+ *     simple d'une fonction — seul cas où la valeur peut être prouvée (un
+ *     exécuteur de Promise, voir `estExecuteurPromise`) ;
+ *   - `{type:'fonction-nommee', fonction}` : `function nom() {}` ;
+ *   - `{type:'variable', kind, declarateur}` : `const`/`let`/`var nom = …` ;
+ *   - `{type:'autre'}` : une liaison existe à ce niveau (paramètre
+ *     déstructuré/par défaut, catch, boucle, variable déstructurée) mais
+ *     n'est jamais résolvable — la recherche s'arrête ici sans continuer
+ *     vers l'extérieur.
+ */
+function trouverLiaisonVisible(nom, ancetres) {
   for (let i = ancetres.length - 2; i >= 0; i--) {
     const n = ancetres[i];
     if (n.type === 'ArrowFunctionExpression' || n.type === 'FunctionExpression' || n.type === 'FunctionDeclaration') {
-      const index = n.params.findIndex((p) => p.type === 'Identifier' && p.name === nom);
-      if (index !== -1) return { fonction: n, index, parent: ancetres[i - 1] ?? null };
+      for (let idx = 0; idx < n.params.length; idx++) {
+        const p = n.params[idx];
+        if (p.type === 'Identifier' && p.name === nom) return { type: 'parametre', fonction: n, index: idx, parent: ancetres[i - 1] ?? null };
+        if (nomsLies(p).includes(nom)) return { type: 'autre' };
+      }
+    }
+    if (n.type === 'CatchClause' && n.param && nomsLies(n.param).includes(nom)) return { type: 'autre' };
+    if ((n.type === 'ForOfStatement' || n.type === 'ForInStatement' || n.type === 'ForStatement') && n.left?.type === 'VariableDeclaration') {
+      for (const d of n.left.declarations) if (nomsLies(d.id).includes(nom)) return { type: 'autre' }; // change à chaque itération : jamais un littéral fiable
+    }
+    if (n.type === 'BlockStatement' || n.type === 'Program') {
+      for (const stmt of n.body) {
+        if (stmt.type === 'FunctionDeclaration' && stmt.id?.name === nom) return { type: 'fonction-nommee', fonction: stmt };
+        if (stmt.type !== 'VariableDeclaration') continue;
+        for (const d of stmt.declarations) {
+          if (d.id.type === 'Identifier' && d.id.name === nom) return { type: 'variable', kind: stmt.kind, declarateur: d };
+          if (nomsLies(d.id).includes(nom)) return { type: 'autre' };
+        }
+      }
     }
   }
   return null;
@@ -536,81 +590,94 @@ function trouverParametreEnglobant(nom, ancetres) {
  * d'attente le plus courant en JS : le signaler comme non résolu noierait
  * la quasi-totalité du code honnête sous du bruit (mesuré par la
  * coordination le 2026-09-28 : widget-exemple axe C 95→83, global 92→89
- * pour ce seul motif, sans lui la moindre trace de contenu caché).
+ * pour ce seul motif, sans lui la moindre trace de contenu caché). Ne
+ * couvre PAS la réaffectation de ce paramètre (`resolve = r.Formule`) :
+ * l'appelant doit toujours vérifier `estReaffecte` en plus (relevé par la
+ * coordination le 2026-09-28 : une réaffectation avant l'appel rendait
+ * cette exemption exploitable).
  */
 function estExecuteurPromise(fonction, parent, index) {
   return index <= 1 && parent?.type === 'NewExpression' && nomFinal(parent.callee) === 'Promise' && parent.arguments[0] === fonction;
 }
 
 /**
- * Recherche globale (tout le fichier, sans analyse de portée) d'une
- * fonction déclarée ou assignée à ce nom — l'approximation déjà en place
- * avant cette révision, pour le motif `function nom() {}` référencé
- * ailleurs, ou `const nom = () => {}` passée à un autre appel. N'est
- * appelée qu'une fois écarté le cas d'un paramètre qui masque ce nom (voir
- * `trouverParametreEnglobant`) : une approximation qui ignore la portée
- * exacte reste un angle mort plus sûr qu'un faux positif sur ce motif très
- * répandu, mais elle ne doit jamais l'emporter sur un masquage avéré.
+ * Vrai si `nom` est réaffecté n'importe où dans `ast` : une affectation
+ * directe ou composée (`nom = …`, `nom += …`), ou une mise à jour
+ * (`nom++`). Une variable ou un paramètre réaffecté ne peut plus être
+ * résolu de façon fiable vers sa valeur d'origine : elle peut avoir changé
+ * entre la déclaration (ou le début de la fonction) et le site d'appel.
+ * Recherche volontairement non bornée à la portée trouvée : plus
+ * grossière, mais jamais moins sûre (un homonyme réaffecté ailleurs ne
+ * peut, au pire, que faire traiter comme « inconnue » une liaison qui
+ * aurait pu être résolue — jamais l'inverse). Relevé par la coordination le
+ * 2026-09-28 : `let code = 'void 0'; code = r.Formule; eval(code)` restait
+ * pris pour le littéral `'void 0'` sans ce garde-fou (axe D réel : NON
+ * CONFORME 75 → CONFORME 89, alors qu'`eval(r.Formule)` en clair est NON
+ * CONFORME 72).
  */
-function resoudreFonctionGlobale(nom, ast, walkAcorn) {
+function estReaffecte(nom, ast, walkAcorn) {
   let trouve = false;
   walkAcorn.simple(ast, {
-    FunctionDeclaration(n) { if (n.id?.name === nom) trouve = true; },
-    VariableDeclarator(n) {
-      if (n.id.type === 'Identifier' && n.id.name === nom &&
-          (n.init?.type === 'ArrowFunctionExpression' || n.init?.type === 'FunctionExpression')) trouve = true;
-    },
+    AssignmentExpression(n) { if (n.left.type === 'Identifier' && n.left.name === nom) trouve = true; },
+    UpdateExpression(n) { if (n.argument.type === 'Identifier' && n.argument.name === nom) trouve = true; },
   });
   return trouve;
 }
 
 /**
- * Résout un identifiant vers une chaîne littérale déclarée dans le MÊME
- * fichier (`const x = "…"`, y compris une concaténation de constantes qui
- * se replie via `plierLitteraux`) : un contenu caché derrière un nom de
- * variable n'est pas moins un littéral qu'écrit en place, il doit être
- * audité pareil — sans ce cas, `const code = "…"; eval(code)` (ou
- * `setTimeout(code, …)`) restait à tort « calculé à l'exécution », alors
- * que son contenu est parfaitement lisible (relevé par la coordination le
- * 2026-09-28). Approximation assumée comme le reste de cette résolution :
- * ignore la portée exacte d'une redéclaration ; la dernière affectation
- * trouvée dans le fichier l'emporte.
+ * `estReaffecte`, complété par un compte des déclarations : une seconde
+ * déclaration du même nom ailleurs dans le fichier (`var code = "<a>"; …;
+ * var code = "1";`) équivaut, pour ce qui nous occupe, à une réaffectation
+ * — la valeur lue à l'exécution n'est pas forcément celle du déclarateur
+ * trouvé par `trouverLiaisonVisible`. Utilisé uniquement pour une liaison
+ * `let`/`var` (jamais nécessaire pour un `const`, qui ne peut ni être
+ * réaffecté ni redéclaré — la syntaxe l'interdit).
  */
-function resoudreLitteralLocal(nom, ast, walkAcorn) {
-  let valeur = null;
-  walkAcorn.simple(ast, {
-    VariableDeclarator(n) {
-      if (n.id.type === 'Identifier' && n.id.name === nom) {
-        const v = plierLitteraux(n.init);
-        if (v !== null) valeur = v;
-      }
-    },
-  });
-  return valeur;
+function estReaffecteOuRedeclare(nom, ast, walkAcorn) {
+  if (estReaffecte(nom, ast, walkAcorn)) return true;
+  let compte = 0;
+  walkAcorn.simple(ast, { VariableDeclarator(d) { if (d.id.type === 'Identifier' && d.id.name === nom) compte++; } });
+  return compte > 1;
 }
 
 /**
- * Résout un argument dynamique de `setTimeout`/`setInterval` vers l'une de
- * trois issues : une fonction manifeste (jamais signalée), une chaîne
- * littérale (auditée comme le reste du code, y compris via un nom de
- * variable qui la porte), ou une valeur réellement inconnue de l'analyse
- * statique. `ancetres` (de `walk.ancestor` sur le site d'appel) est
- * nécessaire pour savoir si un identifiant est un paramètre qui masque une
- * déclaration homonyme plus large, avant toute recherche globale.
+ * Résout un argument dynamique (de `setTimeout`/`setInterval`, `eval`,
+ * `Function`) vers l'une de trois issues : une fonction manifeste (jamais
+ * signalée), une chaîne littérale (auditée comme le reste du code, y
+ * compris via un nom de variable qui la porte), ou une valeur réellement
+ * inconnue de l'analyse statique. Ne résout QUE vers une liaison visible
+ * depuis le site d'appel (voir `trouverLiaisonVisible`) et jamais
+ * réaffectée : un `const`, ou un `let`/`var` sans aucune affectation ni
+ * redéclaration ailleurs dans le fichier — jamais une recherche globale
+ * sans portée (l'ancienne approche, relevé par la coordination le
+ * 2026-09-28, prenait pour argent comptant la première ou la dernière
+ * déclaration homonyme trouvée n'importe où).
  */
 function resoudreArgument(noeud, { ast, walkAcorn, ancetres }) {
   if (!noeud) return { type: 'inconnue' };
   if (noeud.type === 'ArrowFunctionExpression' || noeud.type === 'FunctionExpression') return { type: 'fonction' };
   if (noeud.type !== 'Identifier') return { type: 'autre' };
 
-  const masque = trouverParametreEnglobant(noeud.name, ancetres);
-  if (masque) {
-    return estExecuteurPromise(masque.fonction, masque.parent, masque.index) ? { type: 'fonction' } : { type: 'inconnue' };
+  const liaison = trouverLiaisonVisible(noeud.name, ancetres);
+  if (!liaison || liaison.type === 'autre') return { type: 'inconnue' };
+
+  if (liaison.type === 'parametre') {
+    if (estExecuteurPromise(liaison.fonction, liaison.parent, liaison.index) && !estReaffecte(noeud.name, ast, walkAcorn)) {
+      return { type: 'fonction' };
+    }
+    return { type: 'inconnue' };
   }
-  if (resoudreFonctionGlobale(noeud.name, ast, walkAcorn)) return { type: 'fonction' };
-  const litteral = resoudreLitteralLocal(noeud.name, ast, walkAcorn);
-  if (litteral !== null) return { type: 'litteral', valeur: litteral };
-  return { type: 'inconnue' };
+
+  if (liaison.type === 'fonction-nommee') {
+    return estReaffecte(noeud.name, ast, walkAcorn) ? { type: 'inconnue' } : { type: 'fonction' };
+  }
+
+  // liaison.type === 'variable'
+  if (estReaffecteOuRedeclare(noeud.name, ast, walkAcorn)) return { type: 'inconnue' };
+  const init = liaison.declarateur.init;
+  if (init?.type === 'ArrowFunctionExpression' || init?.type === 'FunctionExpression') return { type: 'fonction' };
+  const litteral = plierLitteraux(init);
+  return litteral !== null ? { type: 'litteral', valeur: litteral } : { type: 'inconnue' };
 }
 
 /** `String.fromCharCode(...)` retourne toujours une chaîne : si tous ses arguments sont des codes numériques littéraux, son résultat est aussi peu une boîte noire qu'un littéral direct — comme `atob()`. */
@@ -735,15 +802,22 @@ const IMPACT_EXECUTION_CHAINE = "Toute donnée qui atteint cet appel devient du 
  * sémantique de `Function`/`new Function` : leur corps s'exécute comme
  * l'intérieur d'une fonction (où `return` est valide), contrairement à
  * `eval()` ou au script d'un worker, qui s'exécutent en portée de script.
- * `resoudreLitteralLocal` couvre le cas d'un identifiant qui porte une
- * chaîne littérale déclarée ailleurs dans le même fichier
- * (`const code = "…"; eval(code)`) : sans lui, ce détour laissait ce
- * contenu hors de portée de l'analyse alors qu'il est parfaitement lisible
- * (relevé par la coordination le 2026-09-28).
+ * `resoudreArgument` couvre le cas d'un identifiant qui porte une chaîne
+ * littérale déclarée ailleurs dans le même fichier (`const code = "…";
+ * eval(code)`) : sans lui, ce détour laissait ce contenu hors de portée de
+ * l'analyse alors qu'il est parfaitement lisible (relevé par la
+ * coordination le 2026-09-28) — et, comme pour `setTimeout`, seule une
+ * liaison visible depuis le site d'appel et jamais réaffectée est résolue
+ * (voir `resoudreArgument`) : `let code = 'void 0'; code = r.Formule;
+ * eval(code)` doit être traité comme calculé à l'exécution, pas comme
+ * `'void 0'` (relevé par la coordination le 2026-09-28).
  */
-function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, ast, walkAcorn, profondeur, titreConstruction, texteConstruction, remediationSupprimer, envelopper = false }) {
-  const brut = plierLitteraux(argument) ?? decoderAtobLitteral(argument) ??
-    (argument?.type === 'Identifier' ? resoudreLitteralLocal(argument.name, ast, walkAcorn) : null);
+function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, ast, walkAcorn, ancetres, profondeur, titreConstruction, texteConstruction, remediationSupprimer, envelopper = false }) {
+  let brut = plierLitteraux(argument) ?? decoderAtobLitteral(argument);
+  if (brut === null && argument?.type === 'Identifier') {
+    const resolution = resoudreArgument(argument, { ast, walkAcorn, ancetres });
+    if (resolution.type === 'litteral') brut = resolution.valeur;
+  }
   const texteAnalyse = brut !== null && envelopper ? `(function(){${brut}})` : brut;
   return traiterSiteConstruction(ctx, {
     fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: (n.loc?.start?.column ?? 0) + 1, extrait: extraireSource(unite.source, n),
@@ -893,23 +967,23 @@ export function preparerCodeExecuteEnChaine(ctx) {
       pourChaqueUniteJs({ fichiers: [f] }, {}, ({ ast, ligneDe, walk: walkAcorn, unite }) => {
         if (!ast) return;
         const avant = ctx.fichiers.length;
-        // `ancestor` (pas `simple`) : `traiterMinuteur` a besoin de la chaîne
-        // des ancêtres du site d'appel pour reconnaître un identifiant lié à
-        // un paramètre qui masque une déclaration homonyme plus large (voir
-        // `trouverParametreEnglobant`).
+        // `ancestor` (pas `simple`) : `traiterMinuteur` et `traiterAppelExecution`
+        // ont besoin de la chaîne des ancêtres du site d'appel pour résoudre un
+        // identifiant vers la liaison la plus proche qui le lie, quelle que
+        // soit sa nature (voir `trouverLiaisonVisible`).
         walkAcorn.ancestor(ast, {
           CallExpression(n, _state, ancetres) {
             const nom = nomPointe(n.callee) || '';
             if (/(^|\.)eval$/.test(nom)) {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments[0], ast, walkAcorn, profondeur,
+                unite, ligneDe, n, argument: n.arguments[0], ast, walkAcorn, ancetres, profondeur,
                 titreConstruction: 'Exécution de code arbitraire via eval()',
                 texteConstruction: '`eval()` est appelé dans le code exécuté du widget.',
                 remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
               }));
             } else if (n.callee.type === 'SequenceExpression' && n.callee.expressions.at(-1)?.type === 'Identifier' && n.callee.expressions.at(-1).name === 'eval') {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments[0], ast, walkAcorn, profondeur,
+                unite, ligneDe, n, argument: n.arguments[0], ast, walkAcorn, ancetres, profondeur,
                 titreConstruction: 'Exécution de code arbitraire via eval() indirect',
                 texteConstruction: "La forme `(0, eval)(...)` (ou équivalente) appelle `eval` indirectement.",
                 remediationSupprimer: "Supprimer l'appel. Pour interpréter des données, utiliser `JSON.parse` ; pour une logique configurable, un interpréteur restreint écrit explicitement.",
@@ -918,7 +992,7 @@ export function preparerCodeExecuteEnChaine(ctx) {
 
             if (nom.split('.').pop() === 'Function') {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments.at(-1), ast, walkAcorn, profondeur, envelopper: true,
+                unite, ligneDe, n, argument: n.arguments.at(-1), ast, walkAcorn, ancetres, profondeur, envelopper: true,
                 titreConstruction: 'Construction de code à la volée via Function() (sans new)',
                 texteConstruction: '`Function(...)` sans `new` compile une chaîne en fonction exécutable, exactement comme `new Function(...)` : l\'appel fonctionne dans les deux cas.',
                 remediationSupprimer: 'Supprimer cet usage.',
@@ -932,7 +1006,7 @@ export function preparerCodeExecuteEnChaine(ctx) {
           NewExpression(n, _state, ancetres) {
             if (nomFinal(n.callee) === 'Function') {
               constats.push(...traiterAppelExecution(ctx, {
-                unite, ligneDe, n, argument: n.arguments.at(-1), ast, walkAcorn, profondeur, envelopper: true,
+                unite, ligneDe, n, argument: n.arguments.at(-1), ast, walkAcorn, ancetres, profondeur, envelopper: true,
                 titreConstruction: 'Construction de code à la volée via new Function()',
                 texteConstruction: '`new Function(...)` compile une chaîne en fonction exécutable.',
                 remediationSupprimer: 'Supprimer cet usage.',
