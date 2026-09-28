@@ -189,13 +189,13 @@ test("la pénalité ne dépend pas de l'ordre des occurrences", () => {
 });
 
 test("ajouter une occurrence ne fait jamais baisser la pénalité, qui ne dépasse jamais l'ancienne formule (pire × f(n))", () => {
-  const severites = ['critique', 'majeur', 'mineur'];
+  const severites = ['critique', 'majeur', 'mineur', 'info'];
   const multiensembles = (taille, depuis = 0) => (taille === 0 ? [[]] : severites.slice(depuis).flatMap((s, i) => multiensembles(taille - 1, depuis + i).map((m) => [s, ...m])));
   for (let taille = 1; taille <= 6; taille++) {
     for (const m of multiensembles(taille)) {
       const avant = penaliteDe(...m);
       assert.ok(avant <= arrondi(Math.max(...m.map((s) => PENALITE[s])) * f(m.length)) + 1e-9, `${m.join(' ')} dépasse pire × f(n)`);
-      for (const ajout of [...severites, 'info']) {
+      for (const ajout of severites) {
         const apres = penaliteDe(...m, ajout);
         assert.ok(apres >= avant, `${m.join(' ')} + ${ajout} : ${avant} → ${apres}`);
       }
@@ -208,4 +208,10 @@ test("le détail d'une règle ne compte que ses occurrences pénalisantes", () =
   assert.equal(d.occurrences, 2);
   assert.equal(d.severite, 'majeur');
   assert.equal(d.penalite, arrondi(12 + 3 * Math.log(2)));
+});
+
+test("la sévérité du détail est celle de la pire occurrence, ni la première rencontrée ni une information", () => {
+  const severiteDetail = (...severites) => noter(occurrences(...severites), new Set()).parAxe.A.detailPenalites[0].severite;
+  assert.equal(severiteDetail('info', 'mineur', 'critique', 'majeur'), 'critique');
+  assert.equal(severiteDetail('info', 'mineur', 'info', 'majeur'), 'majeur');
 });

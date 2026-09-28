@@ -62,6 +62,17 @@ test("les informations d'une règle ne comptent ni dans ses occurrences ni dans 
   assert.deepEqual(item.fichiers, ['a.js']);
 });
 
+test("l'hôte cité par une information ne relie pas sa règle à une autre étape « concerne aussi »", () => {
+  const constats = [
+    c('C-MIXTE', 'C', 'critique', { fichier: 'a.js', preuve: { hote: 'a.example' } }),
+    c('C-MIXTE', 'C', 'info', { fichier: 'a.js', preuve: { hote: 'b.example' } }),
+    c('F-AUTRE', 'F', 'majeur', { fichier: 'b.js', preuve: { hote: 'b.example' } }),
+  ];
+  const item = ordonnancerCorrections(noter(constats, new Set(['D']))).find((i) => i.regle === 'C-MIXTE');
+  assert.deepEqual(item.hotes, ['a.example']);
+  assert.deepEqual(item.concerneAussi, []);
+});
+
 test('rien à ordonnancer quand il n\'y a aucun constat', () => {
   const items = ordonnancerCorrections(noter([], new Set(['D'])));
   assert.deepEqual(items, []);

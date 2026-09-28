@@ -220,7 +220,7 @@ function carteGroupee(groupe) {
           <span class="constat-corps">
             <span class="constat-ligne1">
               <code class="regle">${echapper(tete.regle)}</code>
-              <span class="constat-titre">${groupe.length} occurrences — ${echapper(titreGenerique(tete.titre))}</span>
+              <span class="constat-titre">${decompte(groupe)} — ${echapper(titreGenerique(tete.titre))}</span>
             </span>
           </span>
           <span class="chevron" aria-hidden="true"></span>
@@ -235,6 +235,16 @@ function carteGroupee(groupe) {
           </ul>
         </div>
       </details>`;
+}
+
+/** « 1 occurrence et 4 informations » : une information n'est pas une occurrence, comme dans la notation et la feuille de route. */
+function decompte(groupe) {
+  const informations = groupe.filter((g) => SEVERITES[g.severite].penalite === 0).length;
+  const occurrences = groupe.length - informations;
+  const nombre = (n, mot) => `${n} ${mot}${n > 1 ? 's' : ''}`;
+  if (!informations) return nombre(occurrences, 'occurrence');
+  if (!occurrences) return nombre(informations, 'information');
+  return `${nombre(occurrences, 'occurrence')} et ${nombre(informations, 'information')}`;
 }
 
 // ---------------------------------------------------------------------------
