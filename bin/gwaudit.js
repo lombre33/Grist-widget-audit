@@ -25,6 +25,7 @@
  */
 import path from 'node:path';
 import fs from 'node:fs';
+import os from 'node:os';
 import net from 'node:net';
 import dns from 'node:dns/promises';
 import { execFileSync } from 'node:child_process';
@@ -228,7 +229,13 @@ async function resoudreCible(cible) {
 
   await validerHoteClone(cible);
 
-  const dest = fs.mkdtempSync(path.join(RACINE_OUTIL, '.tmp-clone-'));
+  // Sur le disque temporaire du système (`os.tmpdir()`), jamais à côté de
+  // l'outil lui-même : même raison que le dossier isolé de npm audit
+  // (e-dependances.js) et celui de l'axe D (dynamique.js) — dans l'image V2
+  // (docker/execution/Dockerfile), RACINE_OUTIL vaut /app, en lecture seule
+  // (docker-compose.v2-execution.yml, seul /tmp est inscriptible), et une
+  // soumission distante est toujours une URL à cloner.
+  const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-clone-'));
   console.error(`→ Clonage de ${cible}…`);
   try {
     execFileSync('git', ['clone', '--depth', '1', cible, dest], { stdio: 'inherit', timeout: 120_000 });

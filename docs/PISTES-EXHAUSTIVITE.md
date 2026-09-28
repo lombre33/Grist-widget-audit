@@ -336,24 +336,24 @@ directive déclarative jamais éprouvée, et dire pour chacune comment on le
 saurait au premier démarrage réel. Étude de ce qui est déjà écrit dans
 `docker/` et `docs/ARCHITECTURE-V2.md` — rien modifié.
 
-**Un point qui n'a pas besoin d'être exécuté pour être tranché**, parce
-que ce n'est pas une question de comportement Docker mais de sémantique
-de système de fichiers : `bin/gwaudit.js:231` crée le clone temporaire
+**Corrigé** (commit à suivre) : `bin/gwaudit.js` créait le clone temporaire
 d'une cible distante avec `fs.mkdtempSync(path.join(RACINE_OUTIL,
 '.tmp-clone-'))`, où `RACINE_OUTIL` vaut `/app` dans l'image V2
 (`docker/execution/Dockerfile`, `WORKDIR /app`). Or
 `docker-compose.v2-execution.yml` déclare `read_only: true` avec pour
 seul espace inscriptible `/tmp` (tmpfs). Une soumission anonyme est
-toujours une URL (jamais un chemin local) : chaque job passerait donc par
-cette ligne, qui écrirait dans un système de fichiers en lecture seule —
-`EROFS` garanti par le noyau, pas une hypothèse à vérifier sur le VPS.
-Pour comparaison, le reste du code a déjà appris cette leçon : le dossier
-isolé de `npm audit` (`e-dependances.js:233`) et celui de l'axe D
-(`dynamique.js:441`) utilisent tous les deux `os.tmpdir()`, pas
-`RACINE_OUTIL` — seul le clone d'URL dans `bin/gwaudit.js` ne l'a pas
-encore. `--sortie /out` (`entrypoint.sh`) évite le même problème pour le
-rapport en pointant vers un volume monté, en dehors du système de
-fichiers en lecture seule du conteneur.
+toujours une URL (jamais un chemin local) : chaque job serait donc passé
+par cette ligne, qui aurait écrit dans un système de fichiers en lecture
+seule — `EROFS` garanti par le noyau, pas une hypothèse à vérifier sur le
+VPS. Aligné sur le reste du code, qui avait déjà appris cette leçon : le
+dossier isolé de `npm audit` (`e-dependances.js:233`) et celui de l'axe D
+(`dynamique.js:441`) utilisent tous les deux `os.tmpdir()`, jamais
+`RACINE_OUTIL`. Vérifié après correctif par un clonage réel (HTTPS, axe D
+inclus) : le dossier temporaire apparaît sous `/tmp`, jamais à côté de
+l'outil, et disparaît bien après l'audit, succès ou erreur confondus.
+`--sortie /out` (`entrypoint.sh`) évite le même problème pour le rapport
+en pointant vers un volume monté, en dehors du système de fichiers en
+lecture seule du conteneur.
 
 Le reste dépend réellement d'un premier démarrage pour être su, pas
 seulement lu :
