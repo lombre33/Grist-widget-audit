@@ -51,6 +51,17 @@ test('les fichiers touchés par la règle sont listés sans doublon', () => {
   assert.deepEqual(item.fichiers.sort(), ['a.js', 'b.js']);
 });
 
+test("les informations d'une règle ne comptent ni dans ses occurrences ni dans ses fichiers, comme dans sa pénalité", () => {
+  const constats = [
+    c('C-MIXTE', 'C', 'critique', { fichier: 'a.js' }),
+    c('C-MIXTE', 'C', 'info', { fichier: 'b.js' }),
+    c('C-MIXTE', 'C', 'info', { fichier: 'c.js' }),
+  ];
+  const item = ordonnancerCorrections(noter(constats, new Set(['D']))).find((i) => i.regle === 'C-MIXTE');
+  assert.equal(item.occurrences, 1);
+  assert.deepEqual(item.fichiers, ['a.js']);
+});
+
 test('rien à ordonnancer quand il n\'y a aucun constat', () => {
   const items = ordonnancerCorrections(noter([], new Set(['D'])));
   assert.deepEqual(items, []);

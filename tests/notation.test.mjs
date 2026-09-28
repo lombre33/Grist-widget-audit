@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import { constat } from '../src/moteur/modele.js';
 import { noter, noterAxe } from '../src/moteur/notation.js';
 
+const arrondi = (x) => Math.round(x * 10) / 10;
+
 test('un seul point bloquant condamne le verdict quel que soit le score', () => {
   const constats = [constat({ regle: 'X', axe: 'C', titre: 'fuite', severite: 'critique', bloquant: true, constat: 'c' })];
   const n = noter(constats, new Set(['D']));
@@ -106,7 +108,7 @@ test('E-DEP-03 (pas de package.json, rien à mesurer) ne plafonne jamais le verd
 // majeur (mêmes deux occurrences, ordre inversé) donnait 59,3.
 // ---------------------------------------------------------------------------
 
-test("D4 : la pénalité d'une règle suit sa pire occurrence, pas la première rencontrée — l'ordre des deux mêmes occurrences ne doit rien changer", () => {
+test("D4 : l'ordre des deux mêmes occurrences ne change rien, et le critique pèse au premier rang", () => {
   const majeurPuisCritique = [
     constat({ regle: 'X', axe: 'C', titre: 't', severite: 'majeur', constat: 'c' }),
     constat({ regle: 'X', axe: 'C', titre: 't', severite: 'critique', constat: 'c' }),
@@ -115,11 +117,9 @@ test("D4 : la pénalité d'une règle suit sa pire occurrence, pas la première 
   const n1 = noter(majeurPuisCritique, new Set());
   const n2 = noter(critiquePuisMajeur, new Set());
   assert.equal(n1.parAxe.C.penaliteBrute, n2.parAxe.C.penaliteBrute, "l'ordre d'itération ne doit jamais changer la pénalité calculée");
-  // La pénalité doit refléter le CRITIQUE (35 * facteurOccurrences(2)), jamais
-  // le majeur (12 * facteurOccurrences(2)) : avant ce correctif, l'ordre
-  // « majeur puis critique » retenait à tort le majeur.
-  const attendu = Math.round(35 * (1 + Math.log(2)) * 10) / 10;
-  assert.equal(n1.parAxe.C.penaliteBrute, attendu);
+  // Le critique au premier rang (poids 1), le majeur au second (poids ln 2) :
+  // avant D4, l'ordre « majeur puis critique » retenait à tort le majeur.
+  assert.equal(n1.parAxe.C.penaliteBrute, arrondi(35 + 12 * Math.log(2)));
 });
 
 test("D4 : ajouter une occurrence plus légère AVANT une occurrence critique déjà présente (donc désormais première dans l'ordre d'itération) ne doit jamais FAIRE BAISSER la pénalité", () => {
@@ -141,4 +141,71 @@ test('D4 : le détail de pénalité par règle (detailPenalites) rapporte la sé
   const n = noter(constats, new Set());
   const d = n.parAxe.C.detailPenalites.find((d) => d.regle === 'X');
   assert.equal(d.severite, 'critique');
+});
+
+// ---------------------------------------------------------------------------
+// Poids par rang (relevé par la coordination le 2026-09-28) : une information
+// ne compte jamais, et chaque occurrence pèse sa propre sévérité au poids que
+// `facteurOccurrences` donne à son rang, f(k) − f(k−1).
+// ---------------------------------------------------------------------------
+
+const f = (k) => Math.min(1 + Math.log(k), 2.5);
+const PENALITE = { critique: 35, majeur: 12, mineur: 3, info: 0 };
+const occurrences = (...severites) => severites.map((severite) => constat({ regle: 'X', axe: 'A', titre: 't', severite, constat: 'c' }));
+const penaliteDe = (...severites) => noter(occurrences(...severites), new Set()).parAxe.A.penaliteBrute;
+
+test("une information ne compte jamais, ni par sa sévérité ni par son nombre (un critique et trente informations : 35, pas 87,5)", () => {
+  assert.equal(penaliteDe('critique', 'info'), 35);
+  assert.equal(penaliteDe('critique', ...Array(30).fill('info')), 35);
+  assert.equal(penaliteDe('mineur', ...Array(4).fill('info'), 'mineur'), arrondi(3 * f(2)));
+});
+
+test("une règle qui n'a que des informations ne pèse rien et n'entre pas dans le détail des pénalités", () => {
+  const n = noter(occurrences('info', 'info', 'info'), new Set());
+  assert.equal(n.parAxe.A.penaliteBrute, 0);
+  assert.deepEqual(n.parAxe.A.detailPenalites, []);
+});
+
+test('chaque occurrence pèse sa propre sévérité au poids de son rang, la plus grave en premier', () => {
+  assert.equal(penaliteDe('mineur', 'majeur'), arrondi(12 + 3 * Math.log(2)));
+  // Une fonction majeure parmi quatre mineures (le cas d'A-FONC-02) : le
+  // majeur au premier rang, les mineurs aux rangs 2 à 5.
+  assert.equal(penaliteDe('mineur', 'mineur', 'majeur', 'mineur', 'mineur'), arrondi(12 + 3 * (f(5) - f(1))));
+});
+
+test("à sévérités égales, la pénalité vaut exactement l'ancienne formule (sévérité × f(n))", () => {
+  for (const severite of ['critique', 'majeur', 'mineur']) {
+    for (let n = 1; n <= 12; n++) {
+      assert.equal(penaliteDe(...Array(n).fill(severite)), arrondi(PENALITE[severite] * f(n)), `${n} × ${severite}`);
+    }
+  }
+});
+
+test("la pénalité ne dépend pas de l'ordre des occurrences", () => {
+  const base = ['mineur', 'critique', 'info', 'majeur', 'mineur', 'majeur'];
+  const attendu = penaliteDe(...base);
+  const permutations = (liste) => (liste.length <= 1 ? [liste] : liste.flatMap((x, i) => permutations([...liste.slice(0, i), ...liste.slice(i + 1)]).map((p) => [x, ...p])));
+  for (const p of permutations(base)) assert.equal(penaliteDe(...p), attendu, p.join(' '));
+});
+
+test("ajouter une occurrence ne fait jamais baisser la pénalité, qui ne dépasse jamais l'ancienne formule (pire × f(n))", () => {
+  const severites = ['critique', 'majeur', 'mineur'];
+  const multiensembles = (taille, depuis = 0) => (taille === 0 ? [[]] : severites.slice(depuis).flatMap((s, i) => multiensembles(taille - 1, depuis + i).map((m) => [s, ...m])));
+  for (let taille = 1; taille <= 6; taille++) {
+    for (const m of multiensembles(taille)) {
+      const avant = penaliteDe(...m);
+      assert.ok(avant <= arrondi(Math.max(...m.map((s) => PENALITE[s])) * f(m.length)) + 1e-9, `${m.join(' ')} dépasse pire × f(n)`);
+      for (const ajout of [...severites, 'info']) {
+        const apres = penaliteDe(...m, ajout);
+        assert.ok(apres >= avant, `${m.join(' ')} + ${ajout} : ${avant} → ${apres}`);
+      }
+    }
+  }
+});
+
+test("le détail d'une règle ne compte que ses occurrences pénalisantes", () => {
+  const d = noter(occurrences('info', 'majeur', 'info', 'mineur'), new Set()).parAxe.A.detailPenalites[0];
+  assert.equal(d.occurrences, 2);
+  assert.equal(d.severite, 'majeur');
+  assert.equal(d.penalite, arrondi(12 + 3 * Math.log(2)));
 });

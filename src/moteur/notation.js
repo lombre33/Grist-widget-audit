@@ -40,6 +40,27 @@ export function noterAxe(penalite) {
 }
 
 /**
+ * Pénalité d'une règle à partir de ses occurrences pénalisantes. Triées de la
+ * plus grave à la plus légère, la k-ième pèse sa propre sévérité multipliée
+ * par ce que `facteurOccurrences` ajoute à ce rang, f(k) − f(k−1) avec
+ * f(0) = 0. À sévérités égales, la somme vaut exactement l'ancienne formule
+ * (sévérité × f(n)). Le tri rend le résultat indépendant de l'ordre des
+ * constats et, ces poids décroissant avec le rang, ajouter une occurrence ne
+ * fait jamais baisser la pénalité. La règle précédente, pire occurrence ×
+ * f(n), faisait payer chaque occurrence légère au prix de la plus grave :
+ * sur Grist_Table_structure_import, A-FONC-02 passait de 7,5 à 30 et l'axe A
+ * de 79 à 42 (relevé par la coordination le 2026-09-28).
+ */
+function penaliteRegle(occurrences) {
+  const severites = occurrences.map((c) => SEVERITES[c.severite].penalite).sort((a, b) => b - a);
+  let total = 0;
+  for (let k = 1; k <= severites.length; k++) {
+    total += severites[k - 1] * (facteurOccurrences(k) - (k > 1 ? facteurOccurrences(k - 1) : 0));
+  }
+  return total;
+}
+
+/**
  * @param {Array} constats
  * @param {Set<string>} [axesNonExecutes] axes dont les règles n'ont pas tourné
  *   (ex. D quand l'analyse dynamique est désactivée) : ils sont notés `null`
@@ -62,20 +83,17 @@ export function noter(constats, axesNonExecutes = new Set()) {
     let penalite = 0;
     const detail = [];
     for (const [regle, occ] of Object.entries(parRegle)) {
-      // La pénalité d'une règle suit sa PIRE occurrence, jamais la première
-      // rencontrée dans l'ordre d'itération (arbitraire, sans rapport avec la
-      // sévérité) : sinon, ajouter un nouveau constat plus léger — par
-      // exemple un `setTimeout` à vérifier ajouté après un `eval()` critique
-      // déjà présent pour la même règle — pouvait faire RETOMBER la pénalité
-      // totale, l'inverse de ce que doit produire un constat supplémentaire.
-      // Relevé par la coordination le 2026-09-28 (mesuré : majeur puis
-      // critique donnait 20,3, critique puis majeur 59,3, pour les mêmes deux
-      // occurrences).
-      const pire = occ.reduce((a, b) => (SEVERITES[b.severite].rang > SEVERITES[a.severite].rang ? b : a));
-      const sev = SEVERITES[pire.severite];
-      const p = sev.penalite * facteurOccurrences(occ.length);
+      // Une information n'est jamais une pénalité, ni par sa sévérité ni par
+      // son nombre, ni dans le nombre d'occurrences rapporté : comptée dans
+      // n, elle alourdissait les autres occurrences de sa règle (un critique
+      // et une information : 59,3 ; un critique et trente informations : 87,5
+      // — relevé par la coordination le 2026-09-28).
+      const comptees = occ.filter((c) => SEVERITES[c.severite].penalite > 0);
+      if (!comptees.length) continue;
+      const p = penaliteRegle(comptees);
       penalite += p;
-      if (p > 0) detail.push({ regle, severite: pire.severite, occurrences: occ.length, penalite: Math.round(p * 10) / 10 });
+      const pire = comptees.reduce((a, b) => (SEVERITES[b.severite].rang > SEVERITES[a.severite].rang ? b : a));
+      detail.push({ regle, severite: pire.severite, occurrences: comptees.length, penalite: Math.round(p * 10) / 10 });
     }
     detail.sort((a, b) => b.penalite - a.penalite);
     parAxe[code] = {

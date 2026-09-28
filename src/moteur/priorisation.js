@@ -30,7 +30,9 @@ export function ordonnancerCorrections(notation) {
   const items = [];
   for (const axe of axesNotes) {
     for (const d of axe.detailPenalites) {
-      const constatsRegle = axe.constats.filter((c) => c.regle === d.regle);
+      // Mêmes occurrences que la pénalité (`noter` n'y compte aucune
+      // information) : sinon « 1 occurrence dans 5 fichiers ».
+      const constatsRegle = axe.constats.filter((c) => c.regle === d.regle && SEVERITES[c.severite].penalite > 0);
       // Le représentant du groupe doit être le pire cas, pas le premier
       // fichier rencontré dans l'ordre de parcours — un tirage au sort de cet
       // ordre n'a pas de raison de refléter la gravité. À sévérité égale (cas
