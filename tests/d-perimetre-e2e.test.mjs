@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { axeDNonExecute } from './aide-chromium.mjs';
 import { construireContexte } from '../src/contexte/inventaire.js';
 import { auditDynamique } from '../src/runtime/dynamique.js';
 
@@ -39,7 +40,7 @@ test('D-PERIMETRE-01 se déclenche à partir de auditDynamique() sur un widget q
     "  for (const t of tables) { await grist.docApi.fetchTable(t); }\n" +
     "})();\n"
   );
-  if (nonExecute) { t.skip('Axe D non exécutable dans cet environnement.'); return; }
+  if (nonExecute) { axeDNonExecute(t, constats); return; }
 
   const c = constats.find((x) => x.regle === 'D-PERIMETRE-01');
   assert.ok(c, "D-PERIMETRE-01 doit apparaître dans les constats produits par un audit réel");
@@ -49,7 +50,7 @@ test('D-PERIMETRE-01 se déclenche à partir de auditDynamique() sur un widget q
 test("D-PERIMETRE-01 reste silencieuse sur un widget qui ne lit que sa table sélectionnée (fixtures/widget-exemple)", async (t) => {
   const ctx = construireContexte(path.join(import.meta.dirname, '..', 'fixtures', 'widget-exemple'));
   const { constats, nonExecute } = await auditDynamique(ctx, {});
-  if (nonExecute) { t.skip('Axe D non exécutable dans cet environnement.'); return; }
+  if (nonExecute) { axeDNonExecute(t, constats); return; }
 
   assert.equal(constats.some((c) => c.regle === 'D-PERIMETRE-01'), false,
     "la fixture donnée en modèle par l'outil ne doit jamais déclencher un faux positif");
@@ -67,7 +68,7 @@ test("D-PERIMETRE-01 reste silencieuse sur un widget qui énumère légitimement
     "  window.__tablesVues = tables;\n" +
     "})();\n"
   );
-  if (nonExecute) { t.skip('Axe D non exécutable dans cet environnement.'); return; }
+  if (nonExecute) { axeDNonExecute(t, constats); return; }
 
   assert.equal(constats.some((c) => c.regle === 'D-PERIMETRE-01'), false,
     "lister les tables sans les lire est une énumération légitime, pas le signal recherché");

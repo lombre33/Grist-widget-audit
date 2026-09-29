@@ -5,6 +5,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { axeDNonExecute } from './aide-chromium.mjs';
 import { construireContexte } from '../src/contexte/inventaire.js';
 import { auditDynamique } from '../src/runtime/dynamique.js';
 
@@ -44,16 +45,7 @@ test("l'axe D neutralise une connexion WebSocket directe et la fait remonter en 
   const ctx = construireContexte(racine);
   const { constats, brut, nonExecute } = await auditDynamique(ctx, {});
 
-  if (nonExecute) {
-    // Axe D indisponible dans cet environnement (Chromium introuvable ou
-    // autre échec de lancement — voir GWAUDIT_CHROMIUM_PATH dans le
-    // README) : on ne peut pas prouver le correctif ici, mais ce n'est pas
-    // une raison de faire échouer la suite pour un problème d'environnement
-    // sans rapport avec ce test.
-    const raison = constats.find((c) => c.regle === 'D-INDISPONIBLE')?.constat ?? '(raison inconnue)';
-    t.skip(`Axe D non exécutable dans cet environnement : ${raison}`);
-    return;
-  }
+  if (nonExecute) { axeDNonExecute(t, constats); return; }
 
   // La preuve qui compte : la vraie cible n'a jamais reçu de connexion TCP.
   assert.equal(connexionsRecues, 0, 'aucune connexion ne doit jamais atteindre le serveur WebSocket ciblé par le widget');

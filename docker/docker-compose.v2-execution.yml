@@ -76,8 +76,9 @@ services:
     # ajouter une couche d'isolation indépendante (conteneur jetable + réseau
     # fermé ci-dessous, voire une microVM plus tard) à la place. Attention :
     # Playwright ajoute LUI-MÊME --no-sandbox tant qu'on ne lui demande pas
-    # chromiumSandbox: true — c'est GWAUDIT_CHROMIUM_SANDBOX=1 (plus bas) qui le
-    # fait, et rien d'autre ; l'absence de variable de dérogation ne prouve rien.
+    # chromiumSandbox: true — gwaudit le demande par défaut ; l'absence de
+    # variable de dérogation ne prouvait rien, seuls les arguments du vrai
+    # processus le prouvent (docker/ci/verifier.sh).
     pids_limit: 128
     mem_limit: 768m
     # Sans ceci Docker autorise autant de swap que de mémoire (le double au
@@ -105,12 +106,11 @@ services:
       # par egress-proxy (acl « dst »). Sans cette variable, tout audit
       # d'URL échoue dès la première étape (exit 3) — constat de la CI.
       - GWAUDIT_RESOLUTION_PAR_PROXY=1
-      # Demande à gwaudit de lancer Chromium AVEC son bac à sable natif
-      # (chromiumSandbox: true, src/runtime/dynamique.js) : sans cette variable,
-      # Playwright le démarre avec --no-sandbox, et le widget audité tourne sans
-      # cette couche. Éprouvé par docker/ci/verifier.sh (arguments du vrai
+      # Aucune variable pour le bac à sable de Chromium : il est actif par
+      # défaut dans gwaudit (chromiumSandbox: true, src/runtime/dynamique.js) et
+      # la dérogation GWAUDIT_CHROMIUM_SANS_SANDBOX est refusée par
+      # entrypoint.sh. Éprouvé par docker/ci/verifier.sh (arguments du vrai
       # processus Chromium pendant un audit, et chrome://sandbox).
-      - GWAUDIT_CHROMIUM_SANDBOX=1
       # Une URL git@hôte:chemin (SSH) ignore HTTP_PROXY/HTTPS_PROXY —
       # relevé par une revue. Pas un trou pour autant, et deux fois : avec
       # GWAUDIT_RESOLUTION_PAR_PROXY (ci-dessus) gwaudit refuse nettement une

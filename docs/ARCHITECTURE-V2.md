@@ -43,7 +43,7 @@ ce qui suit est la dernière, à jour.
 |---|---|---|---|
 | 1 | `git clone` recevait l'URL soumise sans résolution d'hôte ni liste blanche — SSRF | `bin/gwaudit.js` | `resoudreCible()` appelle `validerHoteClone()` avant tout clonage : résolution DNS puis rejet des adresses privées/loopback/lien-local/métadonnées cloud, refus du `http://` non chiffré. **Ce correctif avait lui-même un trou**, trouvé par revue adversariale le 2026-09-20 et corrigé au commit `19c0134` : `new URL()` normalise un `\` littéral en `/` avant de chercher la limite `userinfo@hôte`, alors que git/libcurl (RFC 3986) ne le font pas — une cible comme `https://hote-public.example\@CIBLE-INTERNE/x` passait la validation (hôte calculé : le domaine public) pendant que git se connectait réellement à `CIBLE-INTERNE`. Reproduit avec un vrai `git ls-remote`, fermé en rejetant tout `\` littéral et tout userinfo explicite avant la résolution DNS, non-régression prouvée par un test qui écoute réellement sur un port local (`tests/ssrf.test.mjs`). Toujours pas de protection anti-DNS-rebinding entre la vérification et la connexion — laissé au proxy de sortie V2 (§4), qui n'a structurellement pas ce type de trou : voir §4. |
 | 2 | `npm audit` héritait tout `process.env` et lisait le `.npmrc` du dépôt audité | `src/regles/e-dependances.js` | `npmAudit()` copie seulement `package.json`/`package-lock.json` dans un dossier neutre, avec un environnement dédié (`HOME` isolé, `npm_config_userconfig` pointé sur un `.npmrc` vide, `npm_config_registry` figé sur `registry.npmjs.org`, proxy d'entreprise transmis explicitement) : le `.npmrc` du dépôt audité n'est jamais lu. |
-| 3 | Chromium était lancé avec `--no-sandbox` | `src/runtime/dynamique.js` | ~~Sandbox natif actif par défaut ; `--no-sandbox` seulement si `GWAUDIT_CHROMIUM_SANS_SANDBOX=1` est positionnée explicitement.~~ **Faux, rectifié le 2026-09-29** : Playwright ajoute lui-même `--no-sandbox` tant que `chromiumSandbox: true` n'est pas passé à `launch()`/`launchServer()`, ce que rien ne faisait — vu dans les arguments du vrai processus Chromium, sous `pwuser` dans le conteneur. Le widget audité tournait donc toujours sans bac à sable. Correction vérifiée en conteneur : `GWAUDIT_CHROMIUM_SANDBOX=1` (posée par le compose V2) demande `chromiumSandbox: true` ; sans elle, comportement inchangé (root, cloud de développement). Sous le profil seccomp par défaut de Docker Chromium refuse alors de démarrer : voir §4. **Toujours ouvert en V1** : par défaut, sans la variable, le bac à sable reste absent. |
+| 3 | Chromium était lancé avec `--no-sandbox` | `src/runtime/dynamique.js` | ~~Sandbox natif actif par défaut ; `--no-sandbox` seulement si `GWAUDIT_CHROMIUM_SANS_SANDBOX=1` est positionnée explicitement.~~ **Faux, rectifié le 2026-09-29** : Playwright ajoute lui-même `--no-sandbox` tant que `chromiumSandbox: true` n'est pas passé à `launch()`/`launchServer()`, ce que rien ne faisait — vu dans les arguments du vrai processus Chromium, sous `pwuser` dans le conteneur. Le widget audité tournait donc toujours sans bac à sable, en V1 comme en V2. **Corrigé et vérifié le 2026-09-29** : le bac à sable est demandé par défaut partout (`chromiumSandbox: true`) ; la seule dérogation est `GWAUDIT_CHROMIUM_SANS_SANDBOX=1`, explicite, et l'axe D pose alors le marqueur d'information `D-INDISPONIBLE-BAC-A-SABLE` (JSON et HTML, sans effet sur le verdict). Quand Chromium ne peut pas démarrer avec son bac à sable (root, espaces de noms utilisateur interdits, AppArmor, profil seccomp par défaut de Docker), `D-INDISPONIBLE` nomme cette cause précise et donne les deux issues (corriger l'environnement, ou déroger en sachant ce que ça expose) ; ce conseil n'est donné que pour cette cause. **Dans l'image V2 la dérogation est refusée** : `entrypoint.sh` échoue si la variable est posée. Éprouvé en conteneur : voir §4. |
 | 4 | Aucun hash de commit rattaché au rapport | `bin/gwaudit.js` | `commitDepot()` (`git rev-parse HEAD`) inclus dans `meta.commit` ; identité du dépôt tirée de l'URL réelle. |
 | 8 | Le passe-droit réseau « local » ne comparait que le *hostname* | `src/runtime/dynamique.js` | Compare désormais l'origine exacte (`urlOrigine === origine`, protocole + hôte + port), pas seulement le hostname. |
 | 9 | Aucun plafond de fichiers/octets cumulés pendant l'inventaire | `src/contexte/inventaire.js` | `MAX_FICHIERS` (20 000) et `MAX_OCTETS_LUS_CUMULES` (200 Mo), avec troncature explicite plutôt que crash, signalée dans `ctx.tronque`. |
@@ -152,8 +152,9 @@ nominale :
      cumulée lue) ;
    - analyse statique (axes A, B, C, E-partie-statique, F) — déjà sûre,
      inchangée ;
-   - analyse dynamique (axe D) durcie : sandbox Chromium natif demandé
-     (`GWAUDIT_CHROMIUM_SANDBOX=1`, constat 3 — pas actif sans elle),
+   - analyse dynamique (axe D) durcie : sandbox Chromium natif demandé par
+     défaut (`chromiumSandbox: true`, constat 3) ; dérogation explicite et
+     dite dans le rapport,
      `routeWebSocket()` ajouté à côté de `route()`,
      `serviceWorkers: 'block'`, politique de désactivation WebRTC,
      comparaison à l'origine exacte du harnais (pas au seul hostname) pour
@@ -196,7 +197,8 @@ entièrement remplacer — à éprouver sur le VPS d'Antoine.
   sandboxed » (couche 1 : espaces de noms, seccomp-BPF). Pour `pwuser` (non
   root) la capacité ajoutée reste hors de l'ensemble effectif : le noyau refuse
   toujours `chroot()` hors de l'espace de noms de Chromium. Ces deux réglages
-  et `GWAUDIT_CHROMIUM_SANDBOX=1` sont dans le compose ; **qui déploie l'image
+  sont dans le compose ; le bac à sable lui-même est demandé par gwaudit par
+  défaut, et l'image refuse la dérogation (`entrypoint.sh`) ; **qui déploie l'image
   sans ce compose doit les reproduire** (voir « Ce que l'image exige » plus
   bas). Le bon réflexe si un hôte ne le permet pas reste de ne pas céder et
   remettre `--no-sandbox` : c'est d'ajouter une deuxième couche d'isolation
@@ -391,7 +393,7 @@ d'isolation sans le dire.
 | utilisateur `pwuser` (par l'image), `read_only`, `tmpfs` `/tmp` avec `exec` | rien d'écrit hors du travail du job ; l'axe D exécute un lanceur de Chromium sous `/tmp` | `noexec` (défaut Docker du tmpfs) : axe D en `EACCES` |
 | `cap_drop: ALL`, `no-new-privileges`, `pids_limit`, `mem_limit` + `memswap_limit` égaux, `cpus` | enveloppe de base | — |
 | `seccomp=execution/seccomp-chromium.json` + `cap_add: SYS_CHROOT` | bac à sable de Chromium (voir §4) | Chromium ne démarre pas avec son bac à sable, ou sans lui |
-| `GWAUDIT_CHROMIUM_SANDBOX=1` | demande le bac à sable à Playwright (constat 3) | Chromium tourne avec `--no-sandbox` |
+| ne **pas** poser `GWAUDIT_CHROMIUM_SANS_SANDBOX` | le bac à sable est actif par défaut ; la dérogation est refusée par `entrypoint.sh` (l'audit ne démarre pas) | — |
 | réseau `internal: true` + `HTTP_PROXY`/`HTTPS_PROXY` vers `egress-proxy` | seule sortie : le proxy à liste blanche | pas de sortie du tout, ou une sortie ouverte |
 | `GWAUDIT_RESOLUTION_PAR_PROXY=1` | le réseau interne n'a pas de DNS : le proxy résout et refuse les adresses internes | tout audit d'URL échoue (exit 3) |
 | `/out` inscriptible par l'uid 1000 (`pwuser`) | le rapport y est écrit | pas de rapport |

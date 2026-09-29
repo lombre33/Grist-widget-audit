@@ -116,30 +116,58 @@ function construireArgsChromium() {
     '--no-first-run',
     '--no-default-browser-check',
   ];
-  // Ce que ce commentaire affirmait jusqu'ici — « le bac à sable natif de
-  // Chromium reste actif par défaut » — était FAUX : Playwright ajoute
-  // lui-même `--no-sandbox` tant que `chromiumSandbox: true` n'est pas passé
-  // à launch()/launchServer(), ce que rien ici ne faisait (constaté en
-  // lisant les arguments du vrai processus Chromium, dans le conteneur V2 :
-  // voir docker/ci/verifier.sh, `securite`). Le widget audité tournait donc
-  // toujours dans un Chromium sans bac à sable. Il est maintenant activé sur
-  // demande (`bacASableChromium()`), par la zone d'exécution V2.
-  return process.env.GWAUDIT_CHROMIUM_SANS_SANDBOX === '1' ? [...argsReseau, '--no-sandbox'] : argsReseau;
+  // Le bac à sable natif de Chromium est actif par défaut (décision de la
+  // coordination, 2026-09-29) : c'est justement du code non fiable qu'on
+  // exécute ici. Playwright, lui, ajoute `--no-sandbox` de sa propre
+  // initiative tant que `chromiumSandbox: true` n'est pas passé à
+  // launch()/launchServer() — c'est `bacASableChromium()` qui le passe. Avant
+  // cette date le commentaire ici affirmait « actif par défaut » alors que rien
+  // ne le faisait : le widget audité tournait toujours dans un Chromium sans
+  // bac à sable (arguments du vrai processus lus dans le conteneur V2).
+  return bacASableChromium() ? argsReseau : [...argsReseau, '--no-sandbox'];
 }
 
 /**
- * Bac à sable natif de Chromium, activé par GWAUDIT_CHROMIUM_SANDBOX=1 (posée
- * par docker/docker-compose.v2-execution.yml) ; sans cette variable, le
- * comportement par défaut de Playwright s'applique — Chromium sans bac à
- * sable, seule façon qu'il démarre en root ou là où les espaces de noms
- * utilisateur non privilégiés sont interdits (conteneur Docker au profil
- * seccomp par défaut, Ubuntu 23.10+ sous AppArmor), y compris ce dépôt en
- * développement cloud. GWAUDIT_CHROMIUM_SANS_SANDBOX=1 reste prioritaire. Le
- * lancement échoue franchement (« No usable sandbox ») si le bac à sable est
- * demandé et impossible : jamais de repli silencieux vers --no-sandbox.
+ * Le bac à sable natif de Chromium est demandé, sauf dérogation EXPLICITE :
+ * GWAUDIT_CHROMIUM_SANS_SANDBOX=1. Quand Chromium ne peut pas démarrer avec
+ * (root, espaces de noms utilisateur interdits, AppArmor, profil seccomp par
+ * défaut de Docker), le lancement échoue franchement et l'axe D le dit avec
+ * cette cause précise (`indiceBacASable()`) — jamais de repli silencieux vers
+ * `--no-sandbox`. Une dérogation n'est pas cachée non plus : l'axe D pose alors
+ * le marqueur `D-INDISPONIBLE-BAC-A-SABLE`. GWAUDIT_CHROMIUM_SANDBOX=1, l'ancien
+ * nom de la demande, reste accepté et ne change rien. Dans l'image V2
+ * (docker/execution/entrypoint.sh) la dérogation est refusée.
  */
 function bacASableChromium() {
-  return process.env.GWAUDIT_CHROMIUM_SANDBOX === '1' && process.env.GWAUDIT_CHROMIUM_SANS_SANDBOX !== '1';
+  return process.env.GWAUDIT_CHROMIUM_SANS_SANDBOX !== '1';
+}
+
+/** Ce que dit Chromium quand il ne peut pas installer son bac à sable — et rien d'autre : un délai de navigation, un Chromium absent ou un plantage sans rapport n'en font pas partie. */
+const MOTIF_CAUSE_BAC_A_SABLE = /No usable sandbox|Failed to move to new namespace|sys_chroot|Running as root without --no-sandbox|sandbox_host_linux|zygote_host_impl_linux|setuid sandbox|creating a user namespace|CLONE_NEWUSER/i;
+/** Le message générique de Playwright quand Chromium se ferme sur un échec de bac à sable : le signe, pas la cause — on le préfère seulement faute de mieux. */
+const MOTIF_SIGNE_BAC_A_SABLE = /Chromium sandboxing failed/i;
+
+/** Ligne de l'erreur de lancement qui met le bac à sable en cause (la plus précise d'abord), débarrassée des couleurs de Playwright et du préfixe de journal de Chromium ; null si aucune ne le fait. */
+function indiceBacASable(erreur) {
+  const lignes = String(erreur?.message ?? erreur).split('\n')
+    .map((l) => l
+      .replace(/\x1b\[[0-9;]*m/g, '')
+      .replace(/^\s*-\s*\[pid=\d+\](\[err\])?\s*/, '')
+      .replace(/^\[\d+:\d+:[\d/.]+:[A-Z]+:[^\]]*\]\s*/, '')
+      .trim());
+  const ligne = lignes.find((l) => MOTIF_CAUSE_BAC_A_SABLE.test(l)) ?? lignes.find((l) => MOTIF_SIGNE_BAC_A_SABLE.test(l));
+  return ligne ? ligne.slice(0, 300) : null;
+}
+
+/** Marqueur d'information (jamais dans le verdict) : l'axe D a tourné, mais dans un Chromium sans bac à sable, par dérogation explicite. */
+function constatSansBacASable() {
+  return constat({
+    regle: 'D-INDISPONIBLE-BAC-A-SABLE', axe: 'D', severite: 'info', confiance: 'certain',
+    titre: 'Axe D exécuté sans le bac à sable de Chromium (dérogation explicite)',
+    constat: "GWAUDIT_CHROMIUM_SANS_SANDBOX=1 est posée : le navigateur qui a exécuté le widget audité tournait avec --no-sandbox.",
+    impact: "Le widget audité est du code non fiable. Sans bac à sable, une faille du moteur de rendu que ce code exploiterait lui donnerait les droits du processus qui a lancé l'audit. Les constats de l'axe D restent valables : c'est l'isolation de la machine qui a été réduite, pas la mesure. Ce marqueur n'entre pas dans le verdict.",
+    remediation: "Retirer la dérogation et corriger l'environnement pour que le bac à sable démarre : ne pas lancer l'audit en root, autoriser les espaces de noms utilisateur non privilégiés, ou en conteneur le profil seccomp et la capacité SYS_CHROOT de docker/execution (docs/ARCHITECTURE-V2.md §4).",
+  });
 }
 
 /** Variables d'environnement à ne PAS transmettre au process Chromium — voir `construireArgsChromium()`. */
@@ -503,7 +531,15 @@ export async function auditDynamique(ctx, options = {}) {
         }
       }
     }
-    if (erreurLancement) throw erreurLancement;
+    if (erreurLancement) {
+      // Le bac à sable est demandé et Chromium n'a pas pu l'installer : on le
+      // dit avec cette cause, plutôt que le message générique d'un navigateur
+      // qui se ferme (le conseil de dérogation n'est donné que dans ce cas).
+      const indice = bacASableChromium() ? indiceBacASable(erreurLancement) : null;
+      if (indice) throw Object.assign(new Error(indice), { causeBacASable: true });
+      throw erreurLancement;
+    }
+    if (!bacASableChromium()) constats.push(constatSansBacASable());
     const contexte = await navigateur.newContext({ locale: 'fr-FR', viewport: { width: 1280, height: 900 } });
     page = await contexte.newPage();
 
@@ -656,13 +692,26 @@ export async function auditDynamique(ctx, options = {}) {
     // n'ont rien à voir avec Chromium et ne doivent pas perdre leur rapport
     // pour autant. Constaté avec un vrai échec (chemin de dossier temporaire
     // invalide sous Windows) qui remontait jusqu'ici avant ce garde-fou.
+    if (e?.causeBacASable) {
+      return {
+        constats: [constat({
+          regle: 'D-INDISPONIBLE', axe: 'D', severite: 'info', confiance: 'certain',
+          titre: "Analyse dynamique non exécutée : Chromium ne peut pas démarrer avec son bac à sable",
+          constat: `Chromium a refusé de démarrer avec son bac à sable natif : ${e.message}`,
+          impact: "Les constats de l'axe D (comportement réel du widget : réseau, XSS à l'exécution, accessibilité rendue) ne peuvent pas être produits. Ce n'est pas une absence de risque, c'est une absence de mesure. Le bac à sable sépare le widget audité — du code non fiable, exécuté par cet axe — du reste de la machine : l'outil ne le retire pas de lui-même.",
+          remediation: "Deux issues. (1) Corriger l'environnement pour que le bac à sable démarre : ne pas lancer l'audit en root ; autoriser les espaces de noms utilisateur non privilégiés (Ubuntu 23.10+ : la restriction AppArmor `kernel.apparmor_restrict_unprivileged_userns`) ; en conteneur Docker, un profil seccomp qui les autorise et la capacité SYS_CHROOT (docker/execution/seccomp-chromium.json, docs/ARCHITECTURE-V2.md §4). (2) Ou déroger explicitement avec `GWAUDIT_CHROMIUM_SANS_SANDBOX=1`, en sachant ce que cela expose : le widget audité s'exécute alors dans un Chromium sans bac à sable, sur cette machine, et le rapport le dit (D-INDISPONIBLE-BAC-A-SABLE). Dans l'image V2 la dérogation est refusée.",
+        })],
+        brut: null,
+        nonExecute: true,
+      };
+    }
     return {
       constats: [constat({
         regle: 'D-INDISPONIBLE', axe: 'D', severite: 'info', confiance: 'certain',
         titre: "Analyse dynamique non exécutée : l'axe D a échoué",
         constat: `${String(e?.message ?? e).split('\n')[0]}`,
         impact: "Les constats de l'axe D (comportement réel du widget : réseau, XSS à l'exécution, accessibilité rendue) ne peuvent pas être produits. Ce n'est pas une absence de risque, c'est une absence de mesure.",
-        remediation: "Voir le message ci-dessus pour la cause. Si Chromium n'est pas installé : `npx playwright install chromium`. Si le message est « Target page, context or browser has been closed » (Chromium démarre puis se ferme aussitôt) dans un conteneur ou une VM, essayer `GWAUDIT_CHROMIUM_SANS_SANDBOX=1` — le bac à sable natif de Chromium est une source connue d'échecs de ce type dans ce genre d'environnement. Sinon, relancer avec `--sans-dynamique` pour ignorer cet axe en attendant.",
+        remediation: "Voir le message ci-dessus pour la cause. Si Chromium n'est pas installé : `npx playwright install chromium`. Sinon, relancer avec `--sans-dynamique` pour ignorer cet axe en attendant.",
       })],
       brut: null,
       nonExecute: true,

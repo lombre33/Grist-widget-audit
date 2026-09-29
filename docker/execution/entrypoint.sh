@@ -22,6 +22,16 @@ if [ -z "$GWAUDIT_CHROMIUM_PATH" ]; then
 fi
 export GWAUDIT_CHROMIUM_PATH
 
+# Dans cette image, le widget audité est du code non fiable et le bac à sable de
+# Chromium est ce qui le sépare du conteneur : la dérogation explicite de
+# gwaudit (GWAUDIT_CHROMIUM_SANS_SANDBOX) n'est jamais acceptée ici. Refuser
+# franchement plutôt que d'ignorer la variable en silence — un audit lancé avec
+# elle ne doit pas ressembler à un audit normal (docs/ARCHITECTURE-V2.md, §4).
+if [ -n "${GWAUDIT_CHROMIUM_SANS_SANDBOX:-}" ]; then
+  echo "entrypoint: GWAUDIT_CHROMIUM_SANS_SANDBOX est posée — refusé : dans la zone d'exécution V2, Chromium ne tourne jamais sans son bac à sable. Retirer la variable et corriger l'environnement (profil seccomp, SYS_CHROOT) si Chromium ne démarre pas." >&2
+  exit 1
+fi
+
 CIBLE="${1:?usage: entrypoint.sh <url-du-widget-a-auditer>}"
 
 mkdir -p /out

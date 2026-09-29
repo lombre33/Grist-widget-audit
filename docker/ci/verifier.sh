@@ -29,6 +29,17 @@ echec() { echo "::error::$*"; echo "ÉCHEC : $*" >&2; exit 1; }
 ok() { echo "OK : $*"; }
 titre() { echo; echo "=== $* ==="; }
 
+# Aucun processus Chromium ne doit survivre à l'audit ni à la destruction du
+# conteneur : sur l'hôte, rien de ce qui vient de /ms-playwright ne tourne.
+# (Le runner est jetable, mais la même commande se rejoue sur le VPS.)
+aucun_chromium_orphelin() {
+  sleep 2
+  if pgrep -f '/ms-playwright/chromium-' >/dev/null; then
+    pgrep -af '/ms-playwright/chromium-' | cut -c1-200 || true
+    echec "un Chromium survit $1"
+  fi
+}
+
 preparer_sortie() { rm -rf "$SORTIE"; mkdir -p "$SORTIE"; chmod 777 "$SORTIE"; }
 dans_conteneur() { "${COMPOSE[@]}" run --rm -T --entrypoint sh execution-audit -c "$1"; }
 
@@ -82,7 +93,9 @@ cmd_audit() {
   n="$(sort -u "$vus" | wc -l)"
   [ "$n" -ge 1 ] || echec "aucun processus Chromium observé pendant l'audit : impossible de dire si son bac à sable est actif"
   if grep -q -e '--no-sandbox' "$vus"; then sort -u "$vus" | cut -c1-300; echec "Chromium a tourné avec --no-sandbox pendant l'audit : le widget audité s'exécute sans bac à sable"; fi
-  ok "audit complet dans le conteneur, axe D exécuté, Chromium lancé sans --no-sandbox ($n processus navigateur observé)"
+  ok "audit complet dans le conteneur, axe D exécuté, Chromium lancé sans --no-sandbox ($n relevés du processus navigateur)"
+  aucun_chromium_orphelin "à l'audit de widget-exemple, conteneur détruit"
+  ok "aucun Chromium ne survit à l'audit ni au conteneur"
 }
 
 cmd_securite() {
@@ -108,6 +121,17 @@ cmd_securite() {
   sans_sandbox="$(dans_conteneur 'env | grep -c "^GWAUDIT_CHROMIUM_SANS_SANDBOX=" || true' | tr -d '\r')"
   [ "$sans_sandbox" = "0" ] || echec "GWAUDIT_CHROMIUM_SANS_SANDBOX est posée dans le conteneur"
   ok "aucune variable de dérogation --no-sandbox (ne prouve pas à elle seule le bac à sable : voir la sonde ci-dessous et l'audit)"
+
+  # La dérogation de gwaudit (GWAUDIT_CHROMIUM_SANS_SANDBOX) est refusée dans
+  # l'image : l'audit ne démarre pas, il ne tourne pas sans bac à sable.
+  preparer_sortie
+  local refus code_refus=0
+  refus="$("${COMPOSE[@]}" run --rm -T -e GWAUDIT_CHROMIUM_SANS_SANDBOX=1 -v "$RACINE/fixtures/widget-exemple:/widget:ro" execution-audit /widget 2>&1)" || code_refus=$?
+  echo "$refus" | tail -3
+  [ "$code_refus" != "0" ] || echec "l'image a accepté GWAUDIT_CHROMIUM_SANS_SANDBOX : un audit sans bac à sable est possible"
+  grep -q 'refusé' <<<"$refus" || echec "refus de la dérogation sans message explicite : $refus"
+  [ ! -e "$SORTIE/rapport.json" ] || echec "un rapport a été produit malgré la dérogation refusée"
+  ok "la dérogation au bac à sable est refusée par l'image (code $code_refus, aucun audit lancé)"
 
   local chromium='export GWAUDIT_CHROMIUM_PATH="$(ls -d /ms-playwright/chromium-*/chrome-linux*/chrome | head -n1)"; node /ci/sonde-sandbox.mjs'
   local bac bac_temoin
@@ -183,6 +207,7 @@ cmd_proxy() {
   [ "$code" -le 2 ] || echec "audit d'URL : code $code"
   node docker/ci/verifier-rapport.mjs "$SORTIE/rapport.json" || echec "audit d'URL : rapport incomplet"
   ok "audit d'une URL réelle, de bout en bout, à travers le proxy"
+  aucun_chromium_orphelin "à l'audit d'une URL"
 }
 
 cmd_plafond() {
@@ -275,6 +300,8 @@ cmd_memoire() {
   [ "$pic" -le $((768 * 102 / 100)) ] || echec "la mémoire a dépassé la limite (${pic} Mio) : les cgroups ne coupent pas"
   { [ "$oom" = "true" ] || [ "$pic" -ge $((768 * 60 / 100)) ]; } || echec "essai non concluant : le widget n'a ni approché la limite (${pic} Mio) ni été tué par le noyau"
   ok "mémoire contenue sous 768 Mio face à un widget qui alloue sans fin"
+  aucun_chromium_orphelin "au widget qui alloue sans fin, conteneur détruit"
+  ok "aucun Chromium ne survit au conteneur tué pour cause de mémoire"
 }
 
 cmd_publication() {

@@ -100,3 +100,31 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash docker/ci/publier.sh "${GITHUB_REF_NAME}"
+
+  # Preuve sous Windows (le poste d'Antoine) : l'axe D par défaut lance Chromium
+  # avec son bac à sable, montré par le niveau d'intégrité des processus de
+  # rendu pendant un vrai audit, avec un témoin sous la dérogation ; relève aussi
+  # le score de widget-exemple pour le comparer à Linux. Indépendant de l'image :
+  # ne conditionne pas la publication.
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Environnement
+        run: |
+          node --version
+          npm --version
+          [System.Environment]::OSVersion.VersionString
+
+      - name: Dépendances, comme un utilisateur (npm ci)
+        run: npm ci
+
+      - name: Chromium de Playwright
+        run: npx playwright install chromium
+
+      - name: Bac à sable de Chromium sous Windows, pendant un vrai audit
+        run: node docker/ci/verifier-windows.mjs

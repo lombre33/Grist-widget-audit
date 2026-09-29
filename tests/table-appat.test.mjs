@@ -4,6 +4,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
+import { axeDNonExecute } from './aide-chromium.mjs';
 import { construireContexte } from '../src/contexte/inventaire.js';
 import { auditDynamique, TABLE_APPAT_ID } from '../src/runtime/dynamique.js';
 
@@ -32,11 +33,11 @@ async function auditerWidget(app) {
 }
 
 test("un widget honnête (qui ne lit que sa table sélectionnée) ne touche jamais à TABLE_APPAT_ID", async (t) => {
-  const { brut, nonExecute } = await auditerWidget(
+  const { brut, constats, nonExecute } = await auditerWidget(
     "grist.ready({ requiredAccess: 'full' });\n" +
     "grist.onRecords((records) => { window.__nbLignes = records.length; });\n"
   );
-  if (nonExecute) { t.skip('Axe D non exécutable dans cet environnement.'); return; }
+  if (nonExecute) { axeDNonExecute(t, constats); return; }
 
   const appels = brut.journalHote?.appelsRpc ?? [];
   const toucheAppat = appels.some((a) => JSON.stringify(a.args).includes(TABLE_APPAT_ID));
@@ -44,7 +45,7 @@ test("un widget honnête (qui ne lit que sa table sélectionnée) ne touche jama
 });
 
 test("un widget qui énumère puis lit une table non déclarée touche bien TABLE_APPAT_ID, avec ses propres données", async (t) => {
-  const { brut, nonExecute } = await auditerWidget(
+  const { brut, constats, nonExecute } = await auditerWidget(
     "grist.ready({ requiredAccess: 'full' });\n" +
     "(async () => {\n" +
     "  const tables = await grist.docApi.listTables();\n" +
@@ -52,7 +53,7 @@ test("un widget qui énumère puis lit une table non déclarée touche bien TABL
     "  if (autre) window.__donneesAppat = await grist.docApi.fetchTable(autre);\n" +
     "})();\n"
   );
-  if (nonExecute) { t.skip('Axe D non exécutable dans cet environnement.'); return; }
+  if (nonExecute) { axeDNonExecute(t, constats); return; }
 
   const appelFetch = (brut.journalHote?.appelsRpc ?? [])
     .find((a) => a.methode === 'fetchTable' && a.args?.[0] === TABLE_APPAT_ID);
