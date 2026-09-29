@@ -82,6 +82,12 @@ services:
       # une revue RSSI sur ce fichier, corrigé ici.
       - HTTP_PROXY=http://egress-proxy:3128
       - HTTPS_PROXY=http://egress-proxy:3128
+      # reseau-ferme n'a aucune résolution DNS externe : gwaudit ne peut pas
+      # résoudre lui-même l'hôte d'une URL soumise (validerHoteClone, bin/
+      # gwaudit.js) et le laisse résoudre, puis refuser une adresse interne,
+      # par egress-proxy (acl « dst »). Sans cette variable, tout audit
+      # d'URL échoue dès la première étape (exit 3) — constat de la CI.
+      - GWAUDIT_RESOLUTION_PAR_PROXY=1
       # Une URL git@hôte:chemin (SSH) ignore HTTP_PROXY/HTTPS_PROXY —
       # relevé par la même revue. Pas un trou pour autant : resoudreCible()
       # valide déjà ce format exactement comme https:// (bin/gwaudit.js,

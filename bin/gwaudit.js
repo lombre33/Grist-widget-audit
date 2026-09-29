@@ -313,6 +313,24 @@ async function validerHoteClone(cible) {
   }
   if (!hote) throw new Error(`Impossible de déterminer l'hôte cible pour : ${cible}`);
 
+  // Zone d'exécution V2 : le conteneur n'a AUCUNE résolution DNS externe
+  // (réseau interne, seul egress-proxy sort, docker-compose.v2-execution.yml)
+  // — dns.lookup() y échoue pour tout hôte, donc la résolution ci-dessous
+  // refuserait toute URL (vu à la première exécution de bout en bout, en CI).
+  // Le nom est alors résolu, et l'adresse obtenue refusée si elle est
+  // interne, par le proxy lui-même (acl « dst » de squid.conf, éprouvée par
+  // docker/ci/verifier.sh : un nom autorisé qui résout vers 127.0.0.1 est
+  // refusé), au moment même de la connexion — ce qui ferme aussi le DNS
+  // rebinding que cette vérification-ci ne peut pas fermer. Jamais activé
+  // sans proxy configuré, ni par défaut : l'usage V1 local garde la
+  // vérification complète. Une adresse IP littérale reste vérifiée ici.
+  if (resolutionParProxy() && !net.isIP(hote)) {
+    if (/^git@/i.test(cible)) {
+      throw new Error(`Clonage refusé : une URL SSH (git@) ne peut pas passer par le proxy de sortie de la zone d'exécution — utiliser une URL https:// : ${cible}`);
+    }
+    return;
+  }
+
   const adresses = net.isIP(hote) ? [hote] : (await dns.lookup(hote, { all: true }).catch(() => [])).map((a) => a.address);
   if (!adresses.length) throw new Error(`Résolution DNS impossible pour l'hôte de clonage : ${hote}`);
   for (const adresse of adresses) {
@@ -320,6 +338,11 @@ async function validerHoteClone(cible) {
       throw new Error(`Clonage refusé : l'hôte ${hote} résout vers une adresse interne (${adresse}).`);
     }
   }
+}
+
+/** Vrai seulement si l'appelant (compose V2) l'a demandé ET qu'un proxy de sortie est réellement configuré : sans proxy, personne d'autre ne vérifierait l'adresse. */
+function resolutionParProxy() {
+  return process.env.GWAUDIT_RESOLUTION_PAR_PROXY === '1' && Boolean(process.env.HTTPS_PROXY || process.env.https_proxy);
 }
 
 function estAdresseInterne(adresse) {

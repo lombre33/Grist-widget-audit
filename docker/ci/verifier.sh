@@ -152,31 +152,59 @@ cmd_proxy() {
 
 cmd_plafond() {
   titre "Plafond de durée : un audit bloqué est coupé, Chromium avec lui"
+  # Un « gwaudit » de substitution monté sur bin/gwaudit.js — le vrai
+  # entrypoint.sh, la vraie image — qui lance un Chromium puis reste bloqué en
+  # boucle synchrone : la situation que le plafond existe pour couper (un
+  # thread pris dans du retour arrière ne peut pas se couper lui-même), rendue
+  # déterministe. Avec le vrai gwaudit, le blocage dépendrait de la vitesse du
+  # runner.
   local nom=gwaudit-plafond dossier="$TRAVAIL/blocage"
   mkdir -p "$dossier"
-  printf '<!doctype html><html><body><script>for(;;){}</script></body></html>\n' > "$dossier/index.html"
+  cat > "$dossier/bloque.mjs" <<'JS'
+import { spawn } from 'node:child_process';
+spawn(process.env.GWAUDIT_CHROMIUM_PATH, ['--headless=new', '--no-sandbox', '--disable-gpu', '--user-data-dir=/tmp/profil-substitut', 'about:blank'], { stdio: 'ignore' });
+console.log('substitut : Chromium lancé, boucle synchrone');
+for (;;) {}
+JS
   preparer_sortie
   docker rm -f "$nom" >/dev/null 2>&1 || true
-  "${COMPOSE[@]}" run -d --name "$nom" -e GWAUDIT_PLAFOND_S=20 -v "$dossier:/widget:ro" execution-audit /widget >/dev/null
+  "${COMPOSE[@]}" run -d --name "$nom" -e GWAUDIT_PLAFOND_S=20 -v "$dossier/bloque.mjs:/app/bin/gwaudit.js:ro" execution-audit /widget >/dev/null
   local t0 t1 haut code
   t0="$(date +%s)"
-  sleep 10
+  sleep 8
   haut="$(docker top "$nom" 2>&1 || true)"
   if ! grep -q 'chrome' <<<"$haut"; then
     docker logs "$nom" 2>&1 | tail -20; docker rm -f "$nom" >/dev/null 2>&1 || true
-    echec "essai non concluant : aucun Chromium en cours à 10 s, il n'y a rien à couper (voir le journal ci-dessus)"
+    echo "$haut"
+    echec "essai non concluant : aucun Chromium en cours à 8 s, il n'y a rien à couper (voir le journal ci-dessus)"
   fi
-  ok "un Chromium tourne bien au moment où le plafond doit tomber"
+  ok "un Chromium tourne, et le processus principal est bloqué, au moment où le plafond doit tomber"
   code="$(docker wait "$nom")"
   t1="$(date +%s)"
-  docker logs "$nom" 2>&1 | tail -15 || true
+  docker logs "$nom" 2>&1 | tail -5 || true
   docker rm -f "$nom" >/dev/null 2>&1 || true
-  echo "durée $((t1 - t0)) s, code de sortie $code"
+  echo "durée $((t1 - t0)) s après le contrôle, code de sortie $code"
   { [ "$code" = "124" ] || [ "$code" = "137" ]; } || echec "code $code au lieu de 124 (timeout) ou 137 (SIGKILL de repli)"
-  [ $((t1 - t0)) -ge 18 ] && [ $((t1 - t0)) -le 45 ] || echec "coupure à $((t1 - t0)) s, attendue autour de 20 s"
+  [ $((t1 - t0)) -ge 8 ] && [ $((t1 - t0)) -le 35 ] || echec "coupure $((t1 - t0)) s après le contrôle, attendue autour de 12 s (plafond 20 s)"
   sleep 2
   if pgrep -f '/ms-playwright/chromium-' >/dev/null; then pgrep -af '/ms-playwright/chromium-' || true; echec "un Chromium survit à la destruction du conteneur"; fi
-  ok "audit coupé au plafond, aucun Chromium orphelin"
+  ok "audit coupé au plafond (code $code), aucun Chromium orphelin"
+
+  titre "Widget qui boucle sans fin : le vrai audit conclut de lui-même, sans Chromium orphelin"
+  mkdir -p "$TRAVAIL/boucle"
+  printf '<!doctype html><html><body><script>for(;;){}</script></body></html>\n' > "$TRAVAIL/boucle/index.html"
+  preparer_sortie
+  local debut fin
+  debut="$(date +%s)"
+  code=0
+  lancer_audit "$TRAVAIL/audit-boucle.log" -e GWAUDIT_PLAFOND_S=150 -v "$TRAVAIL/boucle:/widget:ro" execution-audit /widget || code=$?
+  fin="$(date +%s)"
+  echo "durée $((fin - debut)) s, code $code"
+  [ "$code" -le 2 ] || echec "l'audit d'un widget qui boucle n'a pas conclu (code $code) : coupé par le plafond de 150 s ou en panne"
+  node docker/ci/verifier-rapport.mjs "$SORTIE/rapport.json" || echec "rapport incomplet pour le widget qui boucle"
+  sleep 2
+  if pgrep -f '/ms-playwright/chromium-' >/dev/null; then pgrep -af '/ms-playwright/chromium-' || true; echec "un Chromium survit à l'audit du widget qui boucle"; fi
+  ok "le vrai audit conclut en $((fin - debut)) s sur un widget qui boucle, aucun Chromium orphelin"
 }
 
 cmd_memoire() {
