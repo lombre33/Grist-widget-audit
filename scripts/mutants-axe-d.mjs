@@ -33,6 +33,7 @@ const MUTANTS = [
   [D, TIMEOUT, TIMEOUT.replace("severite: 'critique', bloquant: true", "severite: 'majeur'"), 'D-TIMEOUT-01 : majeur, non bloquant'],
   [D, TIMEOUT, TIMEOUT.replace('bloquant: true', 'bloquant: false'), 'D-TIMEOUT-01 : critique mais non bloquant'],
   [D, TIMEOUT, TIMEOUT.replace(' mesurePartielle: true,', ''), 'D-TIMEOUT-01 : axe D pas partiel'],
+  [D, "Un widget qui empêche de mesurer ce qu'il fait se juge comme du code illisible : on ne peut pas le déclarer conforme. ", '', 'D-TIMEOUT-01 : la raison du caractère bloquant n\'est plus dite'],
   [D, 'const DELAI_CHARGEMENT_MS = Math.max(1_000, DELAI_GLOBAL_AXE_D_MS - 15_000);', 'const DELAI_CHARGEMENT_MS = 30_000;', 'délai de chargement : fixe au lieu de dérivé du délai global'],
   [D, 'timeout: DELAI_CHARGEMENT_MS });', 'timeout: 30000 });', 'goto : délai en dur'],
   [D, '    if (!scenarioComplet) return constats;\n', '', "D-RESEAU-00 écrit après un scénario interrompu"],

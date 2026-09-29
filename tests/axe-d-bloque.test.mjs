@@ -188,6 +188,7 @@ test("widget qui boucle au chargement : D-TIMEOUT-01 bloquant, axe D partiel, ja
   assert.equal(c.bloquant, true);
   assert.equal(c.severite, 'critique');
   assert.equal(c.mesurePartielle, true);
+  assert.match(c.impact, /code illisible/, 'le constat doit dire pourquoi il est bloquant : empêcher de mesurer se juge comme du code illisible');
   assert.equal(c.preuve.phase, 'chargement', "c'est le délai de chargement qui tombe, avant le délai global");
   assert.equal(c.preuve.delaiMs, 5000, 'le délai de chargement se déduit de GWAUDIT_DELAI_AXE_D_MS (20 s − 15 s)');
   assert.deepEqual(boucle.rapport.axesNonExecutes, []);
