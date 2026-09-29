@@ -116,11 +116,30 @@ function construireArgsChromium() {
     '--no-first-run',
     '--no-default-browser-check',
   ];
-  // Le bac à sable natif de Chromium reste actif par défaut : c'est
-  // justement du code non fiable qu'on exécute ici. Ne le désactiver que
-  // si l'environnement l'exige (ex. conteneur sans espaces de noms
-  // utilisateur non privilégiés) et en connaissance de cause.
+  // Ce que ce commentaire affirmait jusqu'ici — « le bac à sable natif de
+  // Chromium reste actif par défaut » — était FAUX : Playwright ajoute
+  // lui-même `--no-sandbox` tant que `chromiumSandbox: true` n'est pas passé
+  // à launch()/launchServer(), ce que rien ici ne faisait (constaté en
+  // lisant les arguments du vrai processus Chromium, dans le conteneur V2 :
+  // voir docker/ci/verifier.sh, `securite`). Le widget audité tournait donc
+  // toujours dans un Chromium sans bac à sable. Il est maintenant activé sur
+  // demande (`bacASableChromium()`), par la zone d'exécution V2.
   return process.env.GWAUDIT_CHROMIUM_SANS_SANDBOX === '1' ? [...argsReseau, '--no-sandbox'] : argsReseau;
+}
+
+/**
+ * Bac à sable natif de Chromium, activé par GWAUDIT_CHROMIUM_SANDBOX=1 (posée
+ * par docker/docker-compose.v2-execution.yml) ; sans cette variable, le
+ * comportement par défaut de Playwright s'applique — Chromium sans bac à
+ * sable, seule façon qu'il démarre en root ou là où les espaces de noms
+ * utilisateur non privilégiés sont interdits (conteneur Docker au profil
+ * seccomp par défaut, Ubuntu 23.10+ sous AppArmor), y compris ce dépôt en
+ * développement cloud. GWAUDIT_CHROMIUM_SANS_SANDBOX=1 reste prioritaire. Le
+ * lancement échoue franchement (« No usable sandbox ») si le bac à sable est
+ * demandé et impossible : jamais de repli silencieux vers --no-sandbox.
+ */
+function bacASableChromium() {
+  return process.env.GWAUDIT_CHROMIUM_SANDBOX === '1' && process.env.GWAUDIT_CHROMIUM_SANS_SANDBOX !== '1';
 }
 
 /** Variables d'environnement à ne PAS transmettre au process Chromium — voir `construireArgsChromium()`. */
@@ -457,7 +476,7 @@ export async function auditDynamique(ctx, options = {}) {
         if (process.platform === 'win32') {
           // Pas de wrapper transparent possible ici (voir imposerPlafondCpuWindows) :
           // `launchServer()` expose le PID réel, contrairement à `launch()`.
-          serveurChromium = await chromium.launchServer({ args: construireArgsChromium(), env: envChromiumSansProxy(), executablePath: cheminReel });
+          serveurChromium = await chromium.launchServer({ args: construireArgsChromium(), env: envChromiumSansProxy(), executablePath: cheminReel, chromiumSandbox: bacASableChromium() });
           try {
             imposerPlafondCpuWindows(dossierTravail, serveurChromium.process().pid, limiteCpuSecondes());
           } catch (e) {
@@ -469,6 +488,7 @@ export async function auditDynamique(ctx, options = {}) {
             args: construireArgsChromium(),
             env: envChromiumSansProxy(),
             executablePath: construireLanceurChromium(dossierTravail, cheminReel),
+            chromiumSandbox: bacASableChromium(),
           });
         }
         erreurLancement = null;

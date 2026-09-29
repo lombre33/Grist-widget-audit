@@ -56,11 +56,33 @@ cmd_build() {
 cmd_audit() {
   titre "Audit réel de widget-exemple dans le conteneur durci"
   preparer_sortie
-  local code=0
-  lancer_audit "$TRAVAIL/audit.log" -v "$RACINE/fixtures/widget-exemple:/widget:ro" execution-audit /widget || code=$?
+  local nom=gwaudit-audit
+  docker rm -f "$nom" >/dev/null 2>&1 || true
+  "${COMPOSE[@]}" run -d --name "$nom" -v "$RACINE/fixtures/widget-exemple:/widget:ro" execution-audit /widget >/dev/null
+
+  # Pendant l'audit, relève les arguments du vrai processus Chromium (celui du
+  # navigateur, pas ses processus de rendu) : Playwright y ajoute --no-sandbox
+  # de lui-même tant que gwaudit ne lui demande pas chromiumSandbox: true, donc
+  # l'absence de variable de dérogation ne prouve rien — seuls les arguments du
+  # processus réel disent si le bac à sable est actif.
+  local vus="$TRAVAIL/chromium-arguments.txt"
+  : > "$vus"
+  while [ "$(docker inspect -f '{{.State.Running}}' "$nom")" = "true" ]; do
+    docker top "$nom" 2>/dev/null | grep -E '/chrome-linux[^ ]*/chrome ' | grep -v -e '--type=' >> "$vus" || true
+    sleep 0.3
+  done
+  local code
+  code="$(docker wait "$nom")"
+  docker logs "$nom" 2>&1 | tee "$TRAVAIL/audit.log"
+  docker rm -f "$nom" >/dev/null 2>&1 || true
+
   [ "$code" -le 2 ] || echec "gwaudit a rendu le code $code dans le conteneur (3 = erreur interne, 124/137 = coupure)"
-  node docker/ci/verifier-rapport.mjs "$SORTIE/rapport.json" || echec "rapport incomplet, voir ci-dessus (l'axe D est le suspect : bac à sable Chromium sous cap_drop ALL et seccomp par défaut ?)"
-  ok "audit complet dans le conteneur, axe D exécuté"
+  node docker/ci/verifier-rapport.mjs "$SORTIE/rapport.json" || echec "rapport incomplet, voir ci-dessus (l'axe D est le suspect : Chromium ne démarre pas sous cette enveloppe)"
+  local n
+  n="$(sort -u "$vus" | wc -l)"
+  [ "$n" -ge 1 ] || echec "aucun processus Chromium observé pendant l'audit : impossible de dire si son bac à sable est actif"
+  if grep -q -e '--no-sandbox' "$vus"; then sort -u "$vus" | cut -c1-300; echec "Chromium a tourné avec --no-sandbox pendant l'audit : le widget audité s'exécute sans bac à sable"; fi
+  ok "audit complet dans le conteneur, axe D exécuté, Chromium lancé sans --no-sandbox ($n processus navigateur observé)"
 }
 
 cmd_securite() {
@@ -85,7 +107,20 @@ cmd_securite() {
   local sans_sandbox
   sans_sandbox="$(dans_conteneur 'env | grep -c "^GWAUDIT_CHROMIUM_SANS_SANDBOX=" || true' | tr -d '\r')"
   [ "$sans_sandbox" = "0" ] || echec "GWAUDIT_CHROMIUM_SANS_SANDBOX est posée dans le conteneur"
-  ok "aucune dérogation --no-sandbox"
+  ok "aucune variable de dérogation --no-sandbox (ne prouve pas à elle seule le bac à sable : voir la sonde ci-dessous et l'audit)"
+
+  local chromium='export GWAUDIT_CHROMIUM_PATH="$(ls -d /ms-playwright/chromium-*/chrome-linux*/chrome | head -n1)"; node /ci/sonde-sandbox.mjs'
+  local bac bac_temoin
+  bac="$("${COMPOSE[@]}" run --rm -T -v "$RACINE/docker/ci:/ci:ro" --entrypoint sh execution-audit -c "$chromium" 2>&1 | tail -1 | tr -d '\r')"
+  # Témoin : même enveloppe (lecture seule, sans capacité, no-new-privileges)
+  # mais profil seccomp par défaut de Docker et sans SYS_CHROOT — la sonde doit
+  # y échouer, sinon un SANDBOX-OK ne prouverait pas qu'elle sait échouer.
+  bac_temoin="$(docker run --rm --network none --read-only --tmpfs /tmp:size=512m,mode=1777,exec --cap-drop ALL --security-opt no-new-privileges:true -e HOME=/tmp -v "$RACINE/docker/ci:/ci:ro" --entrypoint sh "$IMG_EXEC" -c "$chromium" 2>&1 | tail -1 | tr -d '\r')"
+  echo "bac à sable de Chromium sous l'enveloppe du compose : $bac"
+  echo "bac à sable sous le profil seccomp par défaut (témoin) : $bac_temoin"
+  [ "$bac" = "SANDBOX-OK" ] || echec "Chromium ne démarre pas avec son bac à sable sous l'enveloppe du compose ($bac)"
+  [[ "$bac_temoin" == SANDBOX-ABSENT* ]] || echec "témoin non concluant : la sonde ne détecte pas l'absence de bac à sable sous le profil par défaut ($bac_temoin)"
+  ok "Chromium démarre avec son bac à sable (chrome://sandbox : adequately sandboxed) ; la même sonde échoue sous le profil par défaut"
 
   local ferme temoin
   ferme="$("${COMPOSE[@]}" run --rm -T -v "$RACINE/docker/ci:/ci:ro" --entrypoint node execution-audit /ci/sonde-reseau.mjs http://1.1.1.1 | tr -d '\r')"

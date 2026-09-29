@@ -56,14 +56,28 @@ services:
     # nécessaire pour l'orchestrateur réel.
     security_opt:
       - no-new-privileges:true
+      # Profil seccomp de Docker + création d'espaces de noms utilisateur, dont
+      # le bac à sable natif de Chromium a besoin : sous le profil par défaut
+      # Chromium refuse de démarrer (« No usable sandbox! »). Voir
+      # execution/seccomp-chromium.md. Le chemin est relatif à ce fichier.
+      - seccomp=./execution/seccomp-chromium.json
     cap_drop:
       - ALL
-    # Pas de cap_add ici par défaut. Le sandbox natif de Chromium avec de
-    # vrais namespaces utilisateur ne devrait pas exiger de capacité
-    # élevée : si le Docker du VPS l'impose quand même, c'est le signal
-    # qu'il faut une deuxième couche d'isolation indépendante de Chromium
-    # (conteneur jetable + réseau fermé ci-dessous, voire une microVM plus
-    # tard) plutôt que de céder et remettre --no-sandbox.
+    cap_add:
+      # Le profil ci-dessus n'autorise chroot() que si le conteneur détient
+      # cette capacité (ensemble borné) ; le bac à sable de Chromium l'appelle
+      # dans son propre espace de noms utilisateur. Pour pwuser (non root) elle
+      # n'entre pas dans l'ensemble effectif : le noyau refuse toujours chroot()
+      # hors de cet espace de noms. Vérifié : sans elle, Chromium abandonne
+      # (« Check failed: sys_chroot ») ; avec elle, chrome://sandbox répond
+      # « You are adequately sandboxed » (docker/ci/verifier.sh securite).
+      - SYS_CHROOT
+    # Ne jamais céder et remettre --no-sandbox si Chromium ne démarre pas :
+    # ajouter une couche d'isolation indépendante (conteneur jetable + réseau
+    # fermé ci-dessous, voire une microVM plus tard) à la place. Attention :
+    # Playwright ajoute LUI-MÊME --no-sandbox tant qu'on ne lui demande pas
+    # chromiumSandbox: true — c'est GWAUDIT_CHROMIUM_SANDBOX=1 (plus bas) qui le
+    # fait, et rien d'autre ; l'absence de variable de dérogation ne prouve rien.
     pids_limit: 128
     mem_limit: 768m
     cpus: "1.0"
@@ -88,6 +102,12 @@ services:
       # par egress-proxy (acl « dst »). Sans cette variable, tout audit
       # d'URL échoue dès la première étape (exit 3) — constat de la CI.
       - GWAUDIT_RESOLUTION_PAR_PROXY=1
+      # Demande à gwaudit de lancer Chromium AVEC son bac à sable natif
+      # (chromiumSandbox: true, src/runtime/dynamique.js) : sans cette variable,
+      # Playwright le démarre avec --no-sandbox, et le widget audité tourne sans
+      # cette couche. Éprouvé par docker/ci/verifier.sh (arguments du vrai
+      # processus Chromium pendant un audit, et chrome://sandbox).
+      - GWAUDIT_CHROMIUM_SANDBOX=1
       # Une URL git@hôte:chemin (SSH) ignore HTTP_PROXY/HTTPS_PROXY —
       # relevé par la même revue. Pas un trou pour autant : resoudreCible()
       # valide déjà ce format exactement comme https:// (bin/gwaudit.js,
