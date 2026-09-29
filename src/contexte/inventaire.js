@@ -14,7 +14,8 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { lirePage } from '../moteur/page-html.js';
+import { lirePage, BASE_PAR_DEFAUT } from '../moteur/page-html.js';
+import { lireFeuille, nouveauBudgetCss } from '../moteur/css.js';
 
 const EXCLUS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'coverage', 'vendor', '.venv', '__pycache__']);
 
@@ -219,6 +220,11 @@ function referencesWorker(contenu) {
   return refs;
 }
 
+/** URL que la lecture d'une feuille de style demande (`@import`, `url()`, préchargement), sans les bornes. */
+function urlsDeFeuille(entrees) {
+  return entrees.filter((e) => e.sorte !== 'borne' && e.url !== '').map((e) => e.url);
+}
+
 /** Références locales sortantes d'un fichier (script src, link href, import, url(), worker). */
 function referencesSortantes(f) {
   const refs = [];
@@ -229,12 +235,15 @@ function referencesSortantes(f) {
     // un `<script>` en commentaire ne trompent plus l'inventaire. Les URL
     // absolues (y compris via une `<base>` externe) sont écartées plus bas par
     // le même filtre que les autres références sortantes.
-    const { scripts, ressources } = lirePage(c);
+    const { scripts, ressources, feuilles } = lirePage(c);
     for (const s of scripts) if (s.src !== null) refs.push(s.src);
     for (const r of ressources) if (r.nom === 'link') { const href = r.attributs.get('href'); if (href != null) refs.push(href); }
+    // Le CSS écrit dans la page (`<style>`, attributs `style`, feuille `data:`) est lu comme le navigateur le lit.
+    const budget = nouveauBudgetCss();
+    for (const feuille of feuilles) refs.push(...urlsDeFeuille(lireFeuille(feuille, budget)));
     refs.push(...referencesWorker(c)); // couvre un new Worker(...) écrit dans un <script> inline
   }
-  if (f.ext === '.css') for (const m of c.matchAll(/url\(\s*["']?([^"')]+)/gi)) refs.push(m[1]);
+  if (f.ext === '.css') refs.push(...urlsDeFeuille(lireFeuille({ sorte: 'style', applique: true, precharge: false, modele: false, texte: c, mimeLibre: true, base: BASE_PAR_DEFAUT })));
   if (['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'].includes(f.ext)) {
     for (const m of c.matchAll(/\bfrom\s+["']([^"']+)["']/g)) refs.push(m[1]);
     for (const m of c.matchAll(/\bimport\s*\(\s*["']([^"']+)["']/g)) refs.push(m[1]);
