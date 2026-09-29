@@ -76,15 +76,18 @@ export function genererMarkdown({ ctx, notation, meta }) {
   for (const axe of Object.values(notation.parAxe)) {
     l.push(`## Axe ${axe.code} — ${axe.titre}`);
     l.push('');
-    if (axe.nonExecute) {
-      l.push('*Axe non exécuté lors de cet audit (voir méthodologie).*');
-      l.push('');
-      continue;
-    }
-    l.push(`Score : **${axe.score}/100** — ${axe.repartition.critique} critique(s), ${axe.repartition.majeur} majeur(s), ${axe.repartition.mineur} mineur(s), ${axe.repartition.info} information(s).`);
-    l.push('');
     const constats = trierConstats(axe.constats);
-    if (!constats.length) { l.push('_Aucun constat sur cet axe._'); l.push(''); continue; }
+    if (axe.nonExecute) {
+      // Un axe absent ne se lit jamais sans sa raison : ses constats (option
+      // --sans-dynamique, échec avec sa cause…) sont exactement ce qui la dit.
+      l.push(`*Axe non exécuté lors de cet audit${constats.length ? ' — voici pourquoi' : ' (voir méthodologie)'}.*`);
+      l.push('');
+      if (!constats.length) continue;
+    } else {
+      l.push(`Score : **${axe.score}/100** — ${axe.repartition.critique} critique(s), ${axe.repartition.majeur} majeur(s), ${axe.repartition.mineur} mineur(s), ${axe.repartition.info} information(s).`);
+      l.push('');
+      if (!constats.length) { l.push('_Aucun constat sur cet axe._'); l.push(''); continue; }
+    }
 
     for (const c of constats) {
       const loc = c.fichier ? ` — \`${c.fichier}${c.ligne ? ':' + c.ligne : ''}\`` : '';

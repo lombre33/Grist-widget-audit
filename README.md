@@ -73,6 +73,38 @@ dessus avec la variable d'environnement `GWAUDIT_CHROMIUM_PATH` :
 GWAUDIT_CHROMIUM_PATH=/chemin/vers/chromium node bin/gwaudit.js /chemin/vers/mon-widget
 ```
 
+### Le bac à sable de Chromium (`GWAUDIT_CHROMIUM_SANS_SANDBOX`)
+
+L'axe D exécute le widget audité, du code non fiable, dans Chromium. Le bac à
+sable natif de Chromium est **actif par défaut** : Playwright, lui, lance
+Chromium avec `--no-sandbox` tant qu'on ne lui demande pas l'inverse, et
+`gwaudit` le lui demande (`chromiumSandbox: true`).
+
+Quand Chromium ne peut pas démarrer avec son bac à sable (lancement en `root`,
+espaces de noms utilisateur non privilégiés interdits — restriction AppArmor
+d'Ubuntu 23.10 et suivants —, profil seccomp par défaut de Docker), l'axe D est
+signalé non exécuté avec cette cause précise (`D-INDISPONIBLE`), jamais
+silencieusement. Deux issues : corriger l'environnement (ne pas lancer en
+`root` ; en conteneur, le profil seccomp et la capacité `SYS_CHROOT` de
+`docker/execution/`), ou déroger **explicitement** :
+
+```bash
+GWAUDIT_CHROMIUM_SANS_SANDBOX=1 node bin/gwaudit.js /chemin/vers/mon-widget
+```
+
+C'est alors le widget audité qui s'exécute dans un Chromium sans bac à sable, sur
+votre machine : une faille du moteur de rendu que ce code exploiterait lui
+donnerait vos droits. À ne faire que sur un widget dont la source est connue. Le
+rapport le dit (`D-INDISPONIBLE-BAC-A-SABLE`, information, sans effet sur le
+verdict). `GWAUDIT_CHROMIUM_SANDBOX=1`, l'ancien nom de la demande, est encore
+accepté et ne change rien. L'image de la V2 refuse cette dérogation.
+
+Un widget qui garde le navigateur occupé (boucle sans fin au chargement) n'est
+pas une panne de l'axe D : `D-TIMEOUT-01`, bloquant, le dit — bloquer la mesure
+ne rapporte pas une meilleure note que la laisser tourner. Le délai global du
+scénario est de 45 s (`GWAUDIT_DELAI_AXE_D_MS` pour l'allonger) ; celui du
+chargement de la page en est déduit, 15 s de moins.
+
 ### Installation globale (commande `gwaudit` disponible partout)
 
 Depuis une copie clonée du dépôt :
@@ -110,7 +142,9 @@ Options :
 
 Le code de sortie reflète le verdict : `0` conforme, `1` conforme sous
 réserve, `2` non conforme (point bloquant), `3` erreur d'exécution de
-l'outil lui-même.
+l'outil lui-même, `4` cible refusée ou inaccessible (URL refusée par la
+validation ou par le proxy de sortie de la V2, clonage impossible, chemin
+introuvable) : un refus est dit en clair, sans pile, et ce n'est pas une panne.
 
 ## Comparer deux audits
 

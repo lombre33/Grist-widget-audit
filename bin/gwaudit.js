@@ -22,6 +22,11 @@
  *   --interface          lance l'interface web locale (lien du dépôt → suivi
  *                        en direct → page d'audit) au lieu d'un audit direct
  *   --port <n>            port de l'interface web (défaut : 4317)
+ *
+ * Codes de sortie : 0 conforme · 1 conforme sous réserve, ou non conforme sans
+ * point bloquant · 2 au moins un point bloquant · 3 erreur interne de l'outil ·
+ * 4 cible refusée ou inaccessible (URL refusée par la validation ou par le proxy
+ * de sortie, clonage impossible, chemin introuvable).
  */
 import path from 'node:path';
 import fs from 'node:fs';
@@ -32,7 +37,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { construireContexte } from '../src/contexte/inventaire.js';
 import { analyseStatique } from '../src/moteur/statique.js';
-import { auditDynamique } from '../src/runtime/dynamique.js';
+import { auditDynamique, constatAxeDIgnoreParOption } from '../src/runtime/dynamique.js';
 import { noter } from '../src/moteur/notation.js';
 import { genererMarkdown } from '../src/rapport/markdown.js';
 import { genererJson } from '../src/rapport/json.js';
@@ -101,6 +106,7 @@ async function main() {
       if (nonExecute) axesNonExecutes.add('D');
     } else {
       axesNonExecutes.add('D');
+      constats.push(constatAxeDIgnoreParOption());
       console.error('→ Analyse dynamique ignorée (--sans-dynamique).');
     }
 
@@ -223,7 +229,7 @@ function diffRapports(argv) {
 async function resoudreCible(cible) {
   if (!/^(https?:\/\/|git@)/.test(cible)) {
     const abs = path.resolve(cible);
-    if (!fs.existsSync(abs)) throw new Error(`Chemin introuvable : ${abs}`);
+    if (!fs.existsSync(abs)) throw new CibleRefusee(`chemin introuvable : ${abs}`);
     return { racine: abs, temporaire: false, identite: path.basename(abs.replace(/\/$/, '')) };
   }
 
@@ -238,12 +244,30 @@ async function resoudreCible(cible) {
   const dest = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-clone-'));
   console.error(`→ Clonage de ${cible}…`);
   try {
-    execFileSync('git', ['clone', '--depth', '1', cible, dest], { stdio: 'inherit', timeout: 120_000 });
+    // La sortie d'erreur de git est captée pour pouvoir dire pourquoi le clonage
+    // a échoué (un refus du proxy de sortie n'est pas une panne de l'outil) ;
+    // elle est réaffichée telle quelle en cas d'échec.
+    execFileSync('git', ['clone', '--depth', '1', cible, dest], { stdio: ['ignore', 'ignore', 'pipe'], encoding: 'utf8', timeout: 120_000 });
   } catch (e) {
     fs.rmSync(dest, { recursive: true, force: true });
-    throw e;
+    if (e?.code === 'ENOENT') throw e; // git absent : une panne d'installation, pas une cible refusée
+    throw new CibleRefusee(expliquerEchecClonage(cible, e));
   }
   return { racine: dest, temporaire: true, identite: identiteDepuisUrl(cible) };
+}
+
+/** Erreur attribuable à la cible (refusée, injoignable, chemin faux) et non à l'outil : sortie nette, sans pile, code 4. */
+class CibleRefusee extends Error {}
+
+/** Pourquoi `git clone` a échoué, dit sans la pile de Node : refus du proxy de sortie, délai, ou dernières lignes de git. */
+function expliquerEchecClonage(cible, e) {
+  const sortieGit = String(e?.stderr ?? '').replace(/\x1b\[[0-9;]*m/g, '').trim();
+  const dernieres = sortieGit.split('\n').map((l) => l.trim()).filter(Boolean).slice(-3).join(' | ');
+  if (/CONNECT tunnel failed, response 403|\b403\b.*Forbidden|Received HTTP code 403 from proxy/i.test(sortieGit)) {
+    return `le proxy de sortie a refusé la connexion (403) pour ${cible} : hôte hors de la liste autorisée, ou nom qui résout vers une adresse interne. Détail de git : ${dernieres}`;
+  }
+  if (e?.killed || e?.signal === 'SIGTERM' || e?.code === 'ETIMEDOUT') return `le clonage de ${cible} n'a pas abouti dans le délai de 120 s.`;
+  return `le clonage de ${cible} a échoué (git a rendu le code ${e?.status ?? 'inconnu'})${dernieres ? ` : ${dernieres}` : ''}`;
 }
 
 /** Dernier segment significatif de l'URL (nom de dépôt), pour nommer le rapport et l'identifier — pas le nom du dossier temporaire de clone, qui n'a aucun sens pour l'utilisateur. */
@@ -301,17 +325,20 @@ function contientUserinfoOuBackslash(cible) {
 
 async function validerHoteClone(cible) {
   if (contientUserinfoOuBackslash(cible)) {
-    throw new Error(`Clonage refusé : l'URL contient un caractère '\\' ou des identifiants (userinfo) — les deux permettent de tromper la validation de l'hôte cible : ${cible}`);
+    throw new CibleRefusee(`Clonage refusé : l'URL contient un caractère '\\' ou des identifiants (userinfo) — les deux permettent de tromper la validation de l'hôte cible : ${cible}`);
   }
   let hote;
   if (/^https:\/\//i.test(cible)) {
-    hote = new URL(cible).hostname;
+    // Un littéral IPv6 garde ses crochets dans `hostname` (« [::1] ») : sans
+    // eux, `net.isIP` le prend pour un nom et le contrôle des adresses
+    // internes ne le voit plus.
+    hote = new URL(cible).hostname.replace(/^\[(.*)\]$/, '$1');
   } else if (/^http:\/\//i.test(cible)) {
-    throw new Error(`Clonage refusé (http non chiffré) : ${cible} — utiliser une URL https:// ou git@.`);
+    throw new CibleRefusee(`Clonage refusé (http non chiffré) : ${cible} — utiliser une URL https:// ou git@.`);
   } else if (/^git@/i.test(cible)) {
     hote = cible.match(/^git@([^:]+):/i)?.[1];
   }
-  if (!hote) throw new Error(`Impossible de déterminer l'hôte cible pour : ${cible}`);
+  if (!hote) throw new CibleRefusee(`Impossible de déterminer l'hôte cible pour : ${cible}`);
 
   // Zone d'exécution V2 : le conteneur n'a AUCUNE résolution DNS externe
   // (réseau interne, seul egress-proxy sort, docker-compose.v2-execution.yml)
@@ -323,19 +350,21 @@ async function validerHoteClone(cible) {
   // refusé), au moment même de la connexion — ce qui ferme aussi le DNS
   // rebinding que cette vérification-ci ne peut pas fermer. Jamais activé
   // sans proxy configuré, ni par défaut : l'usage V1 local garde la
-  // vérification complète. Une adresse IP littérale reste vérifiée ici.
-  if (resolutionParProxy() && !net.isIP(hote)) {
+  // vérification complète. Une adresse IP littérale reste vérifiée ici, comme un
+  // nom que NO_PROXY fait joindre sans proxy : git s'y connecterait alors
+  // directement, et personne d'autre ne vérifierait l'adresse.
+  if (resolutionParProxy() && !net.isIP(hote) && !contourneLeProxy(hote)) {
     if (/^git@/i.test(cible)) {
-      throw new Error(`Clonage refusé : une URL SSH (git@) ne peut pas passer par le proxy de sortie de la zone d'exécution — utiliser une URL https:// : ${cible}`);
+      throw new CibleRefusee(`Clonage refusé : une URL SSH (git@) ne peut pas passer par le proxy de sortie de la zone d'exécution — utiliser une URL https:// : ${cible}`);
     }
     return;
   }
 
   const adresses = net.isIP(hote) ? [hote] : (await dns.lookup(hote, { all: true }).catch(() => [])).map((a) => a.address);
-  if (!adresses.length) throw new Error(`Résolution DNS impossible pour l'hôte de clonage : ${hote}`);
+  if (!adresses.length) throw new CibleRefusee(`Résolution DNS impossible pour l'hôte de clonage : ${hote}`);
   for (const adresse of adresses) {
     if (estAdresseInterne(adresse)) {
-      throw new Error(`Clonage refusé : l'hôte ${hote} résout vers une adresse interne (${adresse}).`);
+      throw new CibleRefusee(`Clonage refusé : l'hôte ${hote} résout vers une adresse interne (${adresse}).`);
     }
   }
 }
@@ -343,6 +372,25 @@ async function validerHoteClone(cible) {
 /** Vrai seulement si l'appelant (compose V2) l'a demandé ET qu'un proxy de sortie est réellement configuré : sans proxy, personne d'autre ne vérifierait l'adresse. */
 function resolutionParProxy() {
   return process.env.GWAUDIT_RESOLUTION_PAR_PROXY === '1' && Boolean(process.env.HTTPS_PROXY || process.env.https_proxy);
+}
+
+/**
+ * Vrai si NO_PROXY / no_proxy fait joindre cet hôte sans proxy. git (libcurl)
+ * lit les deux écritures ; `*` désigne tout hôte, une entrée `exemple.org` ou
+ * `.exemple.org` désigne l'hôte et ses sous-domaines, un éventuel `:port` est
+ * ignoré. Dans le doute, l'hôte est tenu pour contourné : la résolution locale
+ * est alors exigée, ce qui échoue franchement là où il n'y a pas de DNS.
+ */
+function contourneLeProxy(hote) {
+  const nom = hote.toLowerCase();
+  for (const cle of ['NO_PROXY', 'no_proxy']) {
+    for (const brute of String(process.env[cle] ?? '').split(',')) {
+      const entree = brute.trim().toLowerCase().replace(/:\d+$/, '').replace(/^\./, '');
+      if (!entree) continue;
+      if (entree === '*' || nom === entree || nom.endsWith(`.${entree}`)) return true;
+    }
+  }
+  return false;
 }
 
 function estAdresseInterne(adresse) {
@@ -356,9 +404,25 @@ function estAdresseInterne(adresse) {
   }
   if (net.isIPv6(adresse)) {
     const a = adresse.toLowerCase();
-    return a === '::1' || a.startsWith('fc') || a.startsWith('fd') || a.startsWith('fe80:') || a.includes('::ffff:127.');
+    // IPv4 inscrit dans une adresse IPv6 (::ffff:a.b.c.d) : l'analyseur d'URL le
+    // réécrit en hexadécimal (::ffff:7f00:1), forme que l'ancien test textuel
+    // « ::ffff:127. » ne reconnaissait pas. On décode les 32 derniers bits et on
+    // juge l'adresse IPv4 obtenue.
+    const inscrit = /^(?:0{0,4}:){0,5}(?:ffff:)(?:(\d+\.\d+\.\d+\.\d+)|([0-9a-f]{1,4}):([0-9a-f]{1,4}))$/.exec(a);
+    if (inscrit) {
+      const v4 = inscrit[1] ?? `${parseInt(inscrit[2], 16) >> 8}.${parseInt(inscrit[2], 16) & 255}.${parseInt(inscrit[3], 16) >> 8}.${parseInt(inscrit[3], 16) & 255}`;
+      return estAdresseInterne(v4);
+    }
+    return a === '::1' || a === '::' || /^f[cd][0-9a-f]{2}:/.test(a) || /^fe[89ab][0-9a-f]:/.test(a);
   }
   return true;
 }
 
-main().catch((e) => { console.error('Erreur :', e?.stack ?? e); process.exitCode = 3; });
+main().catch((e) => {
+  // Une cible refusée ou inaccessible n'est pas une panne de l'outil : message
+  // net, pas de pile, code 4 — l'appelant (V2, interface) distingue ainsi « la
+  // soumission est refusée » de « gwaudit a planté » (3).
+  if (e instanceof CibleRefusee) { console.error(`Cible refusée ou inaccessible : ${e.message}`); process.exitCode = 4; return; }
+  console.error('Erreur :', e?.stack ?? e);
+  process.exitCode = 3;
+});

@@ -76,6 +76,17 @@ export const TABLE_APPAT_ID = 'GwauditAppat_NeJamaisReferencer_8f2c14';
  */
 const DELAI_GLOBAL_AXE_D_MS = Number(process.env.GWAUDIT_DELAI_AXE_D_MS) || 45_000;
 
+/**
+ * Délai laissé au seul chargement de la page (`page.goto`, jusqu'à l'événement
+ * `load`), dérivé du délai global : 30 s par défaut, et il suit
+ * GWAUDIT_DELAI_AXE_D_MS quand on l'allonge pour un widget légitimement lent.
+ * Il tombe avant le délai global, donc un widget qui bloque le navigateur
+ * pendant son chargement (boucle sans fin dans un script synchrone) ne
+ * déclenche jamais `DELAI_DEPASSE` : c'est ce timeout-là que le code doit
+ * reconnaître comme un blocage du widget, pas comme une panne de l'outil.
+ */
+const DELAI_CHARGEMENT_MS = Math.max(1_000, DELAI_GLOBAL_AXE_D_MS - 15_000);
+
 /** Course entre une promesse et un délai : rejette avec un message reconnaissable si le délai gagne. */
 function avecDelai(promesse, ms, libelle) {
   let minuteur;
@@ -157,6 +168,57 @@ function indiceBacASable(erreur) {
       .trim());
   const ligne = lignes.find((l) => MOTIF_CAUSE_BAC_A_SABLE.test(l)) ?? lignes.find((l) => MOTIF_SIGNE_BAC_A_SABLE.test(l));
   return ligne ? ligne.slice(0, 300) : null;
+}
+
+/**
+ * La cause d'une erreur de Playwright, pas seulement sa première ligne : sur un
+ * lancement de Chromium qui échoue, la première ligne est le message générique
+ * (« Target page, context or browser has been closed ») et la vraie cause
+ * (« Running as root without --no-sandbox… », « Executable doesn't exist at… »,
+ * « error while loading shared libraries… ») est dans le journal du navigateur
+ * qui suit. On garde ce journal, débarrassé des couleurs, du préfixe de
+ * processus et du cadre décoratif, et du « Call log » sauf la ligne qui dit
+ * comment le processus s'est arrêté (sa ligne de commande, elle, est longue et
+ * ne dit rien de la cause).
+ */
+export function resumerCauseErreur(erreur, max = 700) {
+  const lignes = String(erreur?.message ?? erreur).replace(/\x1b\[[0-9;]*m/g, '').split('\n');
+  const retenues = [];
+  let dansJournalAppel = false;
+  const nettoyer = (l) => l
+    .replace(/^[\s║]*|[\s║]*$/g, '')
+    .replace(/^-\s*/, '')
+    .replace(/^\[pid=\d+\](\[err\])?\s*/, '')
+    .replace(/^\[\d+:\d+:[\d/.]+:[A-Z]+:[^\]]*\]\s*/, '');
+  for (const brute of lignes) {
+    const l = nettoyer(brute);
+    if (/^Call log:?$/i.test(l)) { dansJournalAppel = true; continue; }
+    if (dansJournalAppel) {
+      // Du journal d'appel, seuls comptent ce que Chromium a écrit sur sa
+      // sortie d'erreur (déjà repris plus haut, dédoublonné) et la façon dont
+      // le processus s'est arrêté.
+      const arret = /<process did exit[^>]*>/i.exec(brute);
+      if (arret) retenues.push(arret[0]);
+      else if (/\[pid=\d+\]\[err\]/.test(brute) && l) retenues.push(l);
+      continue;
+    }
+    // La ligne de commande (`<launching> …`) est longue et ne dit rien de la cause.
+    if (!l || /^Browser logs:?$/i.test(l) || /^<launch(ing|ed)>/i.test(l) || /^[╔╗╚╝═\s]+$/.test(l)) continue;
+    retenues.push(l);
+  }
+  const texte = [...new Set(retenues)].join(' ; ').slice(0, max);
+  return texte || 'erreur sans message';
+}
+
+/** L'axe D n'a pas été exécuté parce que l'utilisateur l'a demandé (--sans-dynamique) : le rapport le dit, pour qu'un axe absent ne se lise jamais sans sa raison. */
+export function constatAxeDIgnoreParOption() {
+  return constat({
+    regle: 'D-INDISPONIBLE-OPTION', axe: 'D', severite: 'info', confiance: 'certain',
+    titre: "Analyse dynamique non exécutée : option --sans-dynamique",
+    constat: "L'audit a été lancé avec --sans-dynamique : le widget n'a pas été exécuté dans un navigateur, seules les analyses statiques (axes A, B, C, E, F) ont tourné.",
+    impact: "Les constats de l'axe D (comportement réel du widget : réseau, XSS à l'exécution, accessibilité rendue) sont absents. Ce n'est pas une absence de risque, c'est une absence de mesure ; le verdict ne peut pas être « CONFORME » sans cet axe.",
+    remediation: "Relancer sans --sans-dynamique pour mesurer l'axe D (Chromium requis : `npx playwright install chromium`).",
+  });
 }
 
 /** Marqueur d'information (jamais dans le verdict) : l'axe D a tourné, mais dans un Chromium sans bac à sable, par dérogation explicite. */
@@ -526,7 +588,7 @@ export async function auditDynamique(ctx, options = {}) {
         serveurChromium = undefined;
         navigateur = undefined;
         if (tentative < TENTATIVES_LANCEMENT) {
-          console.error(`⚠ Échec du lancement de Chromium (tentative ${tentative}/${TENTATIVES_LANCEMENT}), nouvel essai : ${String(e?.message ?? e).split('\n')[0]}`);
+          console.error(`⚠ Échec du lancement de Chromium (tentative ${tentative}/${TENTATIVES_LANCEMENT}), nouvel essai : ${resumerCauseErreur(e, 400)}`);
           await new Promise((r) => setTimeout(r, 1000));
         }
       }
@@ -619,10 +681,11 @@ export async function auditDynamique(ctx, options = {}) {
     // mais rien ne bornait ce qui suit — `page.evaluate()` n'a pas de
     // timeout propre et attendrait indéfiniment un widget qui bloque le
     // thread principal après le chargement initial.
-    let delaiDepasse = false;
+    let delaiDepasse = null;
+    let causeDelai = null;
     try {
       await avecDelai((async () => {
-        await page.goto(`${origine}/harnais/page-hote.html`, { waitUntil: 'load', timeout: 30000 });
+        await page.goto(`${origine}/harnais/page-hote.html`, { waitUntil: 'load', timeout: DELAI_CHARGEMENT_MS });
         await page.waitForFunction(() => window.__hotePret === true, { timeout: 20000 }).catch(() => {});
 
         brut.journalHote = await page.evaluate(() => window.__hoteJournal ?? null).catch(() => null);
@@ -651,20 +714,39 @@ export async function auditDynamique(ctx, options = {}) {
         } catch (e) { brut.a11yErreur = String(e?.message ?? e); }
       })(), DELAI_GLOBAL_AXE_D_MS, 'scenario-navigateur');
     } catch (e) {
-      if (String(e?.message ?? '').startsWith('DELAI_DEPASSE:')) delaiDepasse = true;
+      // Deux façons pour un widget de garder le navigateur occupé jusqu'au
+      // délai : le chargement lui-même (`goto` échoue par un TimeoutError de
+      // Playwright, plus tôt que le délai global) ou le scénario qui suit (le
+      // délai global). Dans les deux cas c'est un blocage attribuable au widget,
+      // pas une panne de l'outil : il ne doit jamais retomber dans le filet
+      // générique, qui ferait passer l'axe D pour « non exécuté » et ferait
+      // mieux noter le widget qui empêche la mesure que celui qui la permet.
+      if (String(e?.message ?? '').startsWith('DELAI_DEPASSE:')) { delaiDepasse = 'scenario'; causeDelai = String(e.message); }
+      else if (e?.name === 'TimeoutError') { delaiDepasse = 'chargement'; causeDelai = resumerCauseErreur(e, 200); }
       else throw e;
     }
 
     // --- Constats ---
 
     if (delaiDepasse) {
+      const secondes = Math.round((delaiDepasse === 'chargement' ? DELAI_CHARGEMENT_MS : DELAI_GLOBAL_AXE_D_MS) / 1000);
+      const requetesTierces = brut.requetes.length;
+      const observe = `${requetesTierces} requête(s) vers un domaine tiers, ${brut.consoles.length} message(s) de console, ${brut.erreursPage.length} erreur(s) de page`;
       constats.push(constat({
-        regle: 'D-TIMEOUT-01', axe: 'D', severite: 'majeur', confiance: 'prouve',
-        titre: `Le scénario de test n'a pas terminé dans le délai imparti (${Math.round(DELAI_GLOBAL_AXE_D_MS / 1000)}s)`,
-        constat: "Le chargement et les vérifications de l'axe D n'ont pas pu se terminer dans le temps alloué : le widget occupe le navigateur au-delà de ce qu'un simple scénario de chargement justifie normalement.",
-        impact: "Les vérifications de cet axe qui n'ont pas eu le temps de s'exécuter sont absentes du rapport ci-dessous — leur absence ne vaut pas conformité.",
-        remediation: "Vérifier si le widget contient une boucle bloquante ou un traitement long au chargement. Si le widget a légitimement besoin de plus de temps, relancer avec la variable d'environnement GWAUDIT_DELAI_AXE_D_MS.",
+        regle: 'D-TIMEOUT-01', axe: 'D', severite: 'critique', bloquant: true, confiance: 'prouve', mesurePartielle: true,
+        titre: delaiDepasse === 'chargement'
+          ? `Le widget n'a pas fini de charger dans le délai imparti (${secondes} s) : l'analyse dynamique n'a pas pu l'observer`
+          : `Le scénario de test n'a pas terminé dans le délai imparti (${secondes} s) : l'analyse dynamique n'a pas pu le mener à bout`,
+        constat: `${delaiDepasse === 'chargement'
+          ? `La page du widget, servie en local à un navigateur dont le réseau est coupé, n'a pas fini de charger en ${secondes} s`
+          : `Le chargement a abouti, mais le scénario qui suit (échange avec l'hôte Grist de test, vérifications) n'a pas terminé en ${secondes} s`} : le widget occupe le navigateur bien au-delà de ce qu'un chargement justifie (boucle sans fin, traitement démesuré au démarrage). Ce que l'audit avait pu observer avant le blocage reste dans ce rapport : ${observe}. Ce que le widget a fait au moment même où il s'est bloqué n'a pas pu être observé.`,
+        impact: "Le navigateur étant occupé, le reste de l'axe D (négociation d'accès Grist, table appât, injection de valeurs de cellule, accessibilité rendue) n'a pas pu être mesuré : l'absence de ces constats ne vaut pas conformité. Un widget qui empêche ainsi la mesure ne doit pas être mieux noté que le même widget qui la laisse se dérouler, ce qui rendrait le blocage rentable pour qui veut cacher un comportement : ce constat est donc bloquant. Ce n'est qu'un signal de risque, pas une interdiction.",
+        remediation: "Chercher la boucle bloquante ou le traitement long au démarrage du widget. Si le widget a légitimement besoin de plus de temps, relancer avec GWAUDIT_DELAI_AXE_D_MS (délai global du scénario, 45000 par défaut ; le délai de chargement en est déduit : 15 s de moins).",
+        preuve: { phase: delaiDepasse, delaiMs: delaiDepasse === 'chargement' ? DELAI_CHARGEMENT_MS : DELAI_GLOBAL_AXE_D_MS, cause: causeDelai, observeAvantBlocage: { requetesTierces, messagesConsole: brut.consoles.length, erreursPage: brut.erreursPage.length } },
       }));
+      // axe-core n'a pas tourné : le dire, plutôt que de laisser « aucune
+      // violation d'accessibilité » se lire dans un rapport sans mesure.
+      if (brut.a11y == null && !brut.a11yErreur) brut.a11yErreur = `le scénario n'a pas abouti dans le délai (${secondes} s) : axe-core n'a pas été exécuté sur le widget`;
     }
 
     if (brut.erreurHote) {
@@ -677,7 +759,7 @@ export async function auditDynamique(ctx, options = {}) {
       }));
     }
 
-    constats.push(...constatsReseau(brut.requetes, brut.substitutionApiGrist));
+    constats.push(...constatsReseau(brut.requetes, brut.substitutionApiGrist, { scenarioComplet: !delaiDepasse }));
     constats.push(...constatsXss(brut.xssExecutes));
     constats.push(...constatsA11y(brut.a11y, brut.a11yErreur));
     constats.push(...constatsConsole(brut.consoles, brut.erreursPage, brut.requetes.length));
@@ -709,9 +791,9 @@ export async function auditDynamique(ctx, options = {}) {
       constats: [constat({
         regle: 'D-INDISPONIBLE', axe: 'D', severite: 'info', confiance: 'certain',
         titre: "Analyse dynamique non exécutée : l'axe D a échoué",
-        constat: `${String(e?.message ?? e).split('\n')[0]}`,
+        constat: resumerCauseErreur(e),
         impact: "Les constats de l'axe D (comportement réel du widget : réseau, XSS à l'exécution, accessibilité rendue) ne peuvent pas être produits. Ce n'est pas une absence de risque, c'est une absence de mesure.",
-        remediation: "Voir le message ci-dessus pour la cause. Si Chromium n'est pas installé : `npx playwright install chromium`. Sinon, relancer avec `--sans-dynamique` pour ignorer cet axe en attendant.",
+        remediation: "Traiter la cause indiquée dans le constat. Si Chromium n'est pas installé : `npx playwright install chromium`. Sinon, relancer avec `--sans-dynamique` pour ignorer cet axe en attendant.",
       })],
       brut: null,
       nonExecute: true,
@@ -731,7 +813,7 @@ export async function auditDynamique(ctx, options = {}) {
   return { constats, brut };
 }
 
-function constatsReseau(requetes, substitutionApiGrist = []) {
+function constatsReseau(requetes, substitutionApiGrist = [], { scenarioComplet = true } = {}) {
   const constats = [];
   if (substitutionApiGrist.length) {
     constats.push(constat({
@@ -743,6 +825,10 @@ function constatsReseau(requetes, substitutionApiGrist = []) {
     }));
   }
   if (!requetes.length) {
+    // Un scénario interrompu (D-TIMEOUT-01) n'a pas « joué » chargement,
+    // réception de données et modification : il ne peut pas conclure que
+    // rien n'est sorti. L'absence de requête n'est alors pas un constat.
+    if (!scenarioComplet) return constats;
     constats.push(constat({
       regle: 'D-RESEAU-00', axe: 'D', severite: 'info', confiance: 'prouve',
       titre: 'Aucune requête vers un domaine tiers observée à l\'exécution',

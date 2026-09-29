@@ -142,3 +142,83 @@ test('mode proxy : userinfo et backslash restent refusés avant toute connexion'
     await proxy.fermer();
   }
 });
+
+// ---------------------------------------------------------------------------
+// Trois défauts de GWAUDIT_RESOLUTION_PAR_PROXY relevés à la revue (2026-09-29).
+
+const ENV_PROXY = (proxy) => ({ GWAUDIT_RESOLUTION_PAR_PROXY: '1', HTTPS_PROXY: `http://127.0.0.1:${proxy.port}`, https_proxy: `http://127.0.0.1:${proxy.port}` });
+const SANS_PILE = /\n\s+at \S/;
+
+test('mode proxy : NO_PROXY fait joindre l\'hôte sans proxy — la résolution locale redevient exigée, git ne contourne jamais un contrôle sauté', async () => {
+  const proxy = await proxyEspion();
+  try {
+    const nom = 'nom-qui-ne-resout-nulle-part.invalid';
+    // Ce qui doit compter comme « contourné », en majuscules comme en minuscules.
+    for (const [cle, valeur] of [['NO_PROXY', nom], ['no_proxy', nom], ['NO_PROXY', 'invalid'], ['NO_PROXY', '.invalid'], ['NO_PROXY', `autre.example, ${nom}:443`], ['NO_PROXY', '*']]) {
+      const r = await lancer(`https://${nom}/x.git`, { ...ENV_PROXY(proxy), [cle]: valeur });
+      assert.match(r.stderr, /Résolution DNS impossible/, `${cle}=${valeur} : la résolution locale doit être exigée`);
+      assert.equal(proxy.connect.length, 0, `${cle}=${valeur} : aucune connexion ne doit partir`);
+    }
+    // Un NO_PROXY qui ne le désigne pas ne change rien : la résolution reste au proxy.
+    const r = await lancer(`https://${nom}/x.git`, { ...ENV_PROXY(proxy), NO_PROXY: 'autre.example,10.0.0.0/8,localhost' });
+    assert.doesNotMatch(r.stderr, /Résolution DNS impossible/);
+    assert.ok(proxy.connect.some((l) => l.startsWith(`CONNECT ${nom}:443 `)), JSON.stringify(proxy.connect));
+  } finally {
+    await proxy.fermer();
+  }
+});
+
+const INTERNES_IPV6 = ['[::1]', '[::]', '[::ffff:127.0.0.1]', '[::ffff:10.0.0.1]', '[::ffff:c0a8:1]', '[::ffff:a9fe:a9fe]', '[fd00::1]', '[fc00::1]', '[fe80::1]', '[febf::1]', '[0:0:0:0:0:ffff:7f00:1]'];
+
+test('un littéral IPv6 interne est refusé, avec ou sans proxy, sans qu\'aucune connexion parte (les crochets ne le rendent pas invisible)', async () => {
+  const proxy = await proxyEspion();
+  try {
+    for (const hote of INTERNES_IPV6) {
+      for (const [mode, env] of [['proxy', ENV_PROXY(proxy)], ['sans proxy', {}]]) {
+        const r = await lancer(`https://${hote}:1/x.git`, env);
+        assert.match(r.stderr, /Clonage refusé : l'hôte [^\n]*adresse interne/, `${hote} (${mode}) doit être refusé ICI comme adresse interne (et non par le proxy) : ${r.stderr.slice(0, 200)}`);
+        assert.equal(r.code, 4, `${hote} (${mode}) : code de sortie`);
+      }
+    }
+    assert.equal(proxy.connect.length, 0, `aucune connexion ne doit partir : ${JSON.stringify(proxy.connect)}`);
+  } finally {
+    await proxy.fermer();
+  }
+});
+
+test("un littéral IPv6 public n'est pas pris pour une adresse interne : la demande part vers le proxy", async () => {
+  const proxy = await proxyEspion();
+  try {
+    for (const hote of ['[2606:4700:4700::1111]', '[2001:4860:4860::8888]']) {
+      const r = await lancer(`https://${hote}/x.git`, ENV_PROXY(proxy));
+      assert.doesNotMatch(r.stderr, /Clonage refusé/, `${hote} : à tort refusé comme interne par la validation locale`);
+    }
+    assert.equal(proxy.connect.length, 2, JSON.stringify(proxy.connect));
+    assert.ok(proxy.connect.every((l) => /^CONNECT \[[0-9a-f:]+\]:443 /.test(l)), JSON.stringify(proxy.connect));
+  } finally {
+    await proxy.fermer();
+  }
+});
+
+test('un refus du proxy de sortie est dit en clair, sans pile, avec le code 4 — pas une erreur interne (3)', async () => {
+  const proxy = await proxyEspion(); // répond 403 à tout CONNECT
+  try {
+    const r = await lancer('https://hote-hors-liste.example/x.git', ENV_PROXY(proxy));
+    assert.equal(r.code, 4, r.stderr.slice(0, 300));
+    assert.match(r.stderr, /Cible refusée ou inaccessible : le proxy de sortie a refusé la connexion \(403\)/);
+    assert.match(r.stderr, /hote-hors-liste\.example/);
+    assert.doesNotMatch(r.stderr, SANS_PILE, 'aucune pile de Node ne doit sortir pour une cible refusée');
+    assert.doesNotMatch(r.stderr, /Erreur :/);
+  } finally {
+    await proxy.fermer();
+  }
+});
+
+test('un refus de validation ou un chemin introuvable : code 4 et message net, jamais la pile', async () => {
+  for (const cible of ['https://un-identifiant@github.com/lombre33/x', 'http://github.com/lombre33/x', path.join(import.meta.dirname, 'aucun-dossier-ici')]) {
+    const r = await lancer(cible, {});
+    assert.equal(r.code, 4, `${cible} : ${r.stderr.slice(0, 200)}`);
+    assert.match(r.stderr, /^Cible refusée ou inaccessible : /m, cible);
+    assert.doesNotMatch(r.stderr, SANS_PILE, cible);
+  }
+});

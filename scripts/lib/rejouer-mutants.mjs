@@ -24,6 +24,8 @@ import { fileURLToPath } from 'node:url';
 
 export const RACINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const DELAI_MS = 10 * 60 * 1000;
+/** Ce que la copie contient par défaut ; un script dont les tests lancent `bin/gwaudit.js` ou lisent `docker/` ajoute ce qu'il lui faut via `dossiers`. */
+export const DOSSIERS_COPIES = ['src', 'tests', 'fixtures', 'scripts'];
 
 /**
  * @param {{
@@ -31,12 +33,13 @@ const DELAI_MS = 10 * 60 * 1000;
  *   groupes: Array<{ nom: string, fichiers: string[] }>,
  *   exigerChromium?: boolean,
  *   partie?: ?{ i: number, n: number },
+ *   dossiers?: string[],
  * }} options `groupes` : suites lancées dans l'ordre, la première qui échoue tue le mutant.
  *   `partie` : ne rejouer que le i-ième des n paquets (1 à n), pour lancer n processus à la fois ; chacun a sa copie, et
  *   vérifie quand même tous les mutants avant de commencer.
  * @returns {number} le code de sortie
  */
-export function rejouerMutants({ mutants, groupes, exigerChromium = true, partie = null }) {
+export function rejouerMutants({ mutants, groupes, exigerChromium = true, partie = null, dossiers = DOSSIERS_COPIES }) {
   if (exigerChromium && !process.env.GWAUDIT_CHROMIUM_PATH) {
     console.error('GWAUDIT_CHROMIUM_PATH est requis : le différentiel Chromium fait partie de la preuve, un test sauté ne tuerait rien.');
     return 2;
@@ -59,7 +62,7 @@ export function rejouerMutants({ mutants, groupes, exigerChromium = true, partie
   };
 
   try {
-    for (const dossier of ['src', 'tests', 'fixtures', 'scripts']) if (fs.existsSync(path.join(RACINE, dossier))) fs.cpSync(path.join(RACINE, dossier), path.join(copie, dossier), { recursive: true });
+    for (const dossier of dossiers) if (fs.existsSync(path.join(RACINE, dossier))) fs.cpSync(path.join(RACINE, dossier), path.join(copie, dossier), { recursive: true });
     fs.copyFileSync(path.join(RACINE, 'package.json'), path.join(copie, 'package.json'));
     fs.symlinkSync(path.join(RACINE, 'node_modules'), path.join(copie, 'node_modules'));
 

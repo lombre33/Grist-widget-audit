@@ -154,10 +154,10 @@ function sectionAxe(axe) {
       <div class="axe-entete">
         <h2 id="titre-axe-${axe.code}"><span class="axe-code">${axe.code}</span> ${echapper(axe.titre)}</h2>
         ${axe.nonExecute
-          ? '<p class="axe-non-execute">Axe non exécuté lors de cet audit.</p>'
+          ? `<p class="axe-non-execute">Axe non exécuté lors de cet audit${constats.length ? ' — voici pourquoi.' : '.'}</p>`
           : `<p class="axe-score">Score <strong>${axe.score}/100</strong> — ${chipsSeverite(axe.repartition)}</p>`}
       </div>
-      ${axe.nonExecute ? '' : `<div class="liste-constats">${grouperEtRendre(constats)}</div>`}
+      ${constats.length ? `<div class="liste-constats">${grouperEtRendre(constats)}</div>` : ''}
     </section>`;
 }
 
