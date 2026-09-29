@@ -157,6 +157,21 @@ test("un lancement de Chromium qui échoue : sa cause est dite partout, et l'ave
   assert.match(stderr, /nouvel essai[^\n]*libnss3\.so/, "l'avertissement de relance doit citer la cause");
 });
 
+test("un refus du bac à sable (root) : la cause et les deux issues sont dans le JSON, le Markdown et le HTML — pas seulement « Axe non exécuté »", { skip: SOUS_WINDOWS && 'faux Chromium en script shell' }, (t) => {
+  const exe = fauxChromium(t, 'Running as root without --no-sandbox is not supported. See https://crbug.com/638180.');
+  // aide-chromium pose la dérogation pour toute la suite : ici c'est justement son absence qui est éprouvée.
+  const { rapport, md, html } = auditer(t, EXEMPLE, { env: { GWAUDIT_CHROMIUM_PATH: exe, GWAUDIT_CHROMIUM_SANS_SANDBOX: '' } });
+  assert.equal(rapport.axes.D.nonExecute, true);
+  const c = constatsD(rapport, 'D-INDISPONIBLE');
+  assert.equal(c.length, 1);
+  assert.match(c[0].titre, /bac à sable/);
+  for (const [nom, texte] of [['JSON', JSON.stringify(rapport)], ['Markdown', md], ['HTML', html]]) {
+    assert.match(texte, /Running as root without --no-sandbox/, `${nom} : la cause doit y être`);
+    assert.match(texte, /Deux issues/, `${nom} : les deux issues doivent y être`);
+    assert.match(texte, /GWAUDIT_CHROMIUM_SANS_SANDBOX=1/, `${nom} : la dérogation explicite doit y être nommée`);
+  }
+});
+
 // ------------------------------------------------ 2 et 3. le widget qui bloque
 
 const BOUCLE = '<!doctype html><html lang="fr"><head><title>t</title></head><body><script>for(;;){}</script></body></html>\n';

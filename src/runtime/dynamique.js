@@ -225,8 +225,8 @@ export function constatAxeDIgnoreParOption() {
 function constatSansBacASable() {
   return constat({
     regle: 'D-INDISPONIBLE-BAC-A-SABLE', axe: 'D', severite: 'info', confiance: 'certain',
-    titre: 'Axe D exécuté sans le bac à sable de Chromium (dérogation explicite)',
-    constat: "GWAUDIT_CHROMIUM_SANS_SANDBOX=1 est posée : le navigateur qui a exécuté le widget audité tournait avec --no-sandbox.",
+    titre: 'Axe D lancé sans le bac à sable de Chromium (dérogation explicite)',
+    constat: "GWAUDIT_CHROMIUM_SANS_SANDBOX=1 est posée : le navigateur lancé pour l'axe D tournait avec --no-sandbox, et le widget audité, dès qu'il a été chargé, y a été exécuté.",
     impact: "Le widget audité est du code non fiable. Sans bac à sable, une faille du moteur de rendu que ce code exploiterait lui donnerait les droits du processus qui a lancé l'audit. Les constats de l'axe D restent valables : c'est l'isolation de la machine qui a été réduite, pas la mesure. Ce marqueur n'entre pas dans le verdict.",
     remediation: "Retirer la dérogation et corriger l'environnement pour que le bac à sable démarre : ne pas lancer l'audit en root, autoriser les espaces de noms utilisateur non privilégiés, ou en conteneur le profil seccomp et la capacité SYS_CHROOT de docker/execution (docs/ARCHITECTURE-V2.md §4).",
   });
@@ -528,6 +528,7 @@ export async function auditDynamique(ctx, options = {}) {
   const constats = [];
   const brut = { requetes: [], requetesLocales: [], substitutionApiGrist: [], consoles: [], erreursPage: [], journalHote: null, a11y: null };
   let navigateur, page, arreterServeur, serveurChromium, dossierTravail;
+  let demarreSansBacASable = false;
 
   try {
     // Dossier de scratch de l'axe D : sur le disque temporaire du système
@@ -601,7 +602,7 @@ export async function auditDynamique(ctx, options = {}) {
       if (indice) throw Object.assign(new Error(indice), { causeBacASable: true });
       throw erreurLancement;
     }
-    if (!bacASableChromium()) constats.push(constatSansBacASable());
+    if (!bacASableChromium()) { constats.push(constatSansBacASable()); demarreSansBacASable = true; }
     const contexte = await navigateur.newContext({ locale: 'fr-FR', viewport: { width: 1280, height: 900 } });
     page = await contexte.newPage();
 
@@ -787,8 +788,10 @@ export async function auditDynamique(ctx, options = {}) {
         nonExecute: true,
       };
     }
+    // Chromium a démarré sous dérogation avant l'échec : le marqueur reste, quelle
+    // que soit l'issue — le navigateur, lui, a bien tourné sans bac à sable.
     return {
-      constats: [constat({
+      constats: [...(demarreSansBacASable ? [constatSansBacASable()] : []), constat({
         regle: 'D-INDISPONIBLE', axe: 'D', severite: 'info', confiance: 'certain',
         titre: "Analyse dynamique non exécutée : l'axe D a échoué",
         constat: resumerCauseErreur(e),
