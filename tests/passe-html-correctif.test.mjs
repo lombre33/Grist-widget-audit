@@ -158,6 +158,11 @@ test('point 5 : un iframe en commentaire ne produit pas de C-DOM-02, un vrai ifr
 test('point 5 : un worker écrit dans un gabarit text/template ou en commentaire n\'entre pas dans la surface, celui d\'un script exécuté si', () => {
   widget({ 'index.html': '<!doctype html><script type="text/template">new Worker("w.js")</script>', 'w.js': 'x()' }, (ctx) => assert.deepEqual(surface(ctx), ['index.html']));
   widget({ 'index.html': '<!doctype html><script>new Worker("w.js")</script>', 'w.js': 'x()' }, (ctx) => assert.deepEqual(surface(ctx), ['index.html', 'w.js']));
+  // Un script exécuté n'ouvre pas la porte au reste de la page : un worker écrit dans un gabarit ou un commentaire de la même page reste dehors.
+  widget({
+    'index.html': '<!doctype html><script>x()</script><script type="text/template">new Worker("w.js")</script><!-- new Worker("v.js") -->',
+    'w.js': 'x()', 'v.js': 'x()',
+  }, (ctx) => assert.deepEqual(surface(ctx), ['index.html']));
 });
 
 test('point 5 : F-RGAA-02 lit le titre comme document.title (un titre en commentaire ou en gabarit ne compte pas)', () => {
@@ -191,12 +196,13 @@ test('point 6 : la position d\'un nœud d\'un script SVG est celle du fichier, m
 
 // Point 7 : références sans liaison lues dans l'AST -----------------------------
 
-test('point 7 : import sans liaison, export … from et import() littéral sont suivis ; commentaire, chaîne et import() calculé ne le sont pas', () => {
+// Un `import()` calculé qui commence par un dossier fixe (`./${nom}.js`) fait suivre tout ce dossier : voir tests/surface-references.test.mjs. Celui-ci n'a aucun début fixe.
+test('point 7 : import sans liaison, export … from et import() littéral sont suivis ; commentaire, chaîne et import() calculé sans début fixe ne le sont pas', () => {
   widget({
     'index.html': '<!doctype html><script type="module" src="main.js"></script>',
     'main.js': [
       "import './a.js';", "export * from './b.js';", "export { x } from './c.js';", 'import("./d.js");', 'import(`./e.js`);',
-      "// import './f.js';", "const t = \"import './g.js'\";", 'import(`./${nom}.js`);',
+      "// import './f.js';", "const t = \"import './g.js'\";", 'import(`${nom}.js`);',
     ].join('\n'),
     ...Object.fromEntries(['a', 'b', 'c', 'd', 'e', 'f', 'g'].map((n) => [`${n}.js`, 'x()'])),
   }, (ctx) => assert.deepEqual(surface(ctx), ['a.js', 'b.js', 'c.js', 'd.js', 'e.js', 'index.html', 'main.js']));

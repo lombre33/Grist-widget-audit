@@ -132,7 +132,7 @@ export function analyserReadme(ctx) {
 export function analyserCommentaires(ctx) {
   const constats = [];
   for (const f of ctx.fichiers) {
-    if (!f.executee || f.vendorise || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;
+    if (!f.executee || f.vendorise || f.dossierExclu || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;
     if ((f.locSignificatives ?? 0) < 200) continue;
 
     const lignesCommentees = f.lignes.filter((l) => /^\s*(\/\/|\/\*|\*)/.test(l)).length;
@@ -175,7 +175,7 @@ export function analyserSignauxGeneration(ctx) {
   ];
 
   for (const f of ctx.fichiers) {
-    if (!f.contenu || f.binaire || f.vendorise || !['.js', '.mjs', '.html'].includes(f.ext)) continue;
+    if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || !['.js', '.mjs', '.html'].includes(f.ext)) continue;
     if (f.chemin.endsWith('.md')) continue;
     for (const [re, libelle] of motifs) {
       const occurrences = [...f.contenu.matchAll(re)];
@@ -209,7 +209,7 @@ export function analyserSignauxGeneration(ctx) {
 /** Verbosité : le code est-il lisible « en une seule fois » ? */
 export function analyserVerbosite(ctx) {
   const constats = [];
-  const surface = ctx.fichiers.filter((f) => f.executee && !f.vendorise && ['.js', '.mjs'].includes(f.ext));
+  const surface = ctx.fichiers.filter((f) => f.executee && !f.vendorise && !f.dossierExclu && ['.js', '.mjs'].includes(f.ext));
   const loc = surface.reduce((s, f) => s + (f.locSignificatives ?? 0), 0);
   const html = ctx.fichiers.filter((f) => f.executee && ['.html', '.htm'].includes(f.ext))
     .reduce((s, f) => s + (f.locSignificatives ?? 0), 0);
@@ -233,7 +233,7 @@ export function analyserLangue(ctx) {
   const constats = [];
   let fr = 0, en = 0;
   for (const f of ctx.fichiers) {
-    if (!f.executee || f.vendorise || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;
+    if (!f.executee || f.vendorise || f.dossierExclu || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;
     for (const l of f.lignes) {
       const t = l.trim();
       if (!/^(\/\/|\*)/.test(t) || t.length < 20) continue;

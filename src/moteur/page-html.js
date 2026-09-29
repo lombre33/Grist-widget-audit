@@ -13,9 +13,11 @@
  * Pas encore une passe unique : `f-conformite.js` (F-RGAA) garde sa propre
  * marche du découpeur jusqu'à l'étape 3, où elle passera par `parcourirPage`.
  */
+import path from 'node:path';
 import { TokenizerMode, foreignContent, parse, defaultTreeAdapter } from 'parse5';
 import { Decoupeur } from './decoupeur-html.js';
 import { decoderUrlData } from './css.js';
+import { ORIGINE_LOCALE, preparerBase, resoudre } from './base-url.js';
 
 export const ELEMENTS_VIDES = new Set(['area', 'base', 'basefont', 'bgsound', 'br', 'col', 'embed', 'frame', 'hr', 'img', 'input', 'keygen', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
 
@@ -327,23 +329,23 @@ export function integriteProtege(valeur) {
   return valeur.split(/[\t\n\f\r ]+/).some((jeton) => /^sha(256|384|512)-[A-Za-z0-9+/_-]+={0,2}(\?.*)?$/.test(jeton));
 }
 
-/** Origine fictive des fichiers du widget : ce qui s'y résout est local pour l'analyse. */
-const ORIGINE_LOCALE = 'https://widget.local';
-
 /** URL de la page dans le widget : l'origine fictive suivie de son chemin, chaque segment encodé. */
 export function urlDePage(chemin = '') {
   return new URL(String(chemin).split('/').map(encodeURIComponent).join('/'), `${ORIGINE_LOCALE}/`);
 }
 
 /**
- * URL de base des références relatives d'une entrée, comme Chromium la
- * calcule depuis la valeur brute du `href` de la première `<base>` qui la
- * précède (`baseBrute`, null s'il n'y en a pas). Une base vide, invalide, ou
- * en `data:` ou `javascript:` laisse la base de la page ; une base relative
- * se résout contre l'URL de la page. Vérifié dans Chromium 141 (sonde de
- * bases : `data:`, `javascript:`, `about:blank`, `blob:`, `file:`, `ftp:`,
- * protocole relatif, chemin sans barre finale, espaces, fragment).
- * @returns {URL}
+ * Base des références relatives d'une entrée, comme Chromium la calcule depuis
+ * la valeur brute du `href` de la première `<base>` qui la précède
+ * (`baseBrute`, null s'il n'y en a pas). Une base vide, invalide, ou en `data:`
+ * ou `javascript:` laisse la base de la page ; une base relative se résout
+ * contre l'URL de la page. Vérifié dans Chromium 141 (sonde de bases :
+ * `data:`, `javascript:`, `about:blank`, `blob:`, `file:`, `ftp:`, protocole
+ * relatif, chemin sans barre finale, espaces, fragment).
+ * Une base qui se lit une fois et se résout autant de fois que la page a de
+ * références : voir `preparerBase`, qui garde le coût d'une référence
+ * indépendant de la longueur de la base sans rien en retrancher.
+ * @returns {{ url: URL, longue: object|null }}
  */
 export function baseDe(baseBrute, cheminPage = '') {
   // Mémorisée : une base de plusieurs Mo relue à chaque référence rendrait la résolution quadratique.
@@ -356,7 +358,7 @@ export function baseDe(baseBrute, cheminPage = '') {
   }
   let base = parChemin.get(cheminPage);
   if (base === undefined) {
-    base = calculerBase(baseBrute, cheminPage);
+    base = preparerBase(urlDeBase(baseBrute, cheminPage));
     parChemin.set(cheminPage, base);
   }
   return base;
@@ -364,7 +366,7 @@ export function baseDe(baseBrute, cheminPage = '') {
 
 const BASES = new Map();
 
-function calculerBase(baseBrute, cheminPage) {
+function urlDeBase(baseBrute, cheminPage) {
   const page = urlDePage(cheminPage);
   if (baseBrute === null || baseBrute === undefined) return page;
   const valeur = sansBlancsDeBord(baseBrute);
@@ -372,25 +374,19 @@ function calculerBase(baseBrute, cheminPage) {
   let base;
   try { base = new URL(valeur, page); } catch { return page; }
   if (base.protocol === 'data:' || base.protocol === 'javascript:') return page;
-  if (base.href.length > LIMITE_BASE) {
-    // Résoudre chaque référence contre une base de plusieurs Mo la recopie à chaque fois (quadratique) ; d'une telle base ne compte que l'origine.
-    if (base.protocol !== 'http:' && base.protocol !== 'https:') return new URL('about:blank');
-    return new URL(base.origin === ORIGINE_LOCALE ? `${base.origin}/-base-trop-longue-/` : `${base.origin}/`);
-  }
   return base;
 }
-
-const LIMITE_BASE = 4096;
 
 /**
  * URL absolue d'une référence d'une entrée de la page ; null si elle ne se
  * résout pas (une base `about:blank` ou `blob:` n'en résout aucune). Seules
  * les URL `http:` et `https:` chargent quelque chose : à l'appelant de
- * l'écarter pour `file:`, `ftp:`, `data:`…
- * @returns {URL|null}
+ * l'écarter pour `file:`, `ftp:`, `data:`… Sous une base longue, l'objet rendu
+ * offre les propriétés de lecture d'un `URL` (voir `UrlSousBaseLongue`).
+ * @returns {URL|import('./base-url.js').UrlSousBaseLongue|null}
  */
 export function urlDe(valeur, baseBrute, cheminPage = '') {
-  try { return new URL(valeur, baseDe(baseBrute, cheminPage)); } catch { return null; }
+  try { return resoudre(valeur, baseDe(baseBrute, cheminPage)); } catch { return null; }
 }
 
 /**
@@ -408,11 +404,16 @@ export function urlDeCarte(valeur, baseBrute, cheminPage = '') {
  * Chemin, dans le widget, du fichier qu'une URL désigne ; null si elle sort
  * du widget (autre origine : le fichier du même nom, s'il existe, n'est
  * jamais lu à sa place) ou ne se décode pas.
+ * Le chemin est celui que sert un serveur de fichiers : décodé (`%61pp.js`,
+ * `js%2Fapp.js`), puis normalisé (`js//app.js`, `js/./app.js` et
+ * `js/..%2Fapp.js` désignent `js/app.js` et `app.js`). Un chemin écrit pour que
+ * l'audit ne trouve pas le fichier que le navigateur demande est un code
+ * exécuté que personne n'a lu : dans le doute, on inclut.
  * @returns {string|null}
  */
 export function cheminLocal(url) {
   if (!url || url.origin !== ORIGINE_LOCALE) return null;
-  try { return decodeURIComponent(url.pathname.slice(1)); } catch { return null; }
+  try { return path.posix.normalize(decodeURIComponent(url.pathname)).slice(1); } catch { return null; }
 }
 
 const MENTION_GABARIT = 'dans un `<template>` : ne s\'exécute qu\'une fois le gabarit cloné puis inséré';
@@ -675,7 +676,8 @@ const CARACTERE_DE_REMPLACEMENT = String.fromCharCode(0xfffd);
  *
  * Chaque entrée dit aussi `dansTemplate` (le navigateur ne l'exécute qu'une
  * fois le gabarit cloné puis inséré) et `dansTete` (encore dans `<head>` au
- * sens du standard : une `<meta http-equiv>` de CSP n'agit que là).
+ * sens du standard, et hors de tout `<template>` : une `<meta http-equiv>` de
+ * CSP n'agit que là).
  * Résultat mis en cache par contenu : chaque règle qui lit la page la relit
  * sans la redécouper.
  *
@@ -704,7 +706,10 @@ const CARACTERE_DE_REMPLACEMENT = String.fromCharCode(0xfffd);
  * (`quirks`, voir `parcourirPage`), où une feuille `data:` de n'importe quel
  * type MIME est lue. Chaque `<link>` de `ressources` porte `usages` (voir
  * `usageLien`) : ce que le navigateur en charge, pas seulement son `href`.
- * @returns {{scripts: Array<object>, ressources: Array<object>, balises: Array<object>, feuilles: Array<object>, titre: ?string, quirks: boolean, positionDe: Function}}
+ * `baseFinale` est le `href` brut de la `<base>` que la page déclare (null sans
+ * base) : celle que voit le code qui tourne une fois la page lue, quand la
+ * `baseBrute` d'un script est celle qui le précède.
+ * @returns {{scripts: Array<object>, ressources: Array<object>, balises: Array<object>, feuilles: Array<object>, titre: ?string, quirks: boolean, positionDe: Function, baseFinale: ?string}}
  */
 export function lirePage(contenu) {
   const connu = CACHE.get(contenu);
@@ -856,7 +861,7 @@ export function lirePage(contenu) {
     const { ligne, colonne } = exacte ? positionDe(origine + decalage) : { ligne: entree.ligne, colonne: 0 };
     return { ligne, colonne, exacte, decalage: exacte ? origine + decalage : null };
   };
-  const resultat = { scripts, ressources, balises, feuilles, titre, quirks, positionDe, position };
+  const resultat = { scripts, ressources, balises, feuilles, titre, quirks, positionDe, position, baseFinale: baseBrute };
   if (CACHE.size >= TAILLE_CACHE) CACHE.clear();
   CACHE.set(contenu, resultat);
   return resultat;

@@ -9,7 +9,7 @@
  */
 import { parse } from 'acorn';
 import * as walk from 'acorn-walk';
-import { lirePage } from './page-html.js';
+import { lirePage, integriteProtege } from './page-html.js';
 
 /**
  * Extrait les unités de code JavaScript d'un fichier : le fichier entier pour
@@ -23,12 +23,16 @@ import { lirePage } from './page-html.js';
  * dans le fichier, y compris pour un texte SVG décodé), `mention` (ce qu'un
  * constat sur cette unité doit dire : gabarit inerte, exécution par le seul
  * standard) et `debutLigne`/`finLigne` (les lignes qu'elle couvre).
- * @returns {Array<{chemin:string, source:string, positionDe:?Function, mention:?string, debutLigne:number, finLigne:number, inline:boolean, module:boolean}>}
+ * Une unité inline porte aussi `baseBrute` (le `href` brut de la `<base>` qui
+ * la précède, null sinon) : ses références relatives se résolvent contre la
+ * base du document, quand celles d'un fichier .js se résolvent contre son
+ * propre emplacement.
+ * @returns {Array<{chemin:string, source:string, positionDe:?Function, mention:?string, debutLigne:number, finLigne:number, inline:boolean, module:boolean, baseBrute:?string}>}
  */
 export function unitesJs(fichier) {
   if (fichier.binaire || !fichier.contenu) return [];
   if (['.js', '.mjs', '.cjs', '.jsx'].includes(fichier.ext)) {
-    return [{ chemin: fichier.chemin, source: fichier.contenu, positionDe: null, mention: null, debutLigne: 1, finLigne: Infinity, inline: false, module: false }];
+    return [{ chemin: fichier.chemin, source: fichier.contenu, positionDe: null, mention: null, debutLigne: 1, finLigne: Infinity, inline: false, module: false, baseBrute: null }];
   }
   if (!['.html', '.htm'].includes(fichier.ext)) return [];
 
@@ -39,7 +43,7 @@ export function unitesJs(fichier) {
     unites.push({
       chemin: fichier.chemin, source: s.texte, positionDe: s.positionDe, mention: s.mention,
       debutLigne: page.positionDe(s.debutContenu).ligne, finLigne: page.positionDe(s.finContenu).ligne,
-      inline: true, module: s.genre === 'module',
+      inline: true, module: s.genre === 'module', baseBrute: s.baseBrute,
     });
   }
   return unites;
@@ -69,7 +73,8 @@ export function colonneDans(unite, noeud) {
  * @returns {(ligne: number) => ?string}
  */
 export function mentionsParLigne(fichier) {
-  if (!['.html', '.htm'].includes(fichier.ext) || !fichier.contenu) return () => null;
+  // Hors d'une page, la réserve est celle du fichier entier (`mention`, posée par l'inventaire : chargé seulement depuis un `<template>`, ou seulement par un module que le standard lit).
+  if (!['.html', '.htm'].includes(fichier.ext) || !fichier.contenu) return () => fichier.mention ?? null;
   const parLigne = new Map();
   for (const u of unitesJs(fichier)) {
     for (let ligne = u.debutLigne; ligne <= u.finLigne; ligne++) {
@@ -129,7 +134,7 @@ export function aCommentaireDansPortee(ast, noeud) {
 export function pourChaqueUniteJs(contexte, { surfaceSeulement = false, ignorerVendorise = false } = {}, visiteur) {
   for (const f of contexte.fichiers) {
     if (surfaceSeulement && !f.executee) continue;
-    if (ignorerVendorise && f.vendorise) continue;
+    if (ignorerVendorise && (f.vendorise || f.dossierExclu)) continue;
     for (const u of unitesJs(f)) {
       const ast = parser(u.source);
       if (!ast) { visiteur({ unite: u, ast: null, fichier: f, ligneDe: () => null, walk }); continue; }
@@ -180,12 +185,15 @@ export function estDynamique(noeud) {
  * Extrait les entrées d'un `<script type="importmap">` : chaque spécificateur
  * mappé (`imports`, et chaque bloc de `scopes`) avec l'URL cible et si elle
  * est couverte par la clé `integrity` de premier niveau (WHATWG — Import
- * Maps). Ce contenu est du JSON, jamais exécuté comme du JS (`unitesJs`
+ * Maps). `sri` n'est vrai que si la valeur de la clé est une empreinte bien
+ * formée (`integriteProtege`) : dans Chromium 141, une valeur vide, `x`,
+ * `md5-…`, `sha384-` ou `null` laisse charger et exécuter n'importe quel
+ * module, comme pour l'attribut d'un `<script>`. Ce contenu est du JSON, jamais exécuté comme du JS (`unitesJs`
  * l'exclut explicitement), donc invisible à toute règle qui lit du JS ou qui
  * ne regarde que l'attribut `src` d'un `<script>` : une bibliothèque résolue
  * par un import nu après une entrée d'import map est pourtant chargée à
  * l'exécution comme n'importe quel `<script src>`.
- * @returns {Array<{spec:string, url:string, sri:boolean, index:number, baseBrute:?string, mention:?string}>}
+ * @returns {Array<{spec:string, url:string, sri:boolean, index:number, baseBrute:?string, mention:?string, dansTemplate:boolean, seulementStandard:boolean}>}
  *   `index` est le décalage du `<script>` dans `contenu`, pour que l'appelant
  *   calcule fichier/ligne comme pour les autres motifs HTML ; `baseBrute` est
  *   le `href` brut de la `<base>` qui précède cette carte (les URL relatives
@@ -207,7 +215,7 @@ export function extraireImportMaps(contenu) {
     ajouter(carte?.imports);
     for (const portee of Object.values(carte?.scopes ?? {})) ajouter(portee);
     for (const [url, spec] of parUrl) {
-      entrees.push({ spec, url, sri: Object.prototype.hasOwnProperty.call(integrites, url), index: s.debut, baseBrute: s.baseBrute, mention: s.mention });
+      entrees.push({ spec, url, sri: integriteProtege(Object.prototype.hasOwnProperty.call(integrites, url) ? integrites[url] : undefined), index: s.debut, baseBrute: s.baseBrute, mention: s.mention, dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard });
     }
   }
   return entrees;

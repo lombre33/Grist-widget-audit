@@ -8,6 +8,7 @@
  * listing d'outil.
  */
 import { AXES, SEVERITES, CONFIANCES, trierConstats } from '../moteur/modele.js';
+import { raisonsDeTroncature } from '../contexte/inventaire.js';
 
 const ICONES = { critique: '🔴', majeur: '🟠', mineur: '🟡', info: 'ℹ️' };
 
@@ -65,7 +66,7 @@ export function genererMarkdown({ ctx, notation, meta }) {
   l.push(`- ⚠️ Ce verdict ne vaut que pour ce commit précis : si le dépôt évolue par la suite, il ne le couvre plus.`);
   l.push(`- Fichiers inventoriés : ${ctx.fichiersReels ?? ctx.fichiers.length}, dont ${ctx.surface.size} dans la surface réellement exécutée par le navigateur`);
   if (meta.tronque) {
-    l.push(`- ⚠️ Inventaire tronqué : dépôt anormalement volumineux (${meta.tronque.fichiers ? `plus de ${meta.tronque.maxFichiers} fichiers` : ''}${meta.tronque.fichiers && meta.tronque.octets ? ', ' : ''}${meta.tronque.octets ? `plus de ${Math.round(meta.tronque.maxOctets / 1024 / 1024)} Mio de contenu lu` : ''}). Ce rapport ne couvre qu'une partie du dépôt.`);
+    l.push(`- ⚠️ Inventaire tronqué : dépôt anormalement volumineux (${raisonsDeTroncature(meta.tronque).join(', ')}). Ce rapport ne couvre qu'une partie du dépôt.`);
   }
   l.push(`- Point(s) d'entrée détecté(s) : ${ctx.entrees.map((e) => `\`${e}\``).join(', ') || 'aucun'}`);
   if (ctx.usagesGrist?.acces?.length) {

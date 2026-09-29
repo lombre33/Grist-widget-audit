@@ -148,7 +148,7 @@ export function analyserSortiesReseau(ctx) {
   const constats = [];
   const vus = new Set();
 
-  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite, fichier }) => {
     if (!ast) return;
     const signaler = (n, canal, cible, dynamique) => {
       const h = hote(cible);
@@ -162,6 +162,7 @@ export function analyserSortiesReseau(ctx) {
       vus.add(cle);
       if (!dynamique) enregistrerDestination(ctx, h);
 
+      const chargeDuCode = CANAUX_DE_CODE.has(canal);
       constats.push(constat({
         regle: dynamique ? 'C-EXFIL-02' : 'C-EXFIL-01', axe: 'C',
         // Une destination littérale externe est un fait : elle bloque.
@@ -178,13 +179,32 @@ export function analyserSortiesReseau(ctx) {
         extrait: cible ? String(cible).slice(0, 200) : canal,
         constat: dynamique
           ? `Le code construit l'URL de destination à l'exécution : la lecture du code seule ne permet pas de savoir vers où part la requête.`
-          : `Le widget émet une requête ${canal} vers \`${h}\`, un service extérieur à l'instance Grist.`,
-        impact: "Le widget a accès aux données du document. Toute requête sortante est un canal de sortie possible pour ces données, y compris à l'insu de l'agent. C'est le point qu'un RSSI regarde en premier, et le guide de contribution l'interdit explicitement pour les services non documentés.",
+          : chargeDuCode
+            ? `Le widget charge et exécute du code depuis \`${h}\` (${canal}), un service extérieur à l'instance Grist.`
+            : `Le widget émet une requête ${canal} vers \`${h}\`, un service extérieur à l'instance Grist.`,
+        impact: chargeDuCode
+          ? "Un module tiers s'exécute avec tous les privilèges du widget, donc avec l'accès que l'agent a accordé au document. Si ce domaine est compromis ou remplacé, le document entier l'est aussi : c'est le scénario type d'attaque par la chaîne d'approvisionnement."
+          : "Le widget a accès aux données du document. Toute requête sortante est un canal de sortie possible pour ces données, y compris à l'insu de l'agent. C'est le point qu'un RSSI regarde en premier, et le guide de contribution l'interdit explicitement pour les services non documentés.",
         remediation: dynamique
           ? "Restreindre la destination à une liste blanche de constantes, et documenter dans le README la liste exhaustive des hôtes appelés. L'axe D capture le trafic réellement émis et confirmera ou lèvera ce constat."
-          : `Supprimer l'appel, ou documenter dans le README ce qui est envoyé à \`${h}\`, pourquoi, et sur quelle base juridique (RGPD) si des données personnelles transitent. Un hébergement sur instance officielle suppose une validation explicite de ce flux.`,
+          : chargeDuCode
+            ? "Héberger le module dans le dépôt (vendoring) et l'importer en relatif. Si l'import distant est réellement nécessaire, le déclarer dans une import map avec `integrity`, et documenter le domaine dans le README."
+            : `Supprimer l'appel, ou documenter dans le README ce qui est envoyé à \`${h}\`, pourquoi, et sur quelle base juridique (RGPD) si des données personnelles transitent. Un hébergement sur instance officielle suppose une validation explicite de ce flux.`,
         referentiels: [REF_GUIDE, 'RGPD art. 5 (minimisation)', 'OWASP Top 10 A10:2021 — SSRF / flux sortants'],
       }));
+    };
+
+    // Ce qu'un module charge : `import`, `export … from` et `import()` à littéral. Une adresse relative se résout
+    // contre la base du document pour un script écrit dans la page (sous une `<base>` externe, elle mène chez un
+    // tiers), contre l'emplacement du fichier pour un fichier ; un nom nu n'est pas une adresse (seule une import
+    // map en fait une, lue ailleurs). Un `import` statique d'un script classique de la page est une erreur de
+    // syntaxe : rien n'y est chargé, rien n'est dit.
+    const importer = (n, source, canal) => {
+      if (canal !== 'import() distant' && unite.inline && !unite.module) return;
+      const valeur = chaineLitterale(source);
+      if (valeur === null) return;
+      const url = cibleReseau(urlDeCarte(valeur, unite.inline ? unite.baseBrute : null, fichier.chemin));
+      if (url) signaler(n, canal, url.href, false);
     };
 
     walk.simple(ast, {
@@ -216,15 +236,18 @@ export function analyserSortiesReseau(ctx) {
           signaler(n, nom, chaineLitterale(n.arguments[0]) ?? '(URL calculée)', estDynamique(n.arguments[0]));
         }
       },
-      ImportExpression(n) {
-        const v = chaineLitterale(n.source);
-        if (v && /^https?:/i.test(v)) signaler(n, 'import() distant', v, false);
-      },
+      ImportExpression(n) { importer(n, n.source, 'import() distant'); },
+      ImportDeclaration(n) { importer(n, n.source, 'import statique'); },
+      ExportAllDeclaration(n) { importer(n, n.source, 'export … from'); },
+      ExportNamedDeclaration(n) { if (n.source) importer(n, n.source, 'export … from'); },
     });
   });
 
   return constats;
 }
+
+/** Les canaux par lesquels du code est chargé (et non une requête de données) : le constat le dit. */
+const CANAUX_DE_CODE = new Set(['import() distant', 'import statique', 'export … from']);
 
 const MENTION_GABARIT_RESSOURCE = 'dans un `<template>` : ne se charge et ne s\'active qu\'une fois le gabarit cloné puis inséré';
 const precise = (texte, mention) => (mention ? `${texte} Précision : ${mention}.` : texte);
@@ -236,16 +259,30 @@ const MENTION_SANS_EXECUTION = 'le navigateur demande ce fichier sans l\'exécut
 // se résout contre l'URL de la page). Les autres schémas ne chargent rien de tiers.
 const cibleReseau = (url) => (url && /^https?:$/.test(url.protocol) ? url : null);
 
-/** Ce qu'un `<link>` charge, par usage (voir `usageLien`) : libellé et sévérité de base. */
+/** Ce qu'un `<link>` charge, par usage (voir `usageLien`) : libellé, sévérité de base et article du libellé. */
 const USAGES_LIEN = {
-  feuille: ['feuille de style', 'majeur'],
-  icone: ['icône', 'mineur'],
-  modulepreload: ['préchargement de module', 'majeur'],
-  prefetch: ['préchargement (prefetch)', 'majeur'],
-  prerender: ['préchargement (prerender)', 'majeur'],
-  connexion: ['connexion anticipée', 'mineur'],
+  feuille: ['feuille de style', 'majeur', 'une'],
+  icone: ['icône', 'mineur', 'une'],
+  modulepreload: ['préchargement de module', 'majeur', 'un'],
+  prefetch: ['préchargement (prefetch)', 'majeur', 'un'],
+  prerender: ['préchargement (prerender)', 'majeur', 'un'],
+  connexion: ['connexion anticipée', 'mineur', 'une'],
 };
 const PRECHARGE_PAR_AS = { script: 'majeur', style: 'majeur', fetch: 'majeur', track: 'majeur', font: 'mineur', image: 'mineur' };
+
+/**
+ * Pourquoi un `<link>` a la sévérité qu'il a, dit dans le constat : la note
+ * suit ce que le navigateur en fait, pas le nom de la relation. Une icône, une
+ * police, une image ou une connexion anticipée ne sont jamais exécutées ni
+ * appliquées ; tout ce qu'une page peut exécuter, appliquer ou lire garde sa
+ * sévérité, car on ne sait pas toujours ce qui s'en sert (un `onload` qui
+ * passe `rel` à `stylesheet`, un chargeur calculé).
+ */
+const RAISON_LIEN_AFFICHAGE = "Ce lien ne récupère qu'une ressource d'affichage : le navigateur ne l'exécute ni ne l'applique jamais, mais le tiers y voit l'adresse IP et l'heure de chaque affichage.";
+const RAISON_LIEN_CONNEXION = "Le navigateur n'exécute ni n'applique jamais rien de ce lien, qui n'ouvre qu'une connexion : le tiers y voit l'adresse IP (avec `preconnect`) et l'heure de chaque affichage.";
+const RAISON_LIEN_EXECUTABLE = "Ce lien récupère de quoi la page peut exécuter, appliquer ou lire, sans que ce qui s'en sert soit toujours visible (un `onload` qui passe `rel` à `stylesheet`, un chargeur calculé) : faute de garantie, la sévérité n'est pas abaissée.";
+const RAISON_LIEN_FEUILLE = "Une feuille de style tierce s'applique à la page : ses règles changent ce qui s'affiche, peuvent faire charger d'autres ressources et lire, par leurs sélecteurs, des valeurs présentes dans la page.";
+const raisonDeLien = (usage, severite) => (usage.genre === 'feuille' ? RAISON_LIEN_FEUILLE : usage.genre === 'connexion' ? RAISON_LIEN_CONNEXION : severite === 'mineur' ? RAISON_LIEN_AFFICHAGE : RAISON_LIEN_EXECUTABLE);
 
 /** Texte de la ligne `ligne` (à partir de 1) d'un fichier, sans le relire en entier à chaque constat. */
 function ligneDe(f, ligne) {
@@ -383,8 +420,8 @@ export function chargementsDeFichier(f, { feuilleLibre = false } = {}) {
       const protege = integriteProtege(r.attributs.get('integrity'));
       if (r.nom === 'link') {
         for (const u of r.usages) {
-          const [type, severite] = u.genre === 'precharge' ? [`préchargement de ${u.as}`, PRECHARGE_PAR_AS[u.as]] : USAGES_LIEN[u.genre];
-          for (const url of u.urls) sortie.push({ url, type, article: 'une', severite, connexion: u.genre === 'connexion', protege, baseBrute: r.baseBrute, ligne: r.ligne, balise: r.balise, mention: r.dansTemplate ? MENTION_GABARIT_RESSOURCE : null });
+          const [type, severite, article] = u.genre === 'precharge' ? [`préchargement de ${u.as}`, PRECHARGE_PAR_AS[u.as], 'un'] : USAGES_LIEN[u.genre];
+          for (const url of u.urls) sortie.push({ url, type, article, severite, connexion: u.genre === 'connexion', note: ` ${raisonDeLien(u, severite)}`, protege, baseBrute: r.baseBrute, ligne: r.ligne, balise: r.balise, mention: r.dansTemplate ? MENTION_GABARIT_RESSOURCE : null });
         }
         continue;
       }
@@ -398,10 +435,11 @@ export function chargementsDeFichier(f, { feuilleLibre = false } = {}) {
       sortie.push(...chargementsDeFeuille(f, feuille, lireFeuille(feuille, budget), (e) => position(feuille, e.debut, e.sorte === 'precharge')));
     }
   }
-  // Fichier CSS : la même lecture que le CSS écrit dans une page.
+  // Fichier CSS : la même lecture que le CSS écrit dans une page. Une feuille que seul un `<template>` charge ne s'applique qu'une fois le gabarit inséré : ce qu'elle fait charger le dit aussi (`f.mention` est dite pour du code, une feuille n'en est pas).
   if (f.ext === '.css') {
     const feuille = { sorte: 'style', applique: true, precharge: false, modele: false, texte: f.contenu, mimeLibre: feuilleLibre, baseBrute: null };
-    sortie.push(...chargementsDeFeuille(f, feuille, lireFeuille(feuille), (e) => ({ ligne: numeroLigne(f.contenu, e.debut), decalage: e.debut })));
+    const mention = f.mention === mentionDe({ dansTemplate: true }) ? MENTION_GABARIT_RESSOURCE : f.mention;
+    for (const e of chargementsDeFeuille(f, feuille, lireFeuille(feuille), (e) => ({ ligne: numeroLigne(f.contenu, e.debut), decalage: e.debut }))) sortie.push(e.borne || !mention ? e : { ...e, mention });
   }
   return sortie;
 }
@@ -434,7 +472,7 @@ export function analyserRessourcesExternes(ctx) {
         confiance: 'certain',
         titre: `Import map : dépendance chargée depuis ${h} (${e.spec})`,
         fichier: f.chemin, ligne: numeroLigne(f.contenu, e.index), extrait: `"${e.spec}": "${e.url}"`,
-        constat: precise(`L'import map fait résoudre \`${e.spec}\` vers \`${e.url}\`${e.sri ? " (couverte par la clé `integrity` de l'import map)" : ' sans entrée `integrity`'}.`, e.mention),
+        constat: precise(`L'import map fait résoudre \`${e.spec}\` vers \`${e.url}\`${e.sri ? " (couverte par la clé `integrity` de l'import map)" : ' sans empreinte `integrity` valide dans l\'import map'}.`, e.mention),
         impact: "Un import nu résolu par cette carte s'exécute avec tous les privilèges du widget, exactement comme une balise <script src> : si ce domaine est compromis ou remplacé, le document entier l'est aussi. C'est le scénario type d'attaque par la chaîne d'approvisionnement.",
         remediation: "Héberger la bibliothèque dans le dépôt (vendoring) et la faire résoudre vers un chemin relatif, ou ajouter une entrée `integrity` pour cette URL dans l'import map et documenter le domaine dans le README.",
         referentiels: [REF_ANSSI, 'OWASP Top 10 A08:2021 — Intégrité logicielle', REF_GUIDE],
@@ -908,9 +946,29 @@ function estParametreDonneeWidget(fonction, parent, index) {
   return estParametreDonneeGrist(fonction, parent, index) || estParametreReponseReseau(fonction, parent, index) || estParametreMessageRecu(fonction, parent, index);
 }
 
-/** `location`/`window.location`/`self.location`, quel que soit l'alias global de tête : son contenu (query, hash, href…) est fourni par qui ouvre la page, jamais par le widget. */
+/**
+ * Ce qu'est la valeur d'un accès à `location` (`location`, `window.location`,
+ * `self.location`, quel que soit l'alias global de tête), lue sur le nom de
+ * la propriété : `'chaine'` pour les neuf propriétés de texte (`href`,
+ * `origin`, `protocol`, `host`, `hostname`, `port`, `pathname`, `search`,
+ * `hash`), fournies par qui ouvre la page, jamais par le widget ; `'nombre'`
+ * pour leur `length` ; `'fonction'` pour `assign`, `replace`, `reload` et
+ * `toString` ; `null` pour tout autre accès, dont l'analyse ne sait rien.
+ * Seule une chaîne se compile en code : un rappel de fonction ou un nombre
+ * passé à un minuteur n'exécute jamais rien de ce qu'un lien fixe.
+ */
+function typeAccesLocation(noeud) {
+  if (noeud?.type !== 'MemberExpression') return null;
+  const nom = nomPointe(noeud) || '';
+  if (/(^|\.)location\.(?:href|origin|protocol|host|hostname|port|pathname|search|hash)$/.test(nom)) return 'chaine';
+  if (/(^|\.)location\.(?:href|origin|protocol|host|hostname|port|pathname|search|hash)\.length$/.test(nom)) return 'nombre';
+  if (/(^|\.)location\.(?:assign|replace|reload|toString)$/.test(nom)) return 'fonction';
+  return null;
+}
+
+/** `location.hash`, `window.location.search`… : une chaîne que n'importe quel lien peut fixer. */
 function estAccesLocation(noeud) {
-  return noeud?.type === 'MemberExpression' && /(^|\.)location\./.test(nomPointe(noeud) || '');
+  return typeAccesLocation(noeud) === 'chaine';
 }
 
 /** `localStorage.getItem(...)`/`sessionStorage.getItem(...)` : une donnée déposée par n'importe quel script ayant tourné sur cette origine, jamais garantie par le widget. */
@@ -1587,6 +1645,9 @@ function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, anc
 
   if (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression') return [];
 
+  // `setTimeout(location.reload, 0)` passe une fonction, `setTimeout(location.hash.length)` un nombre : ni l'un ni l'autre ne se compile en code.
+  if (['fonction', 'nombre'].includes(typeAccesLocation(arg))) return [];
+
   if (estSourceDonneeWidget(arg, ancetres)) {
     return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: null, profondeur, forme: 'donnee', arg });
   }
@@ -1917,6 +1978,16 @@ export function analyserInjections(ctx) {
 /** Une `<meta http-equiv="Content-Security-Policy">` telle que Chromium la lit : nom de l'en-tête insensible à la casse (sans rogner d'espaces). */
 const estMetaCsp = (b) => b.nom === 'meta' && b.ns === 'html' && (b.attributs.get('http-equiv') ?? '').toLowerCase() === 'content-security-policy';
 
+/** Vrai si la balise déclare au moins une directive : sans attribut `content`, ou avec un contenu qui n'en a aucune (`""`, `" "`, `";"`), Chromium n'applique aucune politique. */
+const aUneDirective = (b) => (b.attributs.get('content') ?? '').split(';').some((partie) => partie.trim() !== '');
+
+/** Pourquoi Chromium n'applique pas cette balise CSP, dit au lecteur. */
+function raisonMetaCspInerte(b) {
+  if (b.dansTemplate) return 'elle est dans un `<template>`';
+  if (!b.dansTete) return "elle n'est plus dans `<head>` (après `</head>`, `<body>` ou du contenu)";
+  return b.attributs.has('content') ? "son attribut `content` ne déclare aucune directive" : "elle n'a pas d'attribut `content`";
+}
+
 /** Gestionnaires d'événements inline et attributs dangereux dans le HTML. */
 export function analyserHtmlDangereux(ctx) {
   const constats = [];
@@ -1955,14 +2026,14 @@ export function analyserHtmlDangereux(ctx) {
 
     if (ctx.entrees.includes(f.chemin)) {
       const metas = balises.filter(estMetaCsp);
-      if (metas.some((m) => m.dansTete && !m.dansTemplate)) continue;              // une CSP que Chromium applique
+      if (metas.some((m) => m.dansTete && aUneDirective(m))) continue;   // une CSP que Chromium applique (`dansTete` exclut déjà un `<template>`)
       const inerte = metas[0];
       constats.push(constat({
         regle: 'C-CSP-01', axe: 'C', severite: 'mineur', confiance: 'certain',
         titre: 'Aucune politique de sécurité de contenu (CSP) déclarée',
         fichier: f.chemin,
         constat: precise("Le point d'entrée ne déclare pas de balise `<meta http-equiv=\"Content-Security-Policy\">`.",
-          inerte && `une telle balise existe ligne ${inerte.ligne}, mais Chromium ne l'applique pas : ${inerte.dansTemplate ? 'elle est dans un `<template>`' : "elle n'est plus dans `<head>` (après `</head>`, `<body>` ou du contenu)"}`),
+          inerte && `une telle balise existe ligne ${inerte.ligne}, mais Chromium ne l'applique pas : ${raisonMetaCspInerte(inerte)}`),
         impact: "Sans CSP, rien n'empêche l'exécution d'un script injecté ni une requête sortante imprévue. La CSP est le filet de sécurité qui limite les dégâts quand une autre défense cède.",
         remediation: "Ajouter une CSP restrictive, par exemple : `default-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors *` (le widget devant rester encadrable par Grist). La déclarer côté serveur est préférable, la balise `<meta>` est un repli acceptable pour un widget statique.",
         referentiels: [REF_ANSSI, 'OWASP — Content Security Policy Cheat Sheet'],
@@ -1991,7 +2062,7 @@ export function analyserCspPermissive(ctx) {
   const constats = [];
   for (const f of ctx.fichiers) {
     if (!f.executee || f.binaire || !ctx.entrees.includes(f.chemin)) continue;
-    const meta = lirePage(f.contenu).balises.find((b) => estMetaCsp(b) && b.dansTete && !b.dansTemplate);
+    const meta = lirePage(f.contenu).balises.find((b) => estMetaCsp(b) && b.dansTete && aUneDirective(b));
     if (!meta) continue; // absence (ou balise que Chromium n'applique pas) déjà couverte par C-CSP-01
     const contenuAttr = [null, null, meta.attributs.get('content')];
     if (contenuAttr[2] == null) continue;

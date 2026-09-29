@@ -75,6 +75,120 @@ const CAS = [
   ['analyse : 1 Mio de chaînes CSS non fermées', 'analyse', () => ({ 'index.html': `${TETE}<style>${'a{b:"x\n'.repeat(MIO / 7)}</style>` })],
   ['analyse : 1 Mio de virgules dans imagesrcset', 'analyse', () => ({ 'index.html': `${TETE}<link rel=preload as=image imagesrcset="${','.repeat(MIO)}x">` })],
   ['analyse : 16 niveaux de data: imbriqués', 'analyse', () => ({ 'index.html': `${TETE}<style>${imbrique('@import url(https://e.example/fond.css);', 16)}</style>` })],
+
+  // --- analyse complète : une <base> de plus de 4 096 caractères, résolue exactement (elle ne se tronque plus) ;
+  //     50 000 références relatives, une résolution chacune : le coût suivait la taille de la base
+  ['analyse : 50 000 scripts sous une base de 1 Mio (requête)', 'analyse', () => ({ 'index.html': `${TETE}<base href="https://e.example/x?${'a'.repeat(MIO)}">${N(50000, (i) => `<script src="./s${i}.js"></script>\n`)}` })],
+  ['analyse : 50 000 scripts sous une base de 1 Mio (chemin d\'un seul segment)', 'analyse', () => ({ 'index.html': `${TETE}<base href="https://e.example/${'a'.repeat(MIO)}/">${N(50000, (i) => `<script src="./s${i}.js"></script>\n`)}` })],
+  ['analyse : 50 000 scripts sous une base de 1 Mio (500 000 segments)', 'analyse', () => ({ 'index.html': `${TETE}<base href="https://e.example/${'a/'.repeat(MIO / 2)}">${N(50000, (i) => `<script src="./s${i}.js"></script>\n`)}` })],
+  ['analyse : 50 000 scripts sous une base de 1 Mio (500 000 segments), remontées ../', 'analyse', () => ({ 'index.html': `${TETE}<base href="https://e.example/${'a/'.repeat(MIO / 2)}">${N(50000, (i) => `<script src="../../s${i}.js"></script>\n`)}` })],
+  ['analyse : 50 000 scripts sous une base de 1 Mio (nom d\'hôte géant)', 'analyse', () => ({ 'index.html': `${TETE}<base href="https://${'a'.repeat(MIO)}.example/">${N(50000, (i) => `<script src="./s${i}.js"></script>\n`)}` })],
+  ['analyse : 50 000 liens ?q sous une base de 1 Mio (requête)', 'analyse', () => ({ 'index.html': `${TETE}<base href="https://e.example/x?${'a'.repeat(MIO)}">${N(50000, (i) => `<link rel=stylesheet href="?q${i}">\n`)}` })],
+  ['analyse : 50 000 références #ancre sous une base de 1 Mio (fragment)', 'analyse', () => ({ 'index.html': `${TETE}<base href="https://e.example/x#${'a'.repeat(MIO)}">${N(50000, (i) => `<script src="#a${i}"></script>\n`)}` })],
+
+  // --- analyse complète : ce que la page charge, quel que soit le dossier (surface de code)
+  ['analyse : 20 000 imports de fichiers de node_modules', 'analyse', () => {
+    const fichiers = { 'index.html': `${TETE}<script type="module">${N(20000, (i) => `import "./node_modules/p${i}/index.js";\n`)}</script>` };
+    for (let i = 0; i < 20000; i++) fichiers[`node_modules/p${i}/index.js`] = 'export const x = 1;\n';
+    return fichiers;
+  }],
+  ['analyse : 20 000 imports statiques https:// distincts', 'analyse', () => ({ 'index.html': `${TETE}<script type="module">${N(20000, (i) => `import "https://e.example/m${i}.js";\n`)}</script>` })],
+  ['analyse : import map de 20 000 cibles locales', 'analyse', () => {
+    const imports = {};
+    for (let i = 0; i < 20000; i++) imports[`m${i}`] = `./lib/m${i}.js`;
+    const fichiers = { 'index.html': `${TETE}<script type="importmap">${JSON.stringify({ imports })}</script>` };
+    for (let i = 0; i < 20000; i++) fichiers[`lib/m${i}.js`] = 'export const x = 1;\n';
+    return fichiers;
+  }],
+  ['analyse : import map de 20 000 cibles distantes sans integrity', 'analyse', () => {
+    const imports = {};
+    for (let i = 0; i < 20000; i++) imports[`m${i}`] = `https://e.example/m${i}.js`;
+    return { 'index.html': `${TETE}<script type="importmap">${JSON.stringify({ imports })}</script>` };
+  }],
+
+  // --- analyse complète : une adresse qui vise un dossier (préfixe d'import map, import() à début fixe) et les
+  //     adresses de document (Worker, serviceWorker) résolues sous chaque page d'entrée
+  ['analyse : un préfixe d\'import map sur un dossier de 19 000 modules', 'analyse', () => {
+    const fichiers = { 'index.html': `${TETE}<script type="importmap">${JSON.stringify({ imports: { 'lib/': './lib/' } })}</script>` };
+    for (let i = 0; i < 19000; i++) fichiers[`lib/m${i}.js`] = 'export const x = 1;\n';
+    return fichiers;
+  }],
+  ['analyse : un préfixe d\'import map sur 19 000 modules de node_modules', 'analyse', () => {
+    const fichiers = { 'index.html': `${TETE}<script type="importmap">${JSON.stringify({ imports: { 'p/': './node_modules/p/' } })}</script>` };
+    for (let i = 0; i < 19000; i++) fichiers[`node_modules/p/m${i}.js`] = 'export const x = 1;\n';
+    return fichiers;
+  }],
+  ['analyse : un préfixe d\'import map sur toute la racine, 19 000 modules', 'analyse', () => {
+    const fichiers = { 'index.html': `${TETE}<script type="importmap">${JSON.stringify({ imports: { 'x/': './' } })}</script>` };
+    for (let i = 0; i < 19000; i++) fichiers[`lib/m${i}.js`] = 'export const x = 1;\n';
+    return fichiers;
+  }],
+  ['analyse : 2 000 préfixes d\'import map, chacun sur son dossier', 'analyse', () => {
+    const imports = {};
+    const fichiers = {};
+    for (let i = 0; i < 2000; i++) {
+      imports[`d${i}/`] = `./lib/d${i}/`;
+      for (let j = 0; j < 5; j++) fichiers[`lib/d${i}/m${j}.js`] = 'export const x = 1;\n';
+    }
+    fichiers['index.html'] = `${TETE}<script type="importmap">${JSON.stringify({ imports })}</script>`;
+    return fichiers;
+  }],
+  ['analyse : 800 préfixes imbriqués sur 14 400 modules', 'analyse', () => {
+    // Noms de dossier courts : le chemin le plus profond doit rester sous PATH_MAX (4 096) pour que le dépôt s'écrive.
+    const imports = {};
+    const fichiers = {};
+    let dossier = '';
+    for (let i = 0; i < 800; i++) {
+      dossier += `${i.toString(36)}/`;
+      imports[`n${i}/`] = `./${dossier}`;
+      for (let j = 0; j < 18; j++) fichiers[`${dossier}m${j}.js`] = 'export const x = 1;\n';
+    }
+    fichiers['index.html'] = `${TETE}<script type="importmap">${JSON.stringify({ imports })}</script>`;
+    return fichiers;
+  }],
+  ['analyse : 20 000 import() à début fixe, tous distincts, sans dossier', 'analyse', () => ({
+    'index.html': `${TETE}<script type="module" src="app.js"></script>`,
+    'app.js': N(20000, (i) => `import(\`./nulle-part${i}/\${x}\`);\n`),
+  })],
+  ['analyse : 20 000 import() au même début fixe, sur 19 000 modules', 'analyse', () => {
+    const fichiers = { 'index.html': `${TETE}<script type="module" src="app.js"></script>`, 'app.js': N(20000, () => 'import(`./lib/${x}`);\n') };
+    for (let i = 0; i < 19000; i++) fichiers[`lib/m${i}.js`] = 'export const x = 1;\n';
+    return fichiers;
+  }],
+  ['analyse : 20 000 modules qui importent le même fichier', 'analyse', () => {
+    const fichiers = { 'index.html': `${TETE}<script type="module">${N(20000, (i) => `import "./m${i}.js";\n`)}</script>`, 'commun.js': 'export const x = 1;\n' };
+    for (let i = 0; i < 20000; i++) fichiers[`m${i}.js`] = 'import "./commun.js";\n';
+    return fichiers;
+  }],
+  ['analyse : une chaîne de 20 000 modules', 'analyse', () => {
+    const fichiers = { 'index.html': `${TETE}<script type="module" src="m0.js"></script>` };
+    for (let i = 0; i < 20000; i++) fichiers[`m${i}.js`] = `import "./m${i + 1}.js";\n`;
+    return fichiers;
+  }],
+  ['analyse : 300 modules qui importent chacun les 300 autres', 'analyse', () => {
+    const fichiers = { 'index.html': `${TETE}<script type="module" src="m0.js"></script>` };
+    for (let i = 0; i < 300; i++) fichiers[`m${i}.js`] = N(300, (j) => `import "./m${j}.js";\n`);
+    return fichiers;
+  }],
+  ['analyse : 1 000 pages d\'entrée × 1 000 adresses de worker (1 Mio de résolutions)', 'analyse', () => {
+    const fichiers = { 'app.js': N(1000, (j) => `new Worker("w${j}.js");\n`) };
+    for (let i = 0; i < 1000; i++) fichiers[`p${i}/index.html`] = `${TETE}<script src="/app.js"></script>`;
+    return fichiers;
+  }],
+  ['analyse : 2 000 pages d\'entrée × 2 000 adresses de worker (au-delà du budget)', 'analyse', () => {
+    const fichiers = { 'app.js': N(2000, (j) => `new Worker("w${j}.js");\n`) };
+    for (let i = 0; i < 2000; i++) fichiers[`p${i}/index.html`] = `${TETE}<script src="/app.js"></script>`;
+    return fichiers;
+  }],
+  ['analyse : 20 000 pages d\'entrée × un worker', 'analyse', () => {
+    const fichiers = { 'app.js': 'new Worker("w.js");\n' };
+    for (let i = 0; i < 20000; i++) fichiers[`p${i}/index.html`] = `${TETE}<script src="/app.js"></script>`;
+    return fichiers;
+  }],
+  ['analyse : 20 000 adresses de worker sous une seule page', 'analyse', () => ({
+    'index.html': `${TETE}<script src="app.js"></script>`,
+    'app.js': N(20000, (j) => `new Worker("w${j}.js");\n`),
+  })],
 ];
 
 const { values, positionals } = parseArgs({
@@ -104,7 +218,11 @@ async function lancerCas(nom, racine, dossier) {
   } else {
     const { construireContexte } = await importer('src/contexte/inventaire.js');
     const { analyseStatique } = await importer('src/moteur/statique.js');
-    for (const [fichier, contenu] of Object.entries(entree)) fs.writeFileSync(path.join(dossier, fichier), contenu);
+    for (const [fichier, contenu] of Object.entries(entree)) {
+      const cible = path.join(dossier, fichier);
+      fs.mkdirSync(path.dirname(cible), { recursive: true });
+      fs.writeFileSync(cible, contenu);
+    }
     const t = process.hrtime.bigint();
     const constats = await analyseStatique(construireContexte(dossier), { reseau: false });
     ms = Number(process.hrtime.bigint() - t) / 1e6;

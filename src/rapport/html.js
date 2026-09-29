@@ -10,6 +10,7 @@
  * changer la notation elle-même (qui a besoin du décompte à plat).
  */
 import { SEVERITES, CONFIANCES } from '../moteur/modele.js';
+import { raisonsDeTroncature } from '../contexte/inventaire.js';
 
 const SEUIL_GROUPE = 4;
 
@@ -43,6 +44,8 @@ ${css()}
   ${blocLectureVerdict()}
 
   ${blocMotif(notation)}
+
+  ${blocTroncature(meta)}
 
   <p class="avertissement">Rapport à valeur de première analyse : il éclaire une revue humaine, il ne la remplace pas. Méthodologie complète dans <code>docs/METHODOLOGIE.md</code>.</p>
 
@@ -110,6 +113,16 @@ function blocLectureVerdict() {
 function blocMotif(notation) {
   const partiel = notation.axesNonExecutes.length > 0;
   return `<p class="motif-verdict${partiel ? ' motif-partiel' : ''}">${echapper(notation.motif)}</p>`;
+}
+
+/**
+ * Un inventaire tronqué change ce que le score veut dire : il se dit sous le
+ * verdict, au même poids qu'un audit partiel (le Markdown et la ligne de
+ * commande le disaient déjà, pas cette page).
+ */
+function blocTroncature(meta) {
+  if (!meta.tronque) return '';
+  return `<p class="motif-verdict motif-partiel">⚠ Inventaire tronqué : dépôt anormalement volumineux (${echapper(raisonsDeTroncature(meta.tronque).join(', '))}). Ce rapport ne couvre qu'une partie du dépôt.</p>`;
 }
 
 function blocBloquants(bloquants) {

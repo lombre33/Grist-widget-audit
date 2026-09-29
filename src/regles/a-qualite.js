@@ -26,7 +26,7 @@ const SEUILS = {
 export function analyserTailleFichiers(ctx) {
   const constats = [];
   const gros = ctx.fichiers
-    .filter((f) => f.executee && !f.vendorise && ['.js', '.mjs'].includes(f.ext) && (f.locSignificatives ?? 0) > SEUILS.fichierLong)
+    .filter((f) => f.executee && !f.vendorise && !f.dossierExclu && ['.js', '.mjs'].includes(f.ext) && (f.locSignificatives ?? 0) > SEUILS.fichierLong)
     .sort((a, b) => b.locSignificatives - a.locSignificatives);
 
   for (const f of gros) {
@@ -191,7 +191,7 @@ export function analyserTracesDev(ctx) {
   });
 
   for (const f of ctx.fichiers) {
-    if (!f.contenu || f.binaire || f.vendorise) continue;
+    if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu) continue;
     for (const m of f.contenu.matchAll(/\b(TODO|FIXME|XXX|HACK|À FAIRE|BUG)\b[ :]/g)) {
       marqueurs.push({ fichier: f.chemin, ligne: f.contenu.slice(0, m.index).split('\n').length, type: m[1] });
     }
@@ -230,7 +230,7 @@ export function analyserDuplication(ctx) {
   const empreintes = new Map();
 
   for (const f of ctx.fichiers) {
-    if (!f.contenu || f.binaire || f.vendorise || !['.js', '.mjs'].includes(f.ext)) continue;
+    if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || !['.js', '.mjs'].includes(f.ext)) continue;
     const lignes = f.lignes
       .map((l, i) => ({ i: i + 1, t: l.trim() }))
       .filter((l) => l.t && !/^(\/\/|\/\*|\*)/.test(l.t));

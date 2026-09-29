@@ -41,8 +41,8 @@ const MUTANTS = [
   [C, "mimeLibre: feuilleLibre, base", "mimeLibre: false, base", '.css : mimeLibre ignoré'],
   [C, "connexion: u.genre === 'connexion'", "connexion: false", 'connexion : texte de sondage perdu'],
   [C, "font: 'mineur'", "font: 'majeur'", 'preload font majeur'],
-  [C, "icone: ['icône', 'mineur']", "icone: ['icône', 'majeur']", 'icône majeure'],
-  [C, "connexion: ['connexion anticipée', 'mineur']", "connexion: ['connexion anticipée', 'majeur']", 'connexion majeure'],
+  [C, "icone: ['icône', 'mineur', 'une']", "icone: ['icône', 'majeur', 'une']", 'icône majeure'],
+  [C, "connexion: ['connexion anticipée', 'mineur', 'une']", "connexion: ['connexion anticipée', 'majeur', 'une']", 'connexion majeure'],
   [C, "if (e.sorte === 'borne') {", "if (false) {", 'entrée borne traitée comme une url'],
 
   // --- page-html.js : usageLien

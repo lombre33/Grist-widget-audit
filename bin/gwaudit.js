@@ -35,7 +35,7 @@ import net from 'node:net';
 import dns from 'node:dns/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { construireContexte } from '../src/contexte/inventaire.js';
+import { construireContexte, raisonsDeTroncature } from '../src/contexte/inventaire.js';
 import { analyseStatique } from '../src/moteur/statique.js';
 import { auditDynamique, constatAxeDIgnoreParOption } from '../src/runtime/dynamique.js';
 import { noter } from '../src/moteur/notation.js';
@@ -91,7 +91,7 @@ async function main() {
     const ctx = construireContexte(racine);
     console.error(`  ${ctx.fichiers.length} fichier(s), ${ctx.surface.size} dans la surface exécutée, point(s) d'entrée : ${ctx.entrees.join(', ') || '(aucun)'}`);
     if (ctx.tronque) {
-      console.error(`  ⚠ Inventaire tronqué (dépôt anormalement volumineux) : ${ctx.tronque.fichiers ? `plus de ${ctx.tronque.maxFichiers} fichiers` : ''}${ctx.tronque.fichiers && ctx.tronque.octets ? ' et ' : ''}${ctx.tronque.octets ? `plus de ${Math.round(ctx.tronque.maxOctets / 1024 / 1024)} Mio de contenu lu` : ''} — le rapport porte sur une partie du dépôt seulement.`);
+      console.error(`  ⚠ Inventaire tronqué (dépôt anormalement volumineux) : ${raisonsDeTroncature(ctx.tronque).join(', ')} — le rapport porte sur une partie du dépôt seulement.`);
     }
 
     console.error('→ Analyse statique (axes A, B, C, E, F)…');
