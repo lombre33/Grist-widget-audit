@@ -14,7 +14,9 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { lirePage } from '../moteur/page-html.js';
+import * as walk from 'acorn-walk';
+import { lirePage, urlDe, cheminLocal } from '../moteur/page-html.js';
+import { parser, chaineLitterale } from '../moteur/analyse-js.js';
 
 const EXCLUS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'coverage', 'vendor', '.venv', '__pycache__']);
 
@@ -172,9 +174,13 @@ function calculerSurface(racine, fichiers, entrees) {
     surface.add(rel);
 
     for (const ref of referencesSortantes(f)) {
-      if (/^(https?:)?\/\//i.test(ref) || ref.startsWith('data:') || ref.startsWith('blob:')) continue;
-      // `path.posix.*` ici aussi, même raison que dans trouverPointsDEntree().
-      const cible = path.posix.normalize(path.posix.join(path.posix.dirname(rel), ref.split(/[?#]/)[0]));
+      let cible;
+      if (typeof ref === 'object') cible = ref.chemin;              // déjà résolue depuis la racine du widget (page HTML, `<base>` comprise)
+      else {
+        if (/^(https?:)?\/\//i.test(ref) || ref.startsWith('data:') || ref.startsWith('blob:')) continue;
+        // `path.posix.*` ici aussi, même raison que dans trouverPointsDEntree().
+        cible = path.posix.normalize(path.posix.join(path.posix.dirname(rel), ref.split(/[?#]/)[0]));
+      }
       for (const candidat of [cible, `${cible}.js`, `${cible}.mjs`, path.posix.join(cible, 'index.js')]) {
         if (parChemin.has(candidat) && !surface.has(candidat)) file.push(candidat);
       }
@@ -219,27 +225,59 @@ function referencesWorker(contenu) {
   return refs;
 }
 
-/** Références locales sortantes d'un fichier (script src, link href, import, url(), worker). */
+/**
+ * Références qu'un code JavaScript suit : `import` (avec ou sans liaison,
+ * `import './app.js'` compris), `export … from`, `import()` à argument
+ * littéral (chaîne ou gabarit sans interpolation), lus dans l'AST, jamais dans
+ * un commentaire ni dans une chaîne ; plus les workers (voir `referencesWorker`).
+ * Un code qu'acorn ne lit pas (TypeScript, JSX) se lit par expressions
+ * régulières : le doute inclut, une entrée de trop dans la surface coûte moins
+ * qu'un angle mort.
+ */
+function referencesDeCode(source) {
+  const ast = parser(source);
+  const refs = [];
+  if (ast) {
+    walk.full(ast, (n) => {
+      if (n.type === 'ImportDeclaration' || n.type === 'ExportAllDeclaration' || (n.type === 'ExportNamedDeclaration' && n.source)) {
+        if (typeof n.source.value === 'string') refs.push(n.source.value);
+      } else if (n.type === 'ImportExpression') {
+        const valeur = chaineLitterale(n.source);
+        if (valeur !== null) refs.push(valeur);
+      }
+    });
+  } else {
+    for (const m of source.matchAll(/\bfrom\s+["']([^"']+)["']/g)) refs.push(m[1]);
+    for (const m of source.matchAll(/\bimport\s*\(\s*["']([^"']+)["']/g)) refs.push(m[1]);
+    for (const m of source.matchAll(/\bimport\s+["']([^"']+)["']/g)) refs.push(m[1]);
+  }
+  refs.push(...referencesWorker(source));
+  return refs;
+}
+
+/**
+ * Références locales sortantes d'un fichier (script src, link href, import,
+ * url(), worker). Une page HTML les donne déjà résolues depuis la racine du
+ * widget (`{chemin}`), `<base>` comprise : un chargement qui sort du widget
+ * n'y figure pas, le fichier local du même nom n'est jamais lu à sa place.
+ */
 function referencesSortantes(f) {
   const refs = [];
   const c = f.contenu ?? '';
   if (f.ext === '.html' || f.ext === '.htm') {
-    // Lus par la passe unique du découpeur (voir `lirePage`), comme le
-    // navigateur : un `src`/`href` sans guillemets, un `>` dans un attribut ou
-    // un `<script>` en commentaire ne trompent plus l'inventaire. Les URL
-    // absolues (y compris via une `<base>` externe) sont écartées plus bas par
-    // le même filtre que les autres références sortantes.
     const { scripts, ressources } = lirePage(c);
-    for (const s of scripts) if (s.src !== null) refs.push(s.src);
-    for (const r of ressources) if (r.nom === 'link') { const href = r.attributs.get('href'); if (href != null) refs.push(href); }
-    refs.push(...referencesWorker(c)); // couvre un new Worker(...) écrit dans un <script> inline
+    const local = (valeur, baseBrute) => {
+      const chemin = cheminLocal(urlDe(valeur, baseBrute, f.chemin));
+      if (chemin !== null) refs.push({ chemin });
+    };
+    for (const s of scripts) {
+      for (const ch of s.chargements) if (ch.execute) local(ch.valeur, s.baseBrute);
+      if (s.unite) for (const ref of referencesDeCode(s.texte)) local(ref, s.baseBrute);   // un worker écrit en commentaire ou en gabarit n'y figure pas
+    }
+    for (const r of ressources) if (r.nom === 'link') { const href = r.attributs.get('href'); if (href != null) local(href, r.baseBrute); }
   }
   if (f.ext === '.css') for (const m of c.matchAll(/url\(\s*["']?([^"')]+)/gi)) refs.push(m[1]);
-  if (['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'].includes(f.ext)) {
-    for (const m of c.matchAll(/\bfrom\s+["']([^"']+)["']/g)) refs.push(m[1]);
-    for (const m of c.matchAll(/\bimport\s*\(\s*["']([^"']+)["']/g)) refs.push(m[1]);
-    refs.push(...referencesWorker(c));
-  }
+  if (['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'].includes(f.ext)) refs.push(...referencesDeCode(c));
   return refs;
 }
 

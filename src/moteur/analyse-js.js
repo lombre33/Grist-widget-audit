@@ -18,33 +18,58 @@ import { lirePage } from './page-html.js';
  * pour un `<script type="module">` inline : un fichier .js peut être exécuté
  * comme script classique par n'importe quel chargement, même si un autre le
  * charge comme module (voir `syntaxeDeModule`).
- * @returns {Array<{chemin:string, source:string, decalageLigne:number, decalageColonne:number, inline:boolean, module:boolean}>}
+ *
+ * Une unité inline porte `positionDe(décalage dans source)` (ligne et colonne
+ * dans le fichier, y compris pour un texte SVG décodé), `mention` (ce qu'un
+ * constat sur cette unité doit dire : gabarit inerte, exécution par le seul
+ * standard) et `debutLigne`/`finLigne` (les lignes qu'elle couvre).
+ * @returns {Array<{chemin:string, source:string, positionDe:?Function, mention:?string, debutLigne:number, finLigne:number, inline:boolean, module:boolean}>}
  */
 export function unitesJs(fichier) {
   if (fichier.binaire || !fichier.contenu) return [];
   if (['.js', '.mjs', '.cjs', '.jsx'].includes(fichier.ext)) {
-    return [{ chemin: fichier.chemin, source: fichier.contenu, decalageLigne: 0, decalageColonne: 0, inline: false, module: false }];
+    return [{ chemin: fichier.chemin, source: fichier.contenu, positionDe: null, mention: null, debutLigne: 1, finLigne: Infinity, inline: false, module: false }];
   }
   if (!['.html', '.htm'].includes(fichier.ext)) return [];
 
+  const page = lirePage(fichier.contenu);
   const unites = [];
-  for (const s of lirePage(fichier.contenu).scripts) {
-    if (s.src !== null || !s.genre || s.genre === 'importmap') continue; // script externe (traité ailleurs) ; non exécuté ; ou import map (JSON)
-    unites.push({ chemin: fichier.chemin, source: s.texte, decalageLigne: s.decalageLigne, decalageColonne: s.decalageColonne, inline: true, module: s.genre === 'module' });
+  for (const s of page.scripts) {
+    if (!s.unite) continue; // pas du code que le navigateur exécute : externe, import map, jamais fermé, type non exécuté
+    unites.push({
+      chemin: fichier.chemin, source: s.texte, positionDe: s.positionDe, mention: s.mention,
+      debutLigne: page.positionDe(s.debutContenu).ligne, finLigne: page.positionDe(s.finContenu).ligne,
+      inline: true, module: s.genre === 'module',
+    });
   }
   return unites;
 }
 
-/**
- * Colonne (1-based) d'un nœud dans le fichier réel, décalage des scripts
- * inline compris. La colonne d'acorn est relative à la source de l'unité ;
- * seule la PREMIÈRE ligne d'un `<script>` inline commence après du HTML sur
- * la même ligne (voir `decalageColonne`), les suivantes non.
- */
+/** Ligne (1-based) d'un nœud dans le fichier réel : par le décalage du nœud dans l'unité pour un script inline, par acorn pour un fichier .js. */
+export function ligneDans(unite, noeud) {
+  if (unite.positionDe) return unite.positionDe(typeof noeud?.start === 'number' ? noeud.start : 0).ligne;
+  return noeud?.loc?.start?.line ?? 0;
+}
+
+/** Colonne (1-based) d'un nœud dans le fichier réel, par les mêmes positions que `ligneDans`. */
 export function colonneDans(unite, noeud) {
-  const col = noeud?.loc?.start?.column ?? 0;
-  const surPremiereLigne = (noeud?.loc?.start?.line ?? 1) === 1;
-  return col + (surPremiereLigne ? (unite.decalageColonne ?? 0) : 0) + 1;
+  if (unite.positionDe) return unite.positionDe(typeof noeud?.start === 'number' ? noeud.start : 0).colonne + 1;
+  return (noeud?.loc?.start?.column ?? 0) + 1;
+}
+
+/**
+ * Ce que les constats d'un fichier HTML doivent dire de l'unité qui les
+ * porte : `mention` de l'unité (gabarit, standard seul). Un constat n'en
+ * reçoit une que si TOUTES les unités qui couvrent sa ligne en portent une
+ * (deux scripts sur la même ligne, dont un seul en gabarit : on ne sait pas
+ * lequel a produit le constat, on n'affirme rien de faux).
+ */
+export function mentionSurLigne(fichier, ligne) {
+  if (!['.html', '.htm'].includes(fichier.ext) || !fichier.contenu) return null;
+  const couvrantes = unitesJs(fichier).filter((u) => u.debutLigne <= ligne && ligne <= u.finLigne);
+  if (!couvrantes.length || couvrantes.some((u) => !u.mention)) return null;
+  const mentions = new Set(couvrantes.map((u) => u.mention));
+  return mentions.size === 1 ? [...mentions][0] : null;
 }
 
 /**
@@ -96,8 +121,7 @@ export function pourChaqueUniteJs(contexte, { surfaceSeulement = false, ignorerV
     for (const u of unitesJs(f)) {
       const ast = parser(u.source);
       if (!ast) { visiteur({ unite: u, ast: null, fichier: f, ligneDe: () => null, walk }); continue; }
-      const ligneDe = (noeud) => (noeud?.loc?.start?.line ?? 0) + u.decalageLigne;
-      visiteur({ unite: u, ast, fichier: f, ligneDe, walk });
+      visiteur({ unite: u, ast, fichier: f, ligneDe: (noeud) => ligneDans(u, noeud), walk });
     }
   }
 }
@@ -149,14 +173,17 @@ export function estDynamique(noeud) {
  * ne regarde que l'attribut `src` d'un `<script>` : une bibliothèque résolue
  * par un import nu après une entrée d'import map est pourtant chargée à
  * l'exécution comme n'importe quel `<script src>`.
- * @returns {Array<{spec:string, url:string, sri:boolean, index:number}>}
+ * @returns {Array<{spec:string, url:string, sri:boolean, index:number, baseBrute:?string, mention:?string}>}
  *   `index` est le décalage du `<script>` dans `contenu`, pour que l'appelant
- *   calcule fichier/ligne comme pour les autres motifs HTML.
+ *   calcule fichier/ligne comme pour les autres motifs HTML ; `baseBrute` est
+ *   le `href` brut de la `<base>` qui précède cette carte (les URL relatives
+ *   `./`, `../` et `/` se résolvent contre elle, avec `urlDe`) ; `mention`
+ *   dit ce que le constat doit préciser (gabarit inerte, standard seul).
  */
 export function extraireImportMaps(contenu) {
   const entrees = [];
   for (const s of lirePage(contenu).scripts) {
-    if (s.genre !== 'importmap' || s.src !== null) continue;      // une import map porte son contenu en clair (jamais via `src`)
+    if (!s.carteImport) continue;                                 // une carte que Chromium applique : contenu en clair, fermée, ni `src`, ni `href`
     let carte;
     try { carte = JSON.parse(s.texte); } catch { continue; }      // JSON invalide : rien à affirmer
     const integrites = carte && typeof carte.integrity === 'object' && carte.integrity ? carte.integrity : {};
@@ -168,7 +195,7 @@ export function extraireImportMaps(contenu) {
     ajouter(carte?.imports);
     for (const portee of Object.values(carte?.scopes ?? {})) ajouter(portee);
     for (const [url, spec] of parUrl) {
-      entrees.push({ spec, url, sri: Object.prototype.hasOwnProperty.call(integrites, url), index: s.debut });
+      entrees.push({ spec, url, sri: Object.prototype.hasOwnProperty.call(integrites, url), index: s.debut, baseBrute: s.baseBrute, mention: s.mention });
     }
   }
   return entrees;
