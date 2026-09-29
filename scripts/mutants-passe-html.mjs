@@ -1,24 +1,13 @@
 #!/usr/bin/env node
 /**
- * Rejoue les mutants du correctif de l'étape 1 de la passe HTML.
+ * Rejoue les mutants du correctif de l'étape 1 de la passe HTML (voir
+ * `scripts/lib/rejouer-mutants.mjs` pour la méthode : copie temporaire,
+ * chaînes vérifiées d'avance, suite verte et complète sur le code non muté).
  *
- * Un mutant réintroduit UN défaut dans une copie temporaire du code (le dépôt
- * n'est jamais modifié) : la suite ciblée doit alors échouer. Un mutant qui
- * survit veut dire que le test qui devait protéger ce point ne prouve rien.
- * Le script échoue bruyamment (code 2) si la chaîne à remplacer n'est pas
- * trouvée exactement une fois, ou si la suite n'est pas verte et complète
- * (aucun test sauté) sur le code non muté : un mutant « tué » par une suite
- * déjà cassée ne prouve rien. Code 1 si un mutant survit, 0 sinon.
- *
- * Usage : GWAUDIT_CHROMIUM_PATH=/chemin/vers/chromium node scripts/mutants-passe-html.mjs [point…]
+ * Usage : GWAUDIT_CHROMIUM_PATH=/chemin/vers/chromium node scripts/mutants-passe-html.mjs [point…] [--part=i/n]
  */
-import fs from 'node:fs';
-import os from 'node:os';
-import path from 'node:path';
-import { spawnSync } from 'node:child_process';
-import { fileURLToPath } from 'node:url';
+import { lireArguments, rejouerMutants } from './lib/rejouer-mutants.mjs';
 
-const RACINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const RAPIDES = ['tests/passe-html-correctif.test.mjs', 'tests/passe-html-lecteurs.test.mjs', 'tests/scripts-inline.test.mjs'];
 const DIFFERENTIEL = 'tests/passe-html-chromium.test.mjs';
 
@@ -55,50 +44,13 @@ const MUTANTS = [
   ['mentions', 'src/moteur/statique.js', '  ajouterMentions(ctx, constats);\n', ''],
 ];
 
-const points = process.argv.slice(2);
-const retenus = MUTANTS.filter(([point]) => !points.length || points.includes(String(point)));
-if (!process.env.GWAUDIT_CHROMIUM_PATH) {
-  console.error('GWAUDIT_CHROMIUM_PATH est requis : le différentiel Chromium fait partie de la preuve, un test sauté ne tuerait rien.');
-  process.exit(2);
-}
+const { partie, restants: points } = lireArguments(process.argv.slice(2));
+const mutants = MUTANTS
+  .filter(([point]) => !points.length || points.includes(String(point)))
+  .map(([point, fichier, ancien, nouveau]) => ({ libelle: `point ${point}  ${fichier}  ${ancien.slice(0, 60).replace(/\n/g, ' ')}`, fichier, ancien, nouveau }));
 
-const copie = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-mutants-'));
-const lancer = (fichiers) => {
-  const r = spawnSync('node', ['--test', ...fichiers], { cwd: copie, encoding: 'utf8', env: process.env });
-  const saute = Number(/^# skipped (\d+)/m.exec(r.stdout)?.[1] ?? NaN);
-  return { ok: r.status === 0, saute };
-};
-
-try {
-  for (const dossier of ['src', 'tests', 'fixtures']) if (fs.existsSync(path.join(RACINE, dossier))) fs.cpSync(path.join(RACINE, dossier), path.join(copie, dossier), { recursive: true });
-  fs.copyFileSync(path.join(RACINE, 'package.json'), path.join(copie, 'package.json'));
-  fs.symlinkSync(path.join(RACINE, 'node_modules'), path.join(copie, 'node_modules'));
-
-  const base = lancer([...RAPIDES, DIFFERENTIEL]);
-  if (!base.ok || base.saute !== 0) {
-    console.error(`La suite ciblée n'est pas verte et complète sur le code non muté (échec : ${!base.ok}, sautés : ${base.saute}) : rien à conclure.`);
-    process.exit(2);
-  }
-
-  let survivants = 0;
-  for (const [numero, [point, fichier, ancien, nouveau]] of retenus.entries()) {
-    const chemin = path.join(copie, fichier);
-    const original = fs.readFileSync(chemin, 'utf8');
-    const occurrences = original.split(ancien).length - 1;
-    if (occurrences !== 1) {
-      console.error(`Mutant ${numero + 1} (point ${point}) : « ${ancien.slice(0, 70)} » trouvé ${occurrences} fois dans ${fichier}, exactement une attendue. Le code a changé : mettre à jour le mutant.`);
-      process.exit(2);
-    }
-    fs.writeFileSync(chemin, original.replace(ancien, () => nouveau));
-    let tue = !lancer(RAPIDES).ok;
-    let par = 'tests ciblés';
-    if (!tue) { tue = !lancer([DIFFERENTIEL]).ok; par = 'différentiel Chromium'; }
-    fs.writeFileSync(chemin, original);
-    if (!tue) survivants += 1;
-    console.log(`${tue ? 'TUÉ    ' : 'SURVIT '} point ${point}  ${fichier}  ${ancien.slice(0, 60).replace(/\n/g, ' ')}${tue ? `  (par ${par})` : ''}`);
-  }
-  console.log(`\n${retenus.length - survivants}/${retenus.length} mutants tués`);
-  process.exitCode = survivants ? 1 : 0;
-} finally {
-  fs.rmSync(copie, { recursive: true, force: true });
-}
+process.exitCode = rejouerMutants({
+  mutants,
+  groupes: [{ nom: 'tests ciblés', fichiers: RAPIDES }, { nom: 'différentiel Chromium', fichiers: [DIFFERENTIEL] }],
+  partie,
+});

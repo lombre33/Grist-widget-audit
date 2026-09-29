@@ -49,6 +49,16 @@ export const CONFIANCES = {
 let compteur = 0;
 
 /**
+ * Un `extrait` est replié (blancs) puis coupé à 300 caractères, mais seul son
+ * début est lu : replier tout un texte de plusieurs Mio (une ligne CSS
+ * minifiée, une balise énorme) pour chacun de milliers de constats coûtait un
+ * temps et une mémoire quadratiques (8 000 `@import` sur une ligne : 11 s et
+ * 2,5 Go). Ne diffère de la lecture entière que si plus de 3 800 des 4 096
+ * premiers caractères sont des blancs.
+ */
+const LONGUEUR_LUE_EXTRAIT = 4096;
+
+/**
  * Construit un constat normalisé.
  *
  * @param {object} c
@@ -89,7 +99,7 @@ export function constat(c) {
     remediation: c.remediation ?? null,
     fichier: c.fichier ?? null,
     ligne: c.ligne ?? null,
-    extrait: c.extrait ? String(c.extrait).replace(/\s+/g, ' ').slice(0, 300) : null,
+    extrait: c.extrait ? String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT).replace(/\s+/g, ' ').slice(0, 300) : null,
     referentiels: c.referentiels ?? [],
     confiance: c.confiance ?? 'probable',
     preuve: c.preuve ?? null,

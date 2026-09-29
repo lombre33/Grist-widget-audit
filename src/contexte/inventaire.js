@@ -17,6 +17,7 @@ import path from 'node:path';
 import * as walk from 'acorn-walk';
 import { lirePage, urlDe, cheminLocal } from '../moteur/page-html.js';
 import { parser, chaineLitterale } from '../moteur/analyse-js.js';
+import { lireFeuille, nouveauBudgetCss } from '../moteur/css.js';
 
 const EXCLUS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'coverage', 'vendor', '.venv', '__pycache__']);
 
@@ -255,6 +256,11 @@ function referencesDeCode(source) {
   return refs;
 }
 
+/** URL que la lecture d'une feuille de style demande (`@import`, `url()`, préchargement), sans les bornes. */
+function urlsDeFeuille(entrees) {
+  return entrees.filter((e) => e.sorte !== 'borne' && e.url !== '').map((e) => e.url);
+}
+
 /**
  * Références locales sortantes d'un fichier (script src, link href, import,
  * url(), worker). Une page HTML les donne déjà résolues depuis la racine du
@@ -265,7 +271,7 @@ function referencesSortantes(f) {
   const refs = [];
   const c = f.contenu ?? '';
   if (f.ext === '.html' || f.ext === '.htm') {
-    const { scripts, ressources } = lirePage(c);
+    const { scripts, ressources, feuilles } = lirePage(c);
     const local = (valeur, baseBrute) => {
       const chemin = cheminLocal(urlDe(valeur, baseBrute, f.chemin));
       if (chemin !== null) refs.push({ chemin });
@@ -275,8 +281,11 @@ function referencesSortantes(f) {
       if (s.unite) for (const ref of referencesDeCode(s.texte)) local(ref, s.baseBrute);   // un worker écrit en commentaire ou en gabarit n'y figure pas
     }
     for (const r of ressources) if (r.nom === 'link') { const href = r.attributs.get('href'); if (href != null) local(href, r.baseBrute); }
+    // Le CSS écrit dans la page (`<style>`, attributs `style`, feuille `data:`) est lu comme le navigateur le lit, ses URL relatives résolues contre la base de la page.
+    const budget = nouveauBudgetCss();
+    for (const feuille of feuilles) for (const url of urlsDeFeuille(lireFeuille(feuille, budget))) local(url, feuille.baseBrute);
   }
-  if (f.ext === '.css') for (const m of c.matchAll(/url\(\s*["']?([^"')]+)/gi)) refs.push(m[1]);
+  if (f.ext === '.css') refs.push(...urlsDeFeuille(lireFeuille({ sorte: 'style', applique: true, precharge: false, modele: false, texte: c, mimeLibre: true, baseBrute: null })));
   if (['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'].includes(f.ext)) refs.push(...referencesDeCode(c));
   return refs;
 }

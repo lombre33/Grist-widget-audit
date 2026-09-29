@@ -24,7 +24,9 @@ import { Tokenizer } from 'parse5';
  * d'un contenu brut, `decoupeur.state = …`) et `foreignContent` (`causesExit`,
  * pour sortir de SVG/MathML) ; sur l'instance, la propriété `state`, le
  * drapeau `inForeignNode`, et, pour ce qui précède, les méthodes
- * `_leaveAttrName`, `_emitChars`, `_stateCharacterReference`,
+ * `_leaveAttrName` (avec `currentLocation`, l'emplacement de chaque attribut gardé,
+ * `location.attrs`, comme le fait parse5 : la lecture des attributs `style` en a besoin pour donner
+ * la ligne d'un `url()`), `_leaveAttrValue`, `_emitChars`, `_stateCharacterReference`,
  * `_stateCdataSectionEnd`, `_appendCharToCurrentCharacterToken` et
  * `_emitCurrentCharacterToken`, avec `currentToken`, `currentAttr`,
  * `currentCharacterToken`, `entityStartPos` et `preprocessor` (`offset`,
@@ -46,6 +48,10 @@ export class Decoupeur extends Tokenizer {
     if (balise.nomsVus.has(this.currentAttr.name)) return;
     balise.nomsVus.add(this.currentAttr.name);
     balise.attrs.push(this.currentAttr);
+    if (balise.location && this.currentLocation) {
+      (balise.location.attrs ??= Object.create(null))[this.currentAttr.name] = this.currentLocation;
+      this._leaveAttrValue();
+    }
   }
 
   _emitChars(ch) {

@@ -13,8 +13,9 @@
  * Pas encore une passe unique : `f-conformite.js` (F-RGAA) garde sa propre
  * marche du découpeur jusqu'à l'étape 3, où elle passera par `parcourirPage`.
  */
-import { TokenizerMode, foreignContent } from 'parse5';
+import { TokenizerMode, foreignContent, parse, defaultTreeAdapter } from 'parse5';
 import { Decoupeur } from './decoupeur-html.js';
+import { decoderUrlData } from './css.js';
 
 export const ELEMENTS_VIDES = new Set(['area', 'base', 'basefont', 'bgsound', 'br', 'col', 'embed', 'frame', 'hr', 'img', 'input', 'keygen', 'link', 'meta', 'param', 'source', 'track', 'wbr']);
 
@@ -76,6 +77,14 @@ const nouvellePortee = () => ({ ouverts: new Map(), boutons: 0 });
  * pose `element.positions`, les jetons de texte de cet élément portent
  * `origines` (voir `Decoupeur`) : la position dans le source de chaque unité
  * de leur texte, décodé.
+ *
+ * Renvoie `{ quirks }` : le document est-il en mode quirks (`compatMode`
+ * `BackCompat`) ? Tout le monde peut s'en servir : en quirks, une feuille
+ * `data:` de n'importe quel type MIME est lue (`link` comme `@import`). Il
+ * l'est sans doctype valide, avec une balise ou du texte avant le doctype
+ * (un commentaire, des blancs ou un NUL n'y comptent pas, vérifié dans
+ * Chromium 141 : `tests/passe-html-css.test.mjs`), ou avec un des doctypes
+ * du standard qui le veulent. Le mode « limited-quirks » n'est pas du quirks.
  */
 export function parcourirPage(source, visiteur) {
   const pile = [];
@@ -83,6 +92,14 @@ export function parcourirPage(source, visiteur) {
   let portee = portees[0];
   let templatesOuverts = 0;
   let phase = 'tete';
+  let doctypePossible = true;
+  let quirks = false;
+  const contenuAvantDoctype = () => {
+    if (doctypePossible) {
+      doctypePossible = false;
+      quirks = true;
+    }
+  };
 
   const depiler = (finContenu, finBalise, propre = false) => {
     const element = pile.pop();
@@ -112,6 +129,7 @@ export function parcourirPage(source, visiteur) {
 
   const decoupeur = new Decoupeur({ sourceCodeLocationInfo: true }, {
     onStartTag(balise) {
+      contenuAvantDoctype();
       const nom = balise.tagName;
       const { startOffset } = balise.location;
       if (decoupeur.inForeignNode && foreignContent.causesExit(balise)) sortirDeLEtranger(startOffset);
@@ -151,6 +169,7 @@ export function parcourirPage(source, visiteur) {
       ajusterModeEtranger();
     },
     onEndTag(balise) {
+      contenuAvantDoctype();
       const nom = balise.tagName;
       const { startOffset, endOffset } = balise.location;
       if (templatesOuverts === 0) {
@@ -180,6 +199,7 @@ export function parcourirPage(source, visiteur) {
       ajusterModeEtranger();
     },
     onCharacter(jeton) {
+      contenuAvantDoctype();
       const haut = pile.at(-1);
       if (phase !== 'corps' && !haut?.brut) ouvrirLeCorps();
       visiteur.texte?.(jeton, haut, 'caractere');
@@ -191,13 +211,19 @@ export function parcourirPage(source, visiteur) {
       visiteur.texte?.(jeton, haut, 'nul');
     },
     onComment() {},
-    onDoctype() {},
+    onDoctype(jeton) {
+      if (!doctypePossible) return;
+      doctypePossible = false;
+      quirks = defaultTreeAdapter.getDocumentMode(parse(source.slice(jeton.location.startOffset, jeton.location.endOffset))) === 'quirks';
+    },
     onEof() {
+      if (doctypePossible) quirks = true;
       while (pile.length) depiler(source.length, source.length);
       visiteur.fin?.();
     },
   });
   decoupeur.write(source, true);
+  return { quirks };
 }
 
 /** Les types MIME JavaScript du standard MIME Sniffing, que le navigateur exécute comme script classique. */
@@ -208,8 +234,15 @@ const TYPES_JAVASCRIPT = new Set([
   'text/x-ecmascript', 'text/x-javascript',
 ]);
 
-/** Blancs de bord du standard HTML : espace, tabulation, saut de ligne, saut de page, retour chariot. */
-const BLANCS_HTML = /^[\t\n\f\r ]+|[\t\n\f\r ]+$/g;
+/** Blancs de bord du standard HTML (espace, tabulation, saut de ligne, saut de page, retour chariot), retirés en temps linéaire. */
+function sansBlancsDeBord(texte) {
+  const espace = (c) => c === 32 || c === 9 || c === 10 || c === 12 || c === 13;
+  let a = 0;
+  let b = texte.length;
+  while (a < b && espace(texte.charCodeAt(a))) a++;
+  while (b > a && espace(texte.charCodeAt(b - 1))) b--;
+  return texte.slice(a, b);
+}
 
 /**
  * Blancs que Chromium retire autour d'un `type` avant de le comparer aux
@@ -266,7 +299,7 @@ export function typeDeScript(attributs, ns = 'html') {
   else if (TYPES_JAVASCRIPT.has(enMinusculesAscii(sansBlancsDeType(type)))) genre = 'classique';
   else if (CLASSES_DE_MODULE.has(enMinusculesAscii(type))) genre = enMinusculesAscii(type);
   else {
-    const standard = enMinusculesAscii(type.replace(BLANCS_HTML, ''));
+    const standard = enMinusculesAscii(sansBlancsDeBord(type));
     if (CLASSES_DE_MODULE.has(standard)) {
       genre = standard;
       seulementStandard = true;
@@ -334,7 +367,7 @@ const BASES = new Map();
 function calculerBase(baseBrute, cheminPage) {
   const page = urlDePage(cheminPage);
   if (baseBrute === null || baseBrute === undefined) return page;
-  const valeur = baseBrute.replace(BLANCS_HTML, '');
+  const valeur = sansBlancsDeBord(baseBrute);
   if (valeur === '') return page;
   let base;
   try { base = new URL(valeur, page); } catch { return page; }
@@ -393,6 +426,113 @@ export function mentionDe(entree) {
   return mentions.length ? mentions.join(' ; ') : null;
 }
 
+const estBlancHtml = (c) => c === ' ' || c === '\t' || c === '\n' || c === '\f' || c === '\r';
+
+/**
+ * Les URL d'un attribut `srcset` (ou `imagesrcset`), lues comme le fait le
+ * standard HTML (« parse a srcset attribute ») : des candidats séparés par des
+ * virgules, chacun une URL suivie de descripteurs `Nw` ou `Nx` ; une URL sans
+ * blanc ni virgule de fin garde sa virgule interne (`a.png,1x`), une virgule
+ * entre parenthèses ne sépare rien, et un candidat aux descripteurs invalides
+ * est écarté. Toutes les URL valides comptent : l'écran choisit laquelle sera
+ * chargée (`x` de 1 ou de 2), et le widget n'en maîtrise aucune.
+ */
+export function candidatsSrcset(valeur) {
+  const urls = [];
+  const n = valeur.length;
+  let i = 0;
+  for (;;) {
+    while (i < n && (estBlancHtml(valeur[i]) || valeur[i] === ',')) i++;
+    if (i >= n) break;
+    let j = i;
+    while (j < n && !estBlancHtml(valeur[j])) j++;
+    let url = valeur.slice(i, j);
+    i = j;
+    let descripteurs = '';
+    if (url.endsWith(',')) {
+      let fin = url.length;
+      while (fin > 0 && url.charCodeAt(fin - 1) === 44) fin--;
+      url = url.slice(0, fin);
+    }
+    else {
+      while (i < n && estBlancHtml(valeur[i])) i++;
+      let parentheses = false;
+      let k = i;
+      for (; k < n; k++) {
+        const c = valeur[k];
+        if (c === '(') parentheses = true;
+        else if (c === ')') parentheses = false;
+        else if (c === ',' && !parentheses) break;
+      }
+      descripteurs = valeur.slice(i, k);
+      i = k + 1;
+    }
+    if (url && descripteursValides(descripteurs)) urls.push(url);
+  }
+  return urls;
+}
+
+function descripteursValides(texte) {
+  let largeur = false;
+  let densite = false;
+  for (const jeton of texte.split(/[\t\n\f\r ]+/).filter(Boolean)) {
+    const nombre = jeton.slice(0, -1);
+    if (jeton.endsWith('w') && /^[0-9]+$/.test(nombre) && Number(nombre) > 0 && !largeur) largeur = true;
+    else if (jeton.endsWith('x') && /^[+-]?(?:[0-9]+\.?[0-9]*|\.[0-9]+)(?:[eE][+-]?[0-9]+)?$/.test(nombre) && Number(nombre) >= 0 && !densite) densite = true;
+    else return false;
+  }
+  return !(largeur && densite);
+}
+
+const AS_PRECHARGES = new Set(['script', 'style', 'font', 'image', 'fetch', 'track']);
+
+/**
+ * Ce que Chromium fait d'un `<link>` (vérifié dans Chromium 141, le 2026-09-29,
+ * par sonde : `tests/passe-html-css.test.mjs`). `rel` se lit en jetons séparés
+ * par des blancs ASCII, sans tenir compte de la casse ; un jeton `stylesheet`
+ * charge une feuille (`type` vide, absent ou `text/css` seulement, même
+ * `alternate`, `disabled` ou `media="print"`), `icon` une icône, `preload` une
+ * ressource si `as` en désigne une (jamais `document`, `audio`, `video`,
+ * `worker` ni `as` absent), `modulepreload`, `prefetch` et `prerender`
+ * la leur. Tout le reste (`canonical`, `alternate`, `manifest`,
+ * `apple-touch-icon`, `author`, `next`, `import`…) ne charge rien.
+ * `preconnect` et `dns-prefetch` n'appellent pas de ressource : ils ouvrent
+ * ou préparent une connexion vers l'hôte, ce qu'un navigateur sans écran
+ * n'exécute pas (non observé, dit comme tel dans le constat).
+ * Sans `href`, ou avec un `href` vide, rien n'est chargé, hors `preload`
+ * d'une image dont `imagesrcset` fournit les candidats.
+ * @param {Map<string, string>} attributs
+ * @returns {Array<{genre: 'feuille'|'icone'|'precharge'|'modulepreload'|'prefetch'|'prerender'|'connexion', urls: string[]}>}
+ */
+export function usageLien(attributs) {
+  const jetons = new Set(enMinusculesAscii(attributs.get('rel') ?? '').split(/[\t\n\f\r ]+/).filter(Boolean));
+  const href = sansBlancsDeBord(attributs.get('href') ?? '') === '' ? [] : [attributs.get('href')];
+  const usages = [];
+  if (jetons.has('stylesheet')) {
+    const type = attributs.get('type');
+    if (type === undefined || type === '' || sansBlancsDeBord(enMinusculesAscii(type.split(';')[0])) === 'text/css') usages.push({ genre: 'feuille', urls: href });
+  }
+  if (jetons.has('icon')) usages.push({ genre: 'icone', urls: href });
+  if (jetons.has('preload')) {
+    const as = enMinusculesAscii(attributs.get('as') ?? '');
+    if (AS_PRECHARGES.has(as)) {
+      const srcset = as === 'image' ? attributs.get('imagesrcset') : undefined;
+      usages.push({ genre: 'precharge', as, urls: srcset !== undefined && sansBlancsDeBord(srcset) !== '' ? candidatsSrcset(srcset) : href });
+    }
+  }
+  for (const genre of ['modulepreload', 'prefetch', 'prerender']) if (jetons.has(genre)) usages.push({ genre, urls: href });
+  if (jetons.has('preconnect') || jetons.has('dns-prefetch')) usages.push({ genre: 'connexion', urls: href });
+  return usages.filter((u) => u.urls.length);
+}
+
+const ELEMENTS_LUS = new Set(['script', 'base', 'link', 'iframe', 'img', 'object', 'embed']);
+
+const DEBUT_VALEUR_STYLE = /^style[\t\n\f\r ]*=[\t\n\f\r ]*(["']?)/i;
+const sansRetourChariot = (texte) => texte.replace(/\r\n?/g, '\n');
+
+/** Vrai si le navigateur lit un `<style>` de ce `type` comme une feuille CSS (vide ou `text/css`, sans tenir compte de la casse ASCII ni des blancs : Chromium ne les retire pas). */
+const typeDeStyleCss = (type) => type === undefined || type === '' || enMinusculesAscii(type) === 'text/css';
+
 /** Début de chaque ligne (au sens de `split('\n')`, comme le reste de l'outil). */
 function debutsDeLignes(texte) {
   const debuts = [0];
@@ -416,7 +556,7 @@ const LUS_SVG = new Set(['script', 'a']);
 const LUS_MATHML = new Set(['script']);
 const estLu = (nom, ns) => (ns === 'html' ? LUS_HTML : ns === 'svg' ? LUS_SVG : LUS_MATHML).has(nom);
 
-const estBlanc = (valeur) => valeur.replace(BLANCS_HTML, '') === '';
+const estBlanc = (valeur) => sansBlancsDeBord(valeur) === '';
 const seCharge = (genre) => genre === 'classique' || genre === 'module';
 
 /**
@@ -455,6 +595,53 @@ function classerScript(entree) {
   entree.demandes = demandesDe(entree);
 }
 
+/**
+ * Le scanner de préchargement de Chromium, qui lit la page avant le
+ * constructeur d'arbre et demande les `@import` d'un `<style>` sans passer
+ * par l'analyseur CSS. Il ne suit ni les espaces de noms ni l'arbre : chaque
+ * `<style>` (HTML, SVG ou MathML, même auto-fermant) y ouvre un texte brut
+ * jusqu'au premier `</style` suivi d'un blanc, d'une barre oblique ou de
+ * `>` ; `script`, `title`, `textarea`… ouvrent le leur, où un `<style>`
+ * n'est pas vu ; et un `<style>` n'est lu que hors de tout `<template>`,
+ * compté sur les balises sans regarder l'arbre (une fermante seule ne compte
+ * pas). Chaque point vérifié dans Chromium 141 (`tests/passe-html-css.test.mjs`).
+ * Renvoie, par décalage de balise ouvrante, le texte brut lu (`debut`, `fin`).
+ */
+function lireScanner(source) {
+  const styles = new Map();
+  let modeles = 0;
+  let ouvert = null;
+  const scanner = new Decoupeur({ sourceCodeLocationInfo: true }, {
+    onStartTag(balise) {
+      const nom = balise.tagName;
+      const { startOffset, endOffset } = balise.location;
+      if (nom === 'template') modeles++;
+      const mode = MODES_TEXTE_BRUT.get(nom);
+      if (mode !== undefined) scanner.state = mode;
+      if (nom === 'style' && modeles === 0) {
+        ouvert = { debut: endOffset, fin: source.length };
+        styles.set(startOffset, ouvert);
+      }
+    },
+    onEndTag(balise) {
+      const nom = balise.tagName;
+      if (nom === 'template' && modeles) modeles--;
+      if (nom === 'style' && ouvert) {
+        ouvert.fin = balise.location.startOffset;
+        ouvert = null;
+      }
+    },
+    onCharacter() {},
+    onWhitespaceCharacter() {},
+    onNullCharacter() {},
+    onComment() {},
+    onDoctype() {},
+    onEof() {},
+  });
+  scanner.write(source, true);
+  return styles;
+}
+
 const CACHE = new Map();
 const TAILLE_CACHE = 32;
 
@@ -491,6 +678,33 @@ const CARACTERE_DE_REMPLACEMENT = String.fromCharCode(0xfffd);
  * sens du standard : une `<meta http-equiv>` de CSP n'agit que là).
  * Résultat mis en cache par contenu : chaque règle qui lit la page la relit
  * sans la redécouper.
+ *
+ * `feuilles` : le CSS que la page écrit, à lire avec `lireFeuille` (`css.js`) :
+ * `{sorte: 'style'|'attribut'|'lien', element, ns, texte, precharge,
+ * texteScanner, debutScanner, applique, modele, baseBrute, ligne, debut}`.
+ * `sorte` dit si c'est le contenu d'un `<style>`, la valeur d'un attribut
+ * `style` ou le corps d'un `<link rel="stylesheet" href="data:…">` ;
+ * `precharge` que le scanner de préchargement de Chromium lit ce `<style>`
+ * (voir `lireScanner` : quel que soit son espace de noms, hors `<template>`) ;
+ * son texte brut, tel qu'écrit dans la page, est `texteScanner` (`debutScanner`
+ * en est le décalage), différent de `texte`, celui que le constructeur
+ * d'arbre lit (références décodées, sans les éléments enfants d'un style SVG) ;
+ * `applique` que le navigateur en fait une feuille (un `<style
+ * type="text/foo">` n'en est pas une, seul le préchargement le lit) ;
+ * `modele` qu'il est dans un `<template>`, où il ne s'applique qu'une fois
+ * inséré ; `baseBrute` le `href` brut de la `<base>` dont ses URL relatives
+ * dépendent (à résoudre avec `urlDe`, comme pour les scripts). `debut` est le
+ * décalage, dans la page, du premier caractère de `texte` quand chaque
+ * caractère de `texte` est écrit tel quel dans la page, sinon `null`
+ * (références de caractères, CDATA, éléments enfants d'un style SVG) et
+ * `ligne` celle de l'élément. `position(feuille, decalage)` donne `{ligne,
+ * colonne, exacte, decalage}` d'un décalage de `texte` (`position(feuille,
+ * decalage, true)` : de `texteScanner`) ; `decalage` est alors celui de la
+ * page, `null` si la position n'est pas exacte. `mimeLibre` dit que la page est en mode quirks
+ * (`quirks`, voir `parcourirPage`), où une feuille `data:` de n'importe quel
+ * type MIME est lue. Chaque `<link>` de `ressources` porte `usages` (voir
+ * `usageLien`) : ce que le navigateur en charge, pas seulement son `href`.
+ * @returns {{scripts: Array<object>, ressources: Array<object>, balises: Array<object>, feuilles: Array<object>, titre: ?string, quirks: boolean, positionDe: Function}}
  */
 export function lirePage(contenu) {
   const connu = CACHE.get(contenu);
@@ -501,14 +715,48 @@ export function lirePage(contenu) {
   const scripts = [];
   const ressources = [];
   const balises = [];
+  const feuilles = [];
   const aFinaliser = [];
+  const scanner = lireScanner(contenu);
   let baseBrute = null;
+  let baseDepuis = 0;
   let titre = null;
   let titreVu = false;
 
-  parcourirPage(contenu, {
-    ouverture(balise, element) {
+  const feuille = (sorte, element, balise, champs) => {
+    const { startOffset } = balise.location;
+    const entree = { sorte, element: element.nom, ns: element.ns, precharge: false, applique: true, modele: element.modele, baseBrute, ligne: positionDans(debuts, startOffset).ligne, debut: null, texte: '', ...champs };
+    feuilles.push(entree);
+    return entree;
+  };
+
+  const { quirks } = parcourirPage(contenu, {
+    ouverture(balise, element, parent) {
       const { nom, ns } = element;
+      element.modele = Boolean(parent?.modele) || (ns === 'html' && nom === 'template');
+      const localisation = balise.location.attrs?.style;
+      if (localisation) {
+        const valeur = attribut(balise, 'style');
+        const brut = contenu.slice(localisation.startOffset, localisation.endOffset);
+        const guillemet = DEBUT_VALEUR_STYLE.exec(brut);
+        if (valeur && guillemet) {
+          const debut = localisation.startOffset + guillemet[0].length;
+          const ecrit = contenu.slice(debut, localisation.endOffset - guillemet[1].length);
+          const exacte = sansRetourChariot(ecrit) === valeur;
+          feuille('attribut', element, balise, { texte: exacte ? ecrit : valeur, debut: exacte ? debut : null, ligne: positionDans(debuts, localisation.startOffset).ligne });
+        }
+      }
+      if (nom === 'style') {
+        const entree = feuille('style', element, balise, { applique: typeDeStyleCss(attribut(balise, 'type')) });
+        const lu = scanner.get(balise.location.startOffset);
+        if (lu) {
+          scanner.delete(balise.location.startOffset);
+          Object.assign(entree, { precharge: true, texteScanner: contenu.slice(lu.debut, lu.fin), debutScanner: lu.debut });
+        }
+        element.feuille = entree;
+        entree.debutContenu = balise.location.endOffset;
+        if (ns !== 'html') entree.morceaux = [];
+      }
       const estTitre = ns === 'html' && nom === 'title' && !titreVu && !element.dansTemplate;
       if (estTitre) {
         titreVu = true;
@@ -518,7 +766,10 @@ export function lirePage(contenu) {
       if (!estLu(nom, ns)) return;
       const attributs = new Map(balise.attrs.map(({ name, value }) => [name, value]));
       if (nom === 'base') {
-        if (baseBrute === null && !element.dansTemplate && attributs.has('href')) baseBrute = attributs.get('href');
+        if (baseBrute === null && !element.dansTemplate && attributs.has('href')) {
+          baseBrute = attributs.get('href');
+          baseDepuis = balise.location.startOffset;
+        }
         return;
       }
       const { startOffset: debut, endOffset: fin } = balise.location;
@@ -537,10 +788,20 @@ export function lirePage(contenu) {
         aFinaliser.push({ entree, element });
         scripts.push(entree);
       } else if (nom === 'a' || nom === 'meta') balises.push(entree);
-      else ressources.push(entree);
+      else {
+        if (nom === 'link') {
+          entree.usages = usageLien(attributs);
+          for (const usage of entree.usages) if (usage.genre === 'feuille') for (const url of usage.urls) {
+            const data = decoderUrlData(url);
+            if (data) feuille('lien', element, balise, { applique: false, data, texte: data.corps ?? '', trop: data.corps === null });
+          }
+        }
+        ressources.push(entree);
+      }
     },
     texte(jeton, haut, sorte) {
       if (!haut) return;
+      haut.feuille?.morceaux?.push(jeton.chars);
       if (haut.titre) {
         haut.titre.push(jeton.chars);
         return;
@@ -556,13 +817,46 @@ export function lirePage(contenu) {
     fermeture(element, finContenu) {
       element.finContenu = finContenu;
       if (element.titre) titre = element.titre.join('');
+      const style = element.feuille;
+      if (style) {
+        const ecrit = contenu.slice(style.debutContenu, finContenu);
+        const lu = style.morceaux ? style.morceaux.join('') : ecrit;
+        const exacte = sansRetourChariot(ecrit) === sansRetourChariot(lu);
+        style.texte = exacte ? ecrit : lu;
+        if (exacte) style.debut = style.debutContenu;
+        delete style.morceaux;
+        delete style.debutContenu;
+      }
     },
     fin() {
       for (const { entree, element } of aFinaliser) finaliserScript(entree, element, contenu, positionDe);
     },
   });
 
-  const resultat = { scripts, ressources, balises, titre, positionDe };
+  // Un style SVG vide et auto-fermant (`<style/>`) n'est jamais dépilé non plus.
+  for (const style of feuilles) {
+    delete style.morceaux;
+    delete style.debutContenu;
+  }
+
+  // Un `<style>` que le scanner voit et pas le constructeur d'arbre (texte brut de l'un, balisage de l'autre) : il n'est pas une feuille, seul le préchargement le lit.
+  for (const [decalage, lu] of scanner) {
+    feuilles.push({ sorte: 'style', element: 'style', ns: 'html', precharge: true, applique: false, modele: false, baseBrute: baseBrute !== null && baseDepuis < decalage ? baseBrute : null, ligne: positionDe(decalage).ligne, debut: null, texte: '', texteScanner: contenu.slice(lu.debut, lu.fin), debutScanner: lu.debut });
+  }
+
+  // Une feuille `data:` d'un `<link>` n'est lue que si son type MIME est `text/css` ou si la page est en mode quirks, où tout type passe (les `@import` imbriqués suivent la même règle).
+  for (const f of feuilles) {
+    f.mimeLibre = quirks;
+    if (f.sorte === 'lien') f.applique = f.data.mime === 'text/css' || quirks;
+  }
+
+  const position = (entree, decalage, scanner = false) => {
+    const origine = scanner ? entree.debutScanner : entree.debut;
+    const exacte = origine !== null && origine !== undefined;
+    const { ligne, colonne } = exacte ? positionDe(origine + decalage) : { ligne: entree.ligne, colonne: 0 };
+    return { ligne, colonne, exacte, decalage: exacte ? origine + decalage : null };
+  };
+  const resultat = { scripts, ressources, balises, feuilles, titre, quirks, positionDe, position };
   if (CACHE.size >= TAILLE_CACHE) CACHE.clear();
   CACHE.set(contenu, resultat);
   return resultat;

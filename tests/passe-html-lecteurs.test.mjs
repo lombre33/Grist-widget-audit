@@ -153,3 +153,9 @@ test('E-DEP-01 : un data-src ou un script commenté ne produit aucune fausse dé
   assert.equal(edep('<script data-src="https://esm.sh/x@1.0.0">a()</script>').length, 0);
   assert.equal(edep('<!-- <script src="https://esm.sh/x@1.0.0"></script> -->').length, 0);
 });
+
+test('annotation-xml : le type de l\'attribut encoding se compare sans rogner les blancs (Chromium 141 : " text/html" n\'est pas un point d\'intégration)', () => {
+  const scripts = (encoding) => lirePage(`<math><annotation-xml encoding="${encoding}"><script>a()</script></annotation-xml></math>`).scripts.filter((s) => s.ns === 'html').length;
+  for (const enc of ['text/html', 'TEXT/HTML', 'application/xhtml+xml']) assert.equal(scripts(enc), 1, enc);
+  for (const enc of [' text/html', 'text/html ', ' text/html', 'text/plain']) assert.equal(scripts(enc), 0, JSON.stringify(enc));
+});
