@@ -82,6 +82,11 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: bash docker/ci/verifier.sh memoire
 
+      - name: Publication à blanc (registre local)
+        id: publication
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash docker/ci/verifier.sh publication
+
       - name: Nettoyage
         if: ${{ always() }}
         run: |

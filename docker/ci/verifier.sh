@@ -4,7 +4,7 @@
 # exécutable de docker/README-V2-VERIFICATIONS.md : ce qui s'y lit comme une
 # commande à taper sur le VPS est ici une commande qui tourne et échoue.
 #
-# Usage : bash docker/ci/verifier.sh <build|audit|securite|proxy|plafond|memoire|tout>
+# Usage : bash docker/ci/verifier.sh <build|audit|securite|proxy|plafond|memoire|publication|tout>
 #
 # Règle de ce script : une vérification qui ne peut rien prouver échoue au lieu
 # de passer. Chaque blocage attendu a donc un témoin (la même commande sur un
@@ -218,9 +218,9 @@ JS
   t1="$(date +%s)"
   docker logs "$nom" 2>&1 | tail -5 || true
   docker rm -f "$nom" >/dev/null 2>&1 || true
-  echo "durée $((t1 - t0)) s après le contrôle, code de sortie $code"
+  echo "durée $((t1 - t0)) s depuis le démarrage (plafond 20 s), code de sortie $code"
   { [ "$code" = "124" ] || [ "$code" = "137" ]; } || echec "code $code au lieu de 124 (timeout) ou 137 (SIGKILL de repli)"
-  [ $((t1 - t0)) -ge 8 ] && [ $((t1 - t0)) -le 35 ] || echec "coupure $((t1 - t0)) s après le contrôle, attendue autour de 12 s (plafond 20 s)"
+  [ $((t1 - t0)) -ge 18 ] && [ $((t1 - t0)) -le 35 ] || echec "coupure à $((t1 - t0)) s, attendue autour de 20 s (plafond GWAUDIT_PLAFOND_S=20)"
   sleep 2
   if pgrep -f '/ms-playwright/chromium-' >/dev/null; then pgrep -af '/ms-playwright/chromium-' || true; echec "un Chromium survit à la destruction du conteneur"; fi
   ok "audit coupé au plafond (code $code), aucun Chromium orphelin"
@@ -274,6 +274,51 @@ cmd_memoire() {
   ok "mémoire contenue sous 768 Mio face à un widget qui alloue sans fin"
 }
 
+cmd_publication() {
+  titre "Publication à blanc : les deux images vers un registre local, sans identifiants"
+  # Ce que ça éprouve : publier.sh (étiquettes, « latest » réservé aux versions
+  # finales, propriétaire en minuscules, refus d'une étiquette invalide) et les
+  # étiquettes posées par la construction (source, révision). Pas ce qui ne se
+  # voit que sur ghcr.io (droits du jeton, visibilité du paquet) : publier.sh le
+  # dit à la vraie publication.
+  local reg=gwaudit-registre nom_reg=localhost:5000
+  docker rm -f "$reg" >/dev/null 2>&1 || true
+  docker run -d --name "$reg" -p 127.0.0.1:5000:5000 ghcr.io/distribution/distribution:3.0.0 >/dev/null
+  for _ in $(seq 1 20); do curl -sf "http://$nom_reg/v2/" >/dev/null && break; sleep 1; done
+  curl -sf "http://$nom_reg/v2/" >/dev/null || { docker logs "$reg" 2>&1 | tail -5; echec "registre local injoignable"; }
+
+  local pub=(env GWAUDIT_REGISTRE="$nom_reg" GWAUDIT_SANS_CONNEXION=1 GITHUB_REPOSITORY_OWNER=Lombre33 bash docker/ci/publier.sh)
+  if "${pub[@]}" latest >/dev/null 2>&1; then echec "publier.sh accepte l'étiquette « latest »"; fi
+  ok "étiquette invalide refusée"
+
+  "${pub[@]}" v0.0.0-essai
+  local tags
+  tags="$(curl -sf "http://$nom_reg/v2/lombre33/gwaudit-execution/tags/list")"
+  grep -q '"v0.0.0-essai"' <<<"$tags" || echec "étiquette v0.0.0-essai absente : $tags"
+  if grep -q '"latest"' <<<"$tags"; then echec "une version d'essai (v0.0.0-essai) a déplacé « latest » : $tags"; fi
+  ok "une version d'essai ne déplace pas « latest »"
+
+  "${pub[@]}" v0.0.0
+  local nom d_version d_latest
+  for nom in gwaudit-execution gwaudit-egress-proxy; do
+    tags="$(curl -sf "http://$nom_reg/v2/lombre33/$nom/tags/list")"
+    grep -q '"v0.0.0"' <<<"$tags" && grep -q '"latest"' <<<"$tags" || echec "$nom : v0.0.0 ou latest absent : $tags"
+    d_version="$(curl -sfI -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "http://$nom_reg/v2/lombre33/$nom/manifests/v0.0.0" | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2}')"
+    d_latest="$(curl -sfI -H 'Accept: application/vnd.oci.image.index.v1+json, application/vnd.oci.image.manifest.v1+json, application/vnd.docker.distribution.manifest.v2+json' "http://$nom_reg/v2/lombre33/$nom/manifests/latest" | tr -d '\r' | awk -F': ' 'tolower($1)=="docker-content-digest" {print $2}')"
+    [ -n "$d_version" ] && [ "$d_version" = "$d_latest" ] || echec "$nom : latest ($d_latest) ne pointe pas sur v0.0.0 ($d_version)"
+  done
+  ok "une version finale (v0.0.0) porte « latest », pour les deux images"
+
+  local source revision
+  docker pull -q "$nom_reg/lombre33/gwaudit-execution:v0.0.0" >/dev/null
+  source="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.source"}}' "$nom_reg/lombre33/gwaudit-execution:v0.0.0")"
+  revision="$(docker image inspect --format '{{index .Config.Labels "org.opencontainers.image.revision"}}' "$nom_reg/lombre33/gwaudit-execution:v0.0.0")"
+  [ "$source" = "https://github.com/lombre33/Grist-widget-audit" ] || echec "étiquette source de l'image : « $source »"
+  [ -z "${GWAUDIT_REVISION:-}" ] || [ "$revision" = "$GWAUDIT_REVISION" ] || echec "étiquette révision de l'image : « $revision » au lieu de $GWAUDIT_REVISION"
+  ok "l'image publiée dit d'où elle vient (source $source, révision ${revision:0:7})"
+  docker rm -f "$reg" >/dev/null 2>&1 || true
+}
+
 case "${1:-}" in
   build) cmd_build ;;
   audit) cmd_audit ;;
@@ -281,6 +326,7 @@ case "${1:-}" in
   proxy) cmd_proxy ;;
   plafond) cmd_plafond ;;
   memoire) cmd_memoire ;;
-  tout) cmd_build; cmd_audit; cmd_securite; cmd_proxy; cmd_plafond; cmd_memoire ;;
-  *) echo "usage : $0 <build|audit|securite|proxy|plafond|memoire|tout>" >&2; exit 2 ;;
+  publication) cmd_publication ;;
+  tout) cmd_build; cmd_audit; cmd_securite; cmd_proxy; cmd_plafond; cmd_memoire; cmd_publication ;;
+  *) echo "usage : $0 <build|audit|securite|proxy|plafond|memoire|publication|tout>" >&2; exit 2 ;;
 esac

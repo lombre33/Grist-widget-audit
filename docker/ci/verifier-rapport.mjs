@@ -21,6 +21,7 @@ const problemes = [];
 if (typeof rapport.verdict !== 'string') problemes.push('aucun verdict dans le rapport');
 if (!Array.isArray(rapport.axesNonExecutes)) problemes.push('axesNonExecutes absent du rapport');
 else if (!axeDLibre && rapport.axesNonExecutes.length) problemes.push(`axes non exécutés : ${JSON.stringify(rapport.axesNonExecutes)}`);
+if (!axeDLibre && Array.isArray(rapport.axesPartiels) && rapport.axesPartiels.length) problemes.push(`axes partiels : ${JSON.stringify(rapport.axesPartiels)}`);
 if (!axeDLibre && rapport.axes?.D?.nonExecute !== false) problemes.push("l'axe D n'a pas tourné (Chromium indisponible dans le conteneur ?)");
 
 const resume = `verdict=${rapport.verdict} score=${rapport.scoreGlobal} bloquants=${rapport.bloquants?.length ?? '?'} commit=${rapport.commit ?? 'aucun'}`;
