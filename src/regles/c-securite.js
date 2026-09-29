@@ -17,7 +17,7 @@ import path from 'node:path';
 import * as acornWalk from 'acorn-walk';
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique, extraireImportMaps, parser, syntaxeDeModule, colonneDans } from '../moteur/analyse-js.js';
-import { lirePage, integriteProtege } from '../moteur/page-html.js';
+import { lirePage, integriteProtege, urlDe, urlDeCarte, mentionDe } from '../moteur/page-html.js';
 
 /** Hôtes considérés comme faisant partie de l'infrastructure Grist elle-même. */
 const HOTES_GRIST = [/(^|\.)getgrist\.com$/i, /(^|\.)grist\.numerique\.gouv\.fr$/i, /(^|\.)gristlabs\.com$/i];
@@ -225,45 +225,64 @@ export function analyserSortiesReseau(ctx) {
   return constats;
 }
 
+const MENTION_GABARIT_RESSOURCE = 'dans un `<template>` : ne se charge et ne s\'active qu\'une fois le gabarit cloné puis inséré';
+const precise = (texte, mention) => (mention ? `${texte} Précision : ${mention}.` : texte);
+const jetons = (valeur) => (valeur ?? '').toLowerCase().split(/[\t\n\f\r ]+/).filter(Boolean);
+
 /** Ressources externes déclarées dans le HTML et le CSS. */
 export function analyserRessourcesExternes(ctx) {
   const constats = [];
 
   // Élément HTML porteur d'une ressource → attribut d'URL, libellé, sévérité de base.
   const RESSOURCES = {
-    link: { attr: 'href', type: 'feuille de style ou préchargement', severite: 'majeur' },
-    iframe: { attr: 'src', type: 'iframe', severite: 'majeur' },
-    img: { attr: 'src', type: 'image', severite: 'mineur' },
-    object: { attr: 'data', type: 'objet (<object>)', severite: 'mineur' },
-    embed: { attr: 'src', type: 'contenu embarqué (<embed>)', severite: 'mineur' },
+    link: { attr: 'href', type: 'feuille de style ou préchargement', article: 'une', severite: 'majeur' },
+    iframe: { attr: 'src', type: 'iframe', article: 'une', severite: 'majeur' },
+    img: { attr: 'src', type: 'image', article: 'une', severite: 'mineur' },
+    object: { attr: 'data', type: 'objet (<object>)', article: 'un', severite: 'mineur' },
+    embed: { attr: 'src', type: 'contenu embarqué (<embed>)', article: 'un', severite: 'mineur' },
   };
-  // Hôte de l'URL telle que le navigateur la résout depuis la base effective
-  // de la page : une `<base href>` externe fait charger un `src` relatif chez
-  // un tiers, ce qu'une lecture par expression régulière ne voyait pas.
-  const hoteResolu = (url, base) => { try { return new URL(url, base).hostname; } catch { return null; } };
+  const MENTION_SANS_EXECUTION = 'le navigateur demande ce fichier sans l\'exécuter (script jamais fermé, ou `src` d\'un script SVG ou MathML)';
+  // Ce que le navigateur charge vraiment : une URL `http:` ou `https:`, résolue
+  // depuis la base effective de la page (une `<base href>` externe fait charger
+  // chez un tiers un `src` relatif, et un `src` relatif sous une base relative
+  // se résout contre l'URL de la page). Les autres schémas ne chargent rien de tiers.
+  const cibleReseau = (url) => (url && /^https?:$/.test(url.protocol) ? url : null);
 
   for (const f of ctx.fichiers) {
     if (!f.executee || f.binaire) continue;
 
     if (['.html', '.htm'].includes(f.ext)) {
       const { scripts, ressources } = lirePage(f.contenu);
-      // Dans l'ordre du document : chaque script à `src`, puis chaque élément
-      // porteur d'une ressource. `protege` suit ce que `integrity` protège
-      // vraiment (un jeton bien formé) : une valeur vide ou bidon laisse le
-      // navigateur charger n'importe quoi, elle ne doit donc pas déclasser.
+      // Dans l'ordre du document : chaque URL qu'un script demande, puis chaque
+      // élément porteur d'une ressource. `protege` suit ce que `integrity`
+      // protège vraiment (un jeton bien formé) : une valeur vide ou bidon
+      // laisse le navigateur charger n'importe quoi, elle ne doit donc pas
+      // déclasser. `code` : le navigateur exécute ce qu'il reçoit ; sinon il
+      // ne fait que le demander, et l'exposition est celle d'une ressource.
       const elements = [
-        ...scripts.filter((s) => s.src !== null).map((s) => ({ url: s.src, type: 'script', severite: 'critique', protege: integriteProtege(s.attributs.get('integrity')), base: s.base, ligne: s.ligne, balise: s.balise })),
+        ...scripts.flatMap((s) => s.chargements.map((c) => ({
+          url: c.valeur, type: c.execute ? 'script' : 'requête de script sans exécution', article: c.execute ? 'un' : 'une',
+          severite: c.execute ? 'critique' : 'majeur', code: c.execute,
+          protege: integriteProtege(s.attributs.get('integrity')), baseBrute: s.baseBrute, ligne: s.ligne, balise: s.balise,
+          mention: mentionDe({ dansTemplate: s.dansTemplate, seulementStandard: c.seulementStandard }) ?? (c.execute ? null : MENTION_SANS_EXECUTION),
+        }))),
         ...ressources.map((r) => {
           const meta = RESSOURCES[r.nom];
           if (!meta) return null;
           const url = r.attributs.get(meta.attr);
-          return url == null ? null : { url, type: meta.type, severite: meta.severite, protege: integriteProtege(r.attributs.get('integrity')), base: r.base, ligne: r.ligne, balise: r.balise };
+          return url == null ? null : {
+            url, type: meta.type, article: meta.article, severite: meta.severite, code: false,
+            protege: integriteProtege(r.attributs.get('integrity')), baseBrute: r.baseBrute, ligne: r.ligne, balise: r.balise,
+            mention: r.dansTemplate ? MENTION_GABARIT_RESSOURCE : null,
+          };
         }).filter(Boolean),
       ];
 
       for (const e of elements) {
-        const h = hoteResolu(e.url, e.base);
-        if (estLocal(h)) continue;                                 // relatif (widget.local), data:, blob:, about: … : pas une ressource tierce
+        const cible = cibleReseau(urlDe(e.url, e.baseBrute, f.chemin));
+        if (!cible) continue;                                      // data:, blob:, about:, file: … : rien n'est chargé chez un tiers
+        const h = cible.hostname;
+        if (estLocal(h)) continue;                                 // relatif (widget.local) : pas une ressource tierce
         const gristPlugin = estGrist(h) && /grist-plugin-api\.js/.test(e.url);
 
         if (gristPlugin) {
@@ -273,7 +292,7 @@ export function analyserRessourcesExternes(ctx) {
             regle: 'C-EXFIL-04', axe: 'C', severite: 'majeur', confiance: 'certain',
             titre: "L'API Grist est chargée depuis un domaine externe au lieu de l'instance hôte",
             fichier: f.chemin, ligne: e.ligne, extrait: e.balise,
-            constat: `\`grist-plugin-api.js\` est chargé depuis \`${h}\`.`,
+            constat: precise(`\`grist-plugin-api.js\` est chargé depuis \`${h}\`.`, e.mention),
             impact: "Le widget hébergé sur une instance souveraine (grist.numerique.gouv.fr) va chercher son script pivot sur un domaine tiers. Cela crée une dépendance de disponibilité et de confiance envers ce domaine, envoie l'adresse IP de chaque agent à un tiers, et casse le widget si l'instance applique une CSP stricte ou fonctionne en réseau fermé.",
             remediation: "Charger l'API en relatif : `<script src=\"/grist-plugin-api.js\"></script>`. L'instance qui sert le widget sert aussi l'API ; c'est la forme attendue pour un hébergement sur instance officielle.",
             referentiels: [REF_GUIDE, 'Souveraineté numérique — DINUM'],
@@ -287,13 +306,13 @@ export function analyserRessourcesExternes(ctx) {
         const sri = e.protege;
         constats.push(constat({
           regle: 'C-EXFIL-03', axe: 'C',
-          severite: e.type === 'script' && !sri ? 'critique' : e.severite,
-          bloquant: e.type === 'script' && !sri,
+          severite: e.code && !sri ? 'critique' : e.severite,
+          bloquant: e.code && !sri,
           confiance: 'certain',
           titre: `Ressource externe chargée depuis ${h} (${e.type})`,
           fichier: f.chemin, ligne: e.ligne, extrait: e.balise,
-          constat: `Le widget charge une ${e.type} depuis \`${h}\`${sri ? ' (avec attribut `integrity`)' : ' sans contrôle d\'intégrité (`integrity`)'}.`,
-          impact: e.type === 'script'
+          constat: precise(`Le widget charge ${e.article} ${e.type} depuis \`${h}\`${sri ? ' (avec attribut `integrity`)' : ' sans contrôle d\'intégrité (`integrity`)'}.`, e.mention),
+          impact: e.code
             ? "Un script tiers s'exécute avec tous les privilèges du widget, donc avec l'accès que l'agent a accordé au document. Si ce domaine est compromis ou remplacé, le document entier l'est aussi. C'est le scénario type d'attaque par la chaîne d'approvisionnement."
             : "La ressource est récupérée sur un domaine tiers à chaque affichage : l'adresse IP et l'horodatage de chaque agent sont transmis à ce tiers, et la disponibilité du widget dépend de lui.",
           remediation: "Héberger la ressource dans le dépôt du widget (vendoring) et la servir en relatif. Si le chargement distant est réellement nécessaire, ajouter `integrity` et `crossorigin`, et documenter le domaine dans le README.",
@@ -332,7 +351,9 @@ export function analyserRessourcesExternes(ctx) {
     // d'intégrité — les import maps prévoient une clé `integrity` de premier
     // niveau à cet effet (WHATWG).
     if (['.html', '.htm'].includes(f.ext)) for (const e of extraireImportMaps(f.contenu)) {
-      const h = hote(e.url);
+      const cible = cibleReseau(urlDeCarte(e.url, e.baseBrute, f.chemin));
+      if (!cible) continue;
+      const h = cible.hostname;
       if (estLocal(h) || estGrist(h)) continue;
       enregistrerDestination(ctx, h);
       constats.push(constat({
@@ -341,7 +362,7 @@ export function analyserRessourcesExternes(ctx) {
         confiance: 'certain',
         titre: `Import map : dépendance chargée depuis ${h} (${e.spec})`,
         fichier: f.chemin, ligne: numeroLigne(f.contenu, e.index), extrait: `"${e.spec}": "${e.url}"`,
-        constat: `L'import map fait résoudre \`${e.spec}\` vers \`${e.url}\`${e.sri ? " (couverte par la clé `integrity` de l'import map)" : ' sans entrée `integrity`'}.`,
+        constat: precise(`L'import map fait résoudre \`${e.spec}\` vers \`${e.url}\`${e.sri ? " (couverte par la clé `integrity` de l'import map)" : ' sans entrée `integrity`'}.`, e.mention),
         impact: "Un import nu résolu par cette carte s'exécute avec tous les privilèges du widget, exactement comme une balise <script src> : si ce domaine est compromis ou remplacé, le document entier l'est aussi. C'est le scénario type d'attaque par la chaîne d'approvisionnement.",
         remediation: "Héberger la bibliothèque dans le dépôt (vendoring) et la faire résoudre vers un chemin relatif, ou ajouter une entrée `integrity` pour cette URL dans l'import map et documenter le domaine dans le README.",
         referentiels: [REF_ANSSI, 'OWASP Top 10 A08:2021 — Intégrité logicielle', REF_GUIDE],
@@ -1402,6 +1423,12 @@ function constatMinuteurNonResolu({ unite, ligneDe, n, nom, motif, nomArg = null
   });
 }
 
+/** Vrai si un opérande d'une concaténation `+` est lui-même toujours une chaîne : le résultat l'est alors, quel que soit l'autre opérande. */
+function operandeChaine(noeud) {
+  if (noeud?.type === 'BinaryExpression' && noeud.operator === '+') return operandeChaine(noeud.left) || operandeChaine(noeud.right);
+  return produitToujoursUneChaine(noeud);
+}
+
 /**
  * Ce que le constat d'un minuteur affirme de son premier argument, selon ce
  * que l'analyse en sait vraiment. « Est une chaîne » n'est vrai que d'une
@@ -1409,7 +1436,7 @@ function constatMinuteurNonResolu({ unite, ligneDe, n, nom, motif, nomArg = null
  * type inconnu, une concaténation peut donner un nombre, un littéral non
  * chaîne est converti (relevé par la coordination le 2026-09-28).
  */
-function formeArgumentMinuteur(nom, forme, nomArg) {
+function formeArgumentMinuteur(nom, forme, nomArg, arg = null) {
   switch (forme) {
     case 'litteral': return {
       titre: `Littéral passé à ${nom} à la place d'une fonction (équivalent à eval)`,
@@ -1417,12 +1444,23 @@ function formeArgumentMinuteur(nom, forme, nomArg) {
     };
     case 'concatenation': return {
       titre: `Concaténation passée à ${nom} (équivalent à eval)`,
-      texte: `Le premier argument de \`${nom}\` est une concaténation, jamais une fonction : si elle produit une chaîne, celle-ci est exécutée comme du code.`,
+      texte: operandeChaine(arg)
+        ? `Le premier argument de \`${nom}\` est une concaténation dont un opérande est une chaîne : le résultat est toujours une chaîne, exécutée comme du code.`
+        : `Le premier argument de \`${nom}\` est une concaténation, jamais une fonction : si l'un de ses opérandes est une chaîne au moment de l'appel, le résultat est une chaîne, exécutée comme du code.`,
     };
-    case 'donnee': return {
-      titre: `Donnée reçue par le widget passée à ${nom} (équivalent à eval)`,
-      texte: `Le premier argument de \`${nom}\` provient d'une donnée reçue par le widget, dont le type n'est pas connu : si c'est une chaîne, elle est exécutée comme du code.`,
-    };
+    case 'donnee':
+      if (estAccesLocation(arg)) return {
+        titre: `Adresse de la page passée à ${nom} (équivalent à eval)`,
+        texte: `Le premier argument de \`${nom}\`, \`${nomPointe(arg)}\`, est lu dans l'adresse de la page, que n'importe quel lien peut fixer : c'est toujours une chaîne, exécutée comme du code.`,
+      };
+      if (estLectureStockageLocal(arg)) return {
+        titre: `Valeur du stockage local passée à ${nom} (équivalent à eval)`,
+        texte: `Le premier argument de \`${nom}\` est lu dans le stockage local, que n'importe quel script de cette origine peut remplir : c'est une chaîne (ou null), exécutée comme du code.`,
+      };
+      return {
+        titre: `Donnée reçue par le widget passée à ${nom} (équivalent à eval)`,
+        texte: `Le premier argument de \`${nom}\` provient d'une donnée reçue par le widget, dont le type n'est pas connu : si c'est une chaîne, elle est exécutée comme du code.`,
+      };
     case 'liaison': return {
       titre: `Valeur qui peut être une chaîne passée à ${nom} (équivalent à eval)`,
       texte: `Le premier argument de \`${nom}\`, \`${nomArg}\`, reçoit une chaîne ou une donnée ailleurs dans le code : si c'en est une au moment de l'appel, elle est exécutée comme du code.`,
@@ -1434,8 +1472,8 @@ function formeArgumentMinuteur(nom, forme, nomArg) {
   }
 }
 
-function traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut, profondeur, forme = 'chaine', nomArg = null, raison = null, motif = null }) {
-  const { titre, texte } = formeArgumentMinuteur(nom, forme, nomArg);
+function traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut, profondeur, forme = 'chaine', nomArg = null, raison = null, motif = null, arg = null }) {
+  const { titre, texte } = formeArgumentMinuteur(nom, forme, nomArg, arg);
   const remediation = `Passer une fonction : \`${nom}(() => …, délai)\`.`;
   const declaration = declarationQuiGarantit(nomArg, motif);
   return traiterSiteConstruction(ctx, {
@@ -1478,7 +1516,7 @@ function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, anc
   if (arg.type === 'ArrowFunctionExpression' || arg.type === 'FunctionExpression') return [];
 
   if (estSourceDonneeWidget(arg, ancetres)) {
-    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: null, profondeur, forme: 'donnee' });
+    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut: null, profondeur, forme: 'donnee', arg });
   }
 
   // Un identifiant est le seul cas où « inconnu » veut dire : peut-être une
@@ -1530,7 +1568,7 @@ function traiterMinuteur(ctx, { unite, ligneDe, n, nom, arg, ast, walkAcorn, anc
   // (texteBrut===null) s'en charge.
   if (produitToujoursUneChaine(arg)) {
     const texteBrut = plierLitteraux(arg) ?? decoderAtobLitteral(arg) ?? decoderFromCharCodeLitteral(arg);
-    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut, profondeur, forme: texteBrut === null && arg.type === 'BinaryExpression' ? 'concatenation' : 'chaine' });
+    return traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBrut, profondeur, forme: texteBrut === null && arg.type === 'BinaryExpression' ? 'concatenation' : 'chaine', arg });
   }
 
   // Le reste (accès de membre, appel de fonction quelconque, ternaire…) n'a
@@ -1804,45 +1842,55 @@ export function analyserInjections(ctx) {
   return constats;
 }
 
+/** Une `<meta http-equiv="Content-Security-Policy">` telle que Chromium la lit : nom de l'en-tête insensible à la casse (sans rogner d'espaces). */
+const estMetaCsp = (b) => b.nom === 'meta' && b.ns === 'html' && (b.attributs.get('http-equiv') ?? '').toLowerCase() === 'content-security-policy';
+
 /** Gestionnaires d'événements inline et attributs dangereux dans le HTML. */
 export function analyserHtmlDangereux(ctx) {
   const constats = [];
   for (const f of ctx.fichiers) {
     if (!f.executee || f.binaire || !['.html', '.htm'].includes(f.ext)) continue;
+    const { balises, ressources } = lirePage(f.contenu);
+    const mention = (e) => (e.dansTemplate ? MENTION_GABARIT_RESSOURCE : null);
 
-    for (const m of f.contenu.matchAll(/<a\b[^>]*\btarget\s*=\s*["']_blank["'][^>]*>/gi)) {
-      if (/\brel\s*=\s*["'][^"']*noopener/i.test(m[0])) continue;
+    for (const a of balises) {
+      if (a.nom !== 'a' || (a.attributs.get('target') ?? '').toLowerCase() !== '_blank') continue;
+      const rel = jetons(a.attributs.get('rel'));
+      if (rel.includes('noopener') || rel.includes('noreferrer')) continue;      // noreferrer implique noopener
       constats.push(constat({
         regle: 'C-DOM-01', axe: 'C', severite: 'mineur', confiance: 'certain',
         titre: 'Lien ouvrant un nouvel onglet sans rel="noopener"',
-        fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), extrait: m[0],
-        constat: 'Un lien `target="_blank"` ne porte pas `rel="noopener noreferrer"`.',
+        fichier: f.chemin, ligne: a.ligne, extrait: a.balise,
+        constat: precise('Un lien `target="_blank"` ne porte pas `rel="noopener noreferrer"`.', mention(a)),
         impact: "La page ouverte obtient une référence `window.opener` vers le widget et peut le rediriger (détournement d'onglet).",
         remediation: 'Ajouter `rel="noopener noreferrer"`.',
         referentiels: ['OWASP — Reverse tabnabbing'],
       }));
     }
 
-    for (const m of f.contenu.matchAll(/<iframe\b[^>]*>/gi)) {
-      if (/\bsandbox\s*=/.test(m[0])) continue;
+    for (const r of ressources) {
+      if (r.nom !== 'iframe' || r.attributs.has('sandbox')) continue;
       constats.push(constat({
         regle: 'C-DOM-02', axe: 'C', severite: 'majeur', confiance: 'certain',
         titre: 'Iframe imbriquée sans attribut sandbox',
-        fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), extrait: m[0],
-        constat: 'Le widget insère une iframe sans restreindre ses capacités.',
+        fichier: f.chemin, ligne: r.ligne, extrait: r.balise,
+        constat: precise('Le widget insère une iframe sans restreindre ses capacités.', mention(r)),
         impact: "Le contenu embarqué s'exécute sans confinement supplémentaire à l'intérieur du widget.",
         remediation: 'Ajouter `sandbox` avec le minimum de permissions nécessaires.',
         referentiels: [REF_ANSSI],
       }));
     }
 
-    const entree = ctx.entrees.includes(f.chemin);
-    if (entree && !/<meta[^>]+http-equiv\s*=\s*["']Content-Security-Policy["']/i.test(f.contenu)) {
+    if (ctx.entrees.includes(f.chemin)) {
+      const metas = balises.filter(estMetaCsp);
+      if (metas.some((m) => m.dansTete && !m.dansTemplate)) continue;              // une CSP que Chromium applique
+      const inerte = metas[0];
       constats.push(constat({
         regle: 'C-CSP-01', axe: 'C', severite: 'mineur', confiance: 'certain',
         titre: 'Aucune politique de sécurité de contenu (CSP) déclarée',
         fichier: f.chemin,
-        constat: "Le point d'entrée ne déclare pas de balise `<meta http-equiv=\"Content-Security-Policy\">`.",
+        constat: precise("Le point d'entrée ne déclare pas de balise `<meta http-equiv=\"Content-Security-Policy\">`.",
+          inerte && `une telle balise existe ligne ${inerte.ligne}, mais Chromium ne l'applique pas : ${inerte.dansTemplate ? 'elle est dans un `<template>`' : "elle n'est plus dans `<head>` (après `</head>`, `<body>` ou du contenu)"}`),
         impact: "Sans CSP, rien n'empêche l'exécution d'un script injecté ni une requête sortante imprévue. La CSP est le filet de sécurité qui limite les dégâts quand une autre défense cède.",
         remediation: "Ajouter une CSP restrictive, par exemple : `default-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors *` (le widget devant rester encadrable par Grist). La déclarer côté serveur est préférable, la balise `<meta>` est un repli acceptable pour un widget statique.",
         referentiels: [REF_ANSSI, 'OWASP — Content Security Policy Cheat Sheet'],
@@ -1871,14 +1919,10 @@ export function analyserCspPermissive(ctx) {
   const constats = [];
   for (const f of ctx.fichiers) {
     if (!f.executee || f.binaire || !ctx.entrees.includes(f.chemin)) continue;
-    const balise = f.contenu.match(/<meta[^>]+http-equiv\s*=\s*["']Content-Security-Policy["'][^>]*>/i);
-    if (!balise) continue; // absence déjà couverte par C-CSP-01
-    // Une valeur de CSP légitime contient elle-même des apostrophes ('self',
-    // 'unsafe-inline'…) : une classe de caractères `[^"']` s'arrêterait à la
-    // première d'entre elles. On capture donc jusqu'à la même citation que
-    // celle qui a ouvert l'attribut, par rétro-référence.
-    const contenuAttr = balise[0].match(/\bcontent\s*=\s*(["'])((?:(?!\1).)*)\1/i);
-    if (!contenuAttr) continue;
+    const meta = lirePage(f.contenu).balises.find((b) => estMetaCsp(b) && b.dansTete && !b.dansTemplate);
+    if (!meta) continue; // absence (ou balise que Chromium n'applique pas) déjà couverte par C-CSP-01
+    const contenuAttr = [null, null, meta.attributs.get('content')];
+    if (contenuAttr[2] == null) continue;
 
     const directives = {};
     for (const part of contenuAttr[2].split(';')) {
@@ -1889,12 +1933,12 @@ export function analyserCspPermissive(ctx) {
     const valeurs = directives[directiveEffective];
     if (!valeurs) continue;
 
-    const ligne = numeroLigne(f.contenu, balise.index);
+    const ligne = meta.ligne;
     if (valeurs.includes('*')) {
       constats.push(constat({
         regle: 'C-CSP-02', axe: 'C', severite: 'mineur', confiance: 'certain',
         titre: 'La CSP déclarée autorise un joker non qualifié',
-        fichier: f.chemin, ligne, extrait: balise[0],
+        fichier: f.chemin, ligne, extrait: meta.balise,
         constat: `La directive \`${directiveEffective}\` contient \`*\`, qui autorise le chargement de script depuis n'importe quel domaine.`,
         impact: "Une CSP qui accepte tout domaine ne filtre rien : elle donne l'apparence d'une protection sans en apporter la moindre. Un lecteur pressé (ou un contrôle automatisé binaire) la compte comme un point acquis alors qu'elle ne bloque aucune des attaques que la CSP est censée limiter.",
         remediation: "Remplacer le joker par la liste explicite des domaines réellement nécessaires : l'instance Grist elle-même, et les CDN documentés dans le README.",
@@ -1905,7 +1949,7 @@ export function analyserCspPermissive(ctx) {
       constats.push(constat({
         regle: 'C-CSP-02', axe: 'C', severite: 'mineur', confiance: 'certain',
         titre: "La CSP déclarée autorise le script inline ('unsafe-inline')",
-        fichier: f.chemin, ligne, extrait: balise[0],
+        fichier: f.chemin, ligne, extrait: meta.balise,
         constat: `La directive \`${directiveEffective}\` contient \`'unsafe-inline'\`.`,
         impact: "`'unsafe-inline'` neutralise la protection anti-XSS de la CSP : un script injecté (voir les règles C-XSS-*) s'exécute normalement, exactement comme en l'absence de CSP.",
         remediation: "Retirer `'unsafe-inline'` et déplacer le JavaScript inline vers des fichiers externes, ou utiliser un nonce/hash par script si l'inline est indispensable.",

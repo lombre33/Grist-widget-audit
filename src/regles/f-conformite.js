@@ -12,6 +12,7 @@ import path from 'node:path';
 import { TokenizerMode, foreignContent } from 'parse5';
 import { constat } from '../moteur/modele.js';
 import { Decoupeur } from '../moteur/decoupeur-html.js';
+import { lirePage } from '../moteur/page-html.js';
 
 /**
  * Domaines dont l'appel depuis le navigateur d'un agent pose une question
@@ -299,7 +300,7 @@ export function analyserAccessibiliteStatique(ctx) {
         referentiels: ['RGAA 4.1 — critère 8.3', 'WCAG 2.1 — 3.1.1'],
       }));
     }
-    if (entree && !/<title>\s*\S/i.test(c)) {
+    if (entree && !/\S/.test(lirePage(c).titre ?? '')) {
       constats.push(constat({
         regle: 'F-RGAA-02', axe: 'F', severite: 'mineur', confiance: 'certain',
         titre: 'La page du widget n\'a pas de titre',

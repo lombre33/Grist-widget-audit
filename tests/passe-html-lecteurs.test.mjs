@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { lirePage, integriteProtege, genreDeScript } from '../src/moteur/page-html.js';
+import { lirePage, integriteProtege, genreDeScript, urlDe, cheminLocal } from '../src/moteur/page-html.js';
 import { analyserRessourcesExternes } from '../src/regles/c-securite.js';
 import { analyserDependancesDistantes } from '../src/regles/e-dependances.js';
 
@@ -49,32 +49,46 @@ test('lirePage : data-src n\'est pas src — le contenu s\'exécute en ligne, au
   assert.equal(s.texte, 'reel()');
 });
 
-test('lirePage : un <!--<script> neutralise le </script> suivant, qui devient du texte du premier script (le <script src> masqué n\'est pas un chargement)', () => {
+test('lirePage : un <!--<script> neutralise le </script> suivant : le premier script n\'est jamais fermé, rien ne s\'exécute, le <script src> masqué est du texte', () => {
   // Vérifié dans Chromium : rien ne s'exécute et apres.js n'est pas chargé,
   // car le </script> est avalé par l'état « script data double escaped ».
   const { scripts } = lirePage('<script>a=1;/*<!--<script>*/b()</script><script src="https://cdn.tiers/apres.js"></script>');
   assert.equal(scripts.length, 1, 'un seul script : le second est avalé dans le texte du premier');
-  assert.equal(scripts[0].src, null);
+  assert.equal(scripts[0].ferme, false, 'la fin du document le referme, pas sa balise');
+  assert.equal(scripts[0].unite, false, 'jamais exécuté : pas une unité de code');
+  assert.deepEqual(scripts[0].chargements, []);
   assert.match(scripts[0].texte, /apres\.js/, 'le <script src> masqué est du texte, pas un élément');
 });
 
-test('lirePage : la première <base href> décide de la base, une base en commentaire est ignorée', () => {
-  assert.equal(lirePage('<base href="https://cdn.tiers/"><script src="app.js"></script>').scripts[0].base, 'https://cdn.tiers/');
-  assert.equal(lirePage('<base target="_blank"><base href="https://un.tiers/"><base href="https://deux.tiers/"><script src="a.js"></script>').scripts[0].base, 'https://un.tiers/', 'première base AVEC href');
-  assert.equal(lirePage('<!-- <base href="https://evil.tiers/"> --><script src="a.js"></script>').scripts[0].base, 'https://widget.local/', 'base en commentaire ignorée');
+test('lirePage : la première <base href> décide de la base ; commentaire, gabarit ou noscript ne comptent pas', () => {
+  assert.equal(lirePage('<base href="https://cdn.tiers/"><script src="app.js"></script>').scripts[0].baseBrute, 'https://cdn.tiers/');
+  assert.equal(lirePage('<base target="_blank"><base href="https://un.tiers/"><base href="https://deux.tiers/"><script src="a.js"></script>').scripts[0].baseBrute, 'https://un.tiers/', 'première base AVEC href');
+  assert.equal(lirePage('<!-- <base href="https://evil.tiers/"> --><script src="a.js"></script>').scripts[0].baseBrute, null, 'base en commentaire ignorée');
+  assert.equal(lirePage('<template><base href="https://evil.tiers/"></template><script src="a.js"></script>').scripts[0].baseBrute, null, 'base dans un <template> inerte');
+  assert.equal(lirePage('<noscript><base href="https://evil.tiers/"></noscript><script src="a.js"></script>').scripts[0].baseBrute, null, 'base dans un <noscript> inerte');
 });
 
-test('lirePage : un <script> SVG charge par href ou xlink:href, et exécute un module comme un module', () => {
-  assert.equal(lirePage('<svg><script href="data:text/javascript,alert(1)"></script></svg>').scripts[0].src, 'data:text/javascript,alert(1)');
-  assert.equal(lirePage('<svg xmlns:xlink="http://www.w3.org/1999/xlink"><script xlink:href="x.js"></script></svg>').scripts[0].src, 'x.js');
+test('urlDe : une base externe emporte une URL relative, une base relative se résout contre la page, jamais le fichier homonyme local', () => {
+  assert.equal(urlDe('app.js', 'https://cdn.tiers/', 'index.html').href, 'https://cdn.tiers/app.js');
+  assert.equal(cheminLocal(urlDe('app.js', 'https://cdn.tiers/', 'index.html')), null, 'externe : pas de fichier local');
+  assert.equal(cheminLocal(urlDe('x.js', 'sous/', 'index.html')), 'sous/x.js', 'base relative : contre l\'URL de la page');
+  assert.equal(cheminLocal(urlDe('x.js', null, 'a/index.html')), 'a/x.js');
+});
+
+test('lirePage : un <script> SVG charge par href ou xlink:href (exécuté quand la balise est fermée), et exécute un module comme un module', () => {
+  assert.deepEqual(lirePage('<svg><script href="data:text/javascript,alert(1)"></script></svg>').scripts[0].chargements, [{ valeur: 'data:text/javascript,alert(1)', execute: true, seulementStandard: false }]);
+  assert.equal(lirePage('<svg xmlns:xlink="http://www.w3.org/1999/xlink"><script xlink:href="x.js"></script></svg>').scripts[0].chargements[0].valeur, 'x.js');
   assert.equal(lirePage('<svg><script type="module">a()</script></svg>').scripts[0].genre, 'module');
-  assert.equal(lirePage('<svg><script type="importmap">{}</script></svg>').scripts[0].genre, null, 'pas d\'import map en SVG');
+  const [carte] = lirePage('<svg><script type="importmap">{"imports":{"a":"https://cdn.tiers/a.js"}}</script></svg>').scripts;
+  assert.equal(carte.genre, 'importmap', 'Chromium 141 applique une import map SVG');
+  assert.equal(carte.carteImport, true);
 });
 
 test('genreDeScript : nomodule sur un script classique le rend non exécuté, importmap est reconnu', () => {
   assert.equal(genreDeScript(new Map([['nomodule', '']])), null);
   assert.equal(genreDeScript(new Map([['type', 'importmap']])), 'importmap');
   assert.equal(genreDeScript(new Map([['type', 'module'], ['nomodule', '']])), 'module', 'nomodule n\'a pas de sens sur un module');
+  assert.equal(genreDeScript(new Map([['type', 'text/javascript; charset=utf-8']])), null, 'un type à paramètres n\'est pas exécuté');
 });
 
 // C-EXFIL-03 : chargements que l'ancienne lecture ratait ou inventait --------

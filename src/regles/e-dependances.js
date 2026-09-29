@@ -20,7 +20,7 @@ import { promisify } from 'node:util';
 import fs from 'node:fs';
 import { constat } from '../moteur/modele.js';
 import { extraireImportMaps } from '../moteur/analyse-js.js';
-import { lirePage, integriteProtege } from '../moteur/page-html.js';
+import { lirePage, integriteProtege, urlDe, urlDeCarte, mentionDe } from '../moteur/page-html.js';
 
 const estLocalHote = (h) => !h || h === 'widget.local' || h === 'localhost' || h === '127.0.0.1';
 
@@ -50,21 +50,27 @@ export function analyserDependancesDistantes(ctx) {
     // `data:`/`blob:` porte son code en clair, ce n'est pas une dépendance
     // distante (traité par l'axe C). `integrity` ne protège que s'il est bien
     // formé — une valeur vide ou bidon laisse charger n'importe quoi.
+    // Seul un script que le navigateur exécute est une dépendance (`execute`) ;
+    // l'URL se résout depuis la base effective de la page : sous une `<base>`
+    // externe, un `src` relatif est chargé chez un tiers.
     for (const s of lirePage(f.contenu).scripts) {
-      if (s.src === null) continue;
-      let abs; try { abs = new URL(s.src, 'https://widget.local/'); } catch { continue; }
-      if (!/^https?:$/.test(abs.protocol) || estLocalHote(abs.hostname)) continue;
-      if (/grist-plugin-api\.js/.test(s.src)) continue;     // traité par l'axe C
-      distantes.push({
-        fichier: f.chemin,
-        ligne: s.ligne,
-        url: s.src,
-        hote: abs.hostname,
-        sri: integriteProtege(s.attributs.get('integrity')),
-        versionFigee: /@\d+\.\d+\.\d+/.test(s.src) || /\/\d+\.\d+\.\d+\//.test(s.src),
-        cdn: CDN_CONNUS.test(s.src),
-        balise: s.balise,
-      });
+      for (const c of s.chargements) {
+        if (!c.execute) continue;
+        const abs = urlDe(c.valeur, s.baseBrute, f.chemin);
+        if (!abs || !/^https?:$/.test(abs.protocol) || estLocalHote(abs.hostname)) continue;
+        if (/grist-plugin-api\.js/.test(c.valeur)) continue;     // traité par l'axe C
+        distantes.push({
+          fichier: f.chemin,
+          ligne: s.ligne,
+          url: c.valeur,
+          hote: abs.hostname,
+          sri: integriteProtege(s.attributs.get('integrity')),
+          versionFigee: /@\d+\.\d+\.\d+/.test(c.valeur) || /\/\d+\.\d+\.\d+\//.test(c.valeur),
+          cdn: CDN_CONNUS.test(c.valeur),
+          balise: s.balise,
+          mention: mentionDe({ dansTemplate: s.dansTemplate, seulementStandard: c.seulementStandard }),
+        });
+      }
     }
     // Import map (<script type="importmap">) : une bibliothèque résolue par
     // un import nu après une entrée d'import map est chargée à l'exécution
@@ -73,16 +79,18 @@ export function analyserDependancesDistantes(ctx) {
     // L'intégrité s'y vérifie via la clé `integrity` de premier niveau de
     // l'import map, pas un attribut de balise.
     for (const e of extraireImportMaps(f.contenu)) {
-      if (!/^https?:\/\//i.test(e.url) || /grist-plugin-api\.js/.test(e.url)) continue;
+      const abs = urlDeCarte(e.url, e.baseBrute, f.chemin);
+      if (!abs || !/^https?:$/.test(abs.protocol) || estLocalHote(abs.hostname) || /grist-plugin-api\.js/.test(e.url)) continue;
       distantes.push({
         fichier: f.chemin,
         ligne: f.contenu.slice(0, e.index).split('\n').length,
         url: e.url,
-        hote: hote(e.url),
+        hote: abs.hostname,
         sri: e.sri,
         versionFigee: /@\d+\.\d+\.\d+/.test(e.url) || /\/\d+\.\d+\.\d+\//.test(e.url),
         cdn: CDN_CONNUS.test(e.url),
         balise: `"${e.spec}": "${e.url}"`,
+        mention: e.mention,
       });
     }
   }
@@ -97,7 +105,7 @@ export function analyserDependancesDistantes(ctx) {
       confiance: 'certain',
       titre: `Bibliothèque tierce chargée à l'exécution depuis ${d.hote ?? hote(d.url)}`,
       fichier: d.fichier, ligne: d.ligne, extrait: d.balise,
-      constat: `Le widget charge \`${d.url}\`${problemes.length ? ` — ${problemes.join(', ')}` : ''}.`,
+      constat: `Le widget charge \`${d.url}\`${problemes.length ? ` — ${problemes.join(', ')}` : ''}.${d.mention ? ` Précision : ${d.mention}.` : ''}`,
       impact: "Ce code s'exécute chez chaque agent avec l'accès au document que le widget a obtenu. Le dépôt audité ne dit rien de ce qui sera réellement servi : le contenu peut changer à tout moment. Sans `integrity`, le navigateur accepte n'importe quel remplacement — c'est le scénario de compromission de CDN, et il ne laisse aucune trace dans l'historique Git.",
       remediation: "Embarquer la bibliothèque dans le dépôt (`vendor/`), la servir en relatif, et noter sa version et son origine dans le README. Si le chargement distant doit être conservé, figer la version dans l'URL et ajouter `integrity` et `crossorigin=\"anonymous\"`.",
       referentiels: ['OWASP Top 10 A08:2021 — Software and Data Integrity Failures', 'ANSSI — Recommandations pour la sécurisation des sites web', 'Guide de contribution Grist.Gouv — « no unnecessary dependencies »'],

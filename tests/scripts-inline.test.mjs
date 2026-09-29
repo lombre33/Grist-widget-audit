@@ -72,9 +72,9 @@ for (const [balise, attendu] of CAS) {
   });
 }
 
-test('script de la page, écart assumé : un type JavaScript suivi de paramètres est lu, bien que Chromium ne l\'exécute pas', () => {
-  assert.equal(genre('<script type="text/javascript; charset=utf-8">'), 'classique');
-  assert.equal(genre('<script type="text/javascript ;charset=utf-8">'), 'classique');
+test('script de la page : un type JavaScript suivi de paramètres n\'est pas exécuté, comme dans Chromium (sonde du 2026-09-29)', () => {
+  assert.equal(genre('<script type="text/javascript; charset=utf-8">'), 'ignoré');
+  assert.equal(genre('<script type="text/javascript ;charset=utf-8">'), 'ignoré');
 });
 
 test('script de la page, écart assumé : `type=" module "` est un module (le standard retire les blancs de bord ; Chromium ne l\'exécute pas du tout)', () => {
