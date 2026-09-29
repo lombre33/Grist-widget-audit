@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 
+import { imagesDeBase } from '../docker/ci/lib-images.mjs';
+
 /**
  * Toute image de base des Dockerfile de docker/ (image d'exécution, proxy de
  * sortie) est épinglée par empreinte : une étiquette (`debian:bookworm-slim`,
@@ -19,19 +21,10 @@ const RACINE = path.resolve(import.meta.dirname, '..');
 const DOCKERFILES = ['docker/execution/Dockerfile', 'docker/egress-proxy/Dockerfile'];
 const EMPREINTE = /@sha256:[0-9a-f]{64}(\s|$)/;
 
-function images(source) {
-  const args = new Map([...source.matchAll(/^ARG\s+(\w+)=(\S+)/gm)].map((m) => [m[1], m[2]]));
-  return [...source.matchAll(/^FROM\s+(?:--\S+\s+)?(\S+)/gim)].map((m) => {
-    const brute = m[1];
-    const variable = /^\$\{(\w+)\}$/.exec(brute) ?? /^\$(\w+)$/.exec(brute);
-    return { brute, resolue: variable ? args.get(variable[1]) : brute, variable: variable?.[1] };
-  });
-}
-
 for (const dockerfile of DOCKERFILES) {
   test(`${dockerfile} : chaque image de base est épinglée par empreinte`, () => {
     const source = fs.readFileSync(path.join(RACINE, dockerfile), 'utf8');
-    const trouvees = images(source);
+    const trouvees = imagesDeBase(source);
     assert.ok(trouvees.length > 0, `aucune ligne FROM dans ${dockerfile} : le test ne saurait plus quoi éprouver`);
     for (const { brute, resolue, variable } of trouvees) {
       assert.ok(resolue, `FROM ${brute} : la variable ${variable} n'a pas de valeur par défaut (ARG ${variable}=image@sha256:…), l'image n'est pas déterminée par le dépôt`);

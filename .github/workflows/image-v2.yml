@@ -73,6 +73,14 @@ jobs:
       - name: Images de base épinglées par empreinte
         run: node --test tests/images-epinglees.test.mjs
 
+      # Le contrôle qui dit qu'une empreinte épinglée n'est plus ce que son étiquette
+      # désigne (docker/ci/derive-empreintes.mjs) s'éprouve ici contre un faux
+      # registre local ; lancé contre les vrais registres il ferait échouer une
+      # poussée sans rapport dès qu'une image de base est republiée : il ne tourne
+      # pas ici.
+      - name: Contrôle de dérive des empreintes (faux registre)
+        run: node --test tests/derive-empreintes.test.mjs
+
       # Les étapes suivantes s'exécutent toutes même si l'une échoue : une
       # seule exécution montre l'ensemble des défauts, pas le premier.
       - name: Construction des deux images

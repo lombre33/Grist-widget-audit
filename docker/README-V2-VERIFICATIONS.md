@@ -47,6 +47,31 @@ dans GitHub : profil → Packages → le paquet → Package settings → Change
 visibility). Ce que la publication à blanc ne peut pas voir : les droits du
 jeton et la visibilité.
 
+## Dérive des empreintes de base (hors CI d'une poussée)
+
+Les deux images de base sont épinglées par empreinte : une étiquette republiée
+(correctifs de sécurité) n'atteint donc l'image que si l'empreinte est changée
+à la main. Ce changement ne se voit pas de lui-même :
+
+```bash
+node docker/ci/derive-empreintes.mjs [--json]
+```
+
+Pour chaque `FROM` des deux Dockerfile, le script demande au registre ce que
+l'étiquette désigne aujourd'hui et le compare à l'empreinte épinglée. Il dit,
+pour une dérive, l'image, les deux empreintes et la date de construction de
+l'image actuelle. Code 0 : aucune dérive ; 1 : au moins une dérive ; 2 : registre
+injoignable, réponse inexploitable ou référence sans étiquette (jamais dit « à
+jour » : un registre muet n'est pas une absence de dérive). Il ne modifie rien.
+Il utilise `curl` (donc les variables de proxy du poste), reprend un 429 ou une
+panne passagère (Docker Hub limite les demandes anonymes) et plafonne chaque
+demande à 30 s.
+
+Éprouvé contre un faux registre local, jeton Bearer compris
+(`tests/derive-empreintes.test.mjs`, mutants `scripts/mutants-derive-empreintes.mjs`) ;
+non éprouvé par un test : le plafond de 30 s par demande. Contre les vrais
+registres, il a été lancé à la main, pas par la CI.
+
 ## Ce qui ne s'éprouve que sur le VPS
 
 Le runner GitHub n'est pas le VPS : mêmes scénarios, autre noyau. À rejouer

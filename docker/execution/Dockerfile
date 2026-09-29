@@ -11,8 +11,9 @@
 #
 # Base épinglée par digest (index multi-architecture de la balise
 # v1.63.0-jammy au 2026-09-29) : une balise peut être republiée sous le
-# même nom, un digest non. BASE_IMAGE ne se surcharge que pour un essai
-# local ou pour monter la version de Playwright (voir plus bas).
+# même nom, un digest non ; `node docker/ci/derive-empreintes.mjs` dit si la
+# balise désigne aujourd'hui autre chose. BASE_IMAGE ne se surcharge que pour un
+# essai local ou pour monter la version de Playwright (voir plus bas).
 ARG BASE_IMAGE=mcr.microsoft.com/playwright:v1.63.0-jammy@sha256:167d0506cfbe3c294fb214b2d11737326eeee028aa611fa1ba538e5057675847
 #
 # Base Playwright officielle plutôt qu'une image Node nue + apt-get manuel

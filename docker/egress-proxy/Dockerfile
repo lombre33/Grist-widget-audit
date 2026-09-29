@@ -18,7 +18,8 @@
 # autre chose en silence. Pour la mettre à jour, reprendre l'empreinte d'index
 # (`docker buildx imagetools inspect debian:bookworm-slim`) et relancer le
 # workflow image-v2.yml ; les correctifs de sécurité de l'image de base
-# n'arrivent donc que par ce geste. Le paquet squid, lui, est celui de bookworm
+# n'arrivent donc que par ce geste, et `node docker/ci/derive-empreintes.mjs`
+# dit si l'étiquette désigne aujourd'hui autre chose. Le paquet squid, lui, est celui de bookworm
 # au moment de la construction (non épinglé) ; `tests/images-epinglees.test.mjs`
 # vérifie que toute image de base des Dockerfile de docker/ porte une empreinte.
 FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251

@@ -558,7 +558,14 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
   sont épinglées par empreinte, pas par étiquette ; la CI le vérifie
   (`tests/images-epinglees.test.mjs`). Conséquence : les correctifs de sécurité
   d'une image de base n'arrivent que par un changement d'empreinte, décidé et
-  éprouvé par la CI. Le paquet `squid` du proxy, lui, est celui de bookworm au
+  éprouvé par la CI. Ce changement ne se voit pas de lui-même : `node
+  docker/ci/derive-empreintes.mjs` compare, pour chaque `FROM` épinglé des deux
+  Dockerfile, l'empreinte épinglée à celle que son étiquette désigne aujourd'hui
+  au registre (code 0 : aucune dérive ; 1 : l'image de base a été republiée depuis
+  l'épinglage, des correctifs attendent ; 2 : registre injoignable ou réponse
+  inexploitable, ce qui n'est jamais dit « à jour »). Il constate et ne modifie
+  rien ; à lancer périodiquement, il n'est pas dans la CI d'une poussée. Le
+  paquet `squid` du proxy, lui, est celui de bookworm au
   moment de la construction. Le `docker-compose.yml` de validation manuelle d'un
   widget (hors image V2) garde volontairement le Grist du jour.
 - Profil seccomp : `docker/execution/seccomp-chromium.json` est identique au
