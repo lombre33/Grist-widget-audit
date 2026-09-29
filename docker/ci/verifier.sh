@@ -34,8 +34,10 @@ titre() { echo; echo "=== $* ==="; }
 # (Le runner est jetable, mais la même commande se rejoue sur le VPS.)
 aucun_chromium_orphelin() {
   sleep 2
-  if pgrep -f '/ms-playwright/chromium-' >/dev/null; then
-    pgrep -af '/ms-playwright/chromium-' | cut -c1-200 || true
+  # « [/] » : le motif ne se reconnaît pas lui-même dans la ligne de commande de
+  # celui qui le cherche (bash -c, ssh…).
+  if pgrep -f '[/]ms-playwright/chromium-' >/dev/null; then
+    pgrep -af '[/]ms-playwright/chromium-' | cut -c1-200 || true
     echec "un Chromium survit $1"
   fi
 }
@@ -208,6 +210,7 @@ cmd_proxy() {
   node docker/ci/verifier-rapport.mjs "$SORTIE/rapport.json" || echec "audit d'URL : rapport incomplet"
   ok "audit d'une URL réelle, de bout en bout, à travers le proxy"
   aucun_chromium_orphelin "à l'audit d'une URL"
+  ok "aucun Chromium ne survit à l'audit d'une URL"
 }
 
 cmd_plafond() {

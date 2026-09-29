@@ -28,6 +28,19 @@ bash docker/ci/verifier.sh tout        # ou un seul : build | audit | securite |
 | `memoire` | un widget qui alloue sans fin est contenu : mémoire du conteneur sous la limite, `OOMKilled` à vrai (le noyau tue le rendu de Chromium), swap exclu ; l'audit conclut malgré tout par un verdict | `docker stats` échantillonné, `docker inspect` |
 | `publication` | `docker/ci/publier.sh` : étiquette invalide refusée ; une version d'essai (`v1.2.3-rc1`) ne déplace pas `latest` ; une version finale le déplace, pour les deux images ; l'image publiée porte l'étiquette de source et la révision exacte | registre local, sans identifiants (à blanc : rien n'est publié) |
 
+### Sous Windows (job `windows` du même workflow)
+
+Hors image, sur `windows-latest` : `docker/ci/verifier-windows.mjs` lance un vrai
+audit de `fixtures/widget-exemple`, axe D par défaut, et relève pendant qu'il
+tourne, pour chaque `chrome.exe`, sa ligne de commande et le niveau d'intégrité
+de son jeton (`docker/ci/integrite-chrome.ps1`). Le bac à sable est prouvé si
+les processus de rendu tournent au niveau « non fiable » ou « faible » et si
+`--no-sandbox` n'apparaît nulle part ; le témoin rejoue l'audit avec
+`GWAUDIT_CHROMIUM_SANS_SANDBOX=1`, où la même sonde doit voir `--no-sandbox`,
+des rendus au niveau du navigateur, et le rapport doit porter le marqueur
+`D-INDISPONIBLE-BAC-A-SABLE`. Le score de `widget-exemple` y est affiché : c'est
+le point de comparaison Windows/Linux.
+
 Sur ghcr.io, le premier `v*` publie vraiment, et `publier.sh` dit ensuite si le
 paquet est public (tirable sans identifiants) ou privé (et alors quoi cliquer
 dans GitHub : profil → Packages → le paquet → Package settings → Change
