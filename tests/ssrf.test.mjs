@@ -65,11 +65,25 @@ async function proxyEspion() {
   return { connect, port: serveur.address().port, fermer: () => new Promise((resolve) => serveur.close(resolve)) };
 }
 
+/**
+ * L'environnement du processus lancé. Sous Windows les variables d'environnement
+ * ne distinguent pas la casse : `NO_PROXY: ''` et `no_proxy: 'hôte'` dans le même
+ * objet sont UNE variable, et c'est la valeur vide qui peut l'emporter — le cas
+ * « no_proxy en minuscules » ne testerait alors rien. Pour chaque clé posée par
+ * l'appelant, les autres graphies de la même clé sont donc retirées.
+ */
+function environnement(env) {
+  const base = { ...process.env, HTTPS_PROXY: '', https_proxy: '', HTTP_PROXY: '', http_proxy: '', ALL_PROXY: '', all_proxy: '', NO_PROXY: '', no_proxy: '', GWAUDIT_RESOLUTION_PAR_PROXY: '' };
+  const posees = new Set(Object.keys(env).map((cle) => cle.toLowerCase()));
+  for (const cle of Object.keys(base)) if (posees.has(cle.toLowerCase()) && !(cle in env)) delete base[cle];
+  return { ...base, ...env };
+}
+
 async function lancer(cible, env) {
   try {
     await execFileAsync(process.execPath, [BIN, cible, '--sans-dynamique', '--sans-reseau'], {
       timeout: 30_000,
-      env: { ...process.env, HTTPS_PROXY: '', https_proxy: '', HTTP_PROXY: '', http_proxy: '', ALL_PROXY: '', all_proxy: '', NO_PROXY: '', no_proxy: '', GWAUDIT_RESOLUTION_PAR_PROXY: '', ...env },
+      env: environnement(env),
     });
     return { code: 0, stderr: '' };
   } catch (e) {
