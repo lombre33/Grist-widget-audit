@@ -125,6 +125,9 @@ const TYPES_JAVASCRIPT = new Set([
 const sansBlancsDeBord = (texte) => texte.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, '');
 const enMinusculesAscii = (texte) => texte.replace(/[A-Z]/g, (c) => c.toLowerCase());
 
+/** Vrai si `mime` (la partie avant `;` d'un type de contenu) est un type MIME JavaScript. Sert à décider si un `<script type=module src="data:…">` s'exécute : Chromium ne lance un module data: que pour un type JavaScript, un classique pour tout type. */
+export const estTypeJavaScript = (mime) => TYPES_JAVASCRIPT.has(sansBlancsDeBord(enMinusculesAscii(mime ?? '')));
+
 /**
  * Ce que le navigateur fait d'un `<script>` (standard HTML, « prepare the
  * script element », vérifié dans Chromium) : 'classique', 'module',
@@ -190,6 +193,62 @@ function positionDans(debuts, decalage) {
   return { ligne: bas + 1, colonne: decalage - debuts[bas] };
 }
 
+// Attributs de navigation où le navigateur suit une URL `javascript:` (vérifié dans Chromium : voir [[vecteurs-execution-hors-script]]). PAS object/embed/base/meta/script/img.
+const ATTRS_NAV_HTML = { a: ['href'], area: ['href'], iframe: ['src'], frame: ['src'], form: ['action'], button: ['formaction'], input: ['formaction'] };
+
+/**
+ * Le corps JavaScript d'une valeur d'attribut si c'est une URL `javascript:`,
+ * sinon null. L'analyseur d'URL du navigateur (`new URL`) fait foi : il
+ * normalise casse, blancs de bord et tabulations/sauts de ligne internes du
+ * schéma, exactement comme Chromium reconnaît `  JaVa\tScript:…`. Le corps est
+ * ensuite décodé par pourcentage, comme le fait le navigateur avant de
+ * l'exécuter (`%27` → `'`).
+ */
+export function corpsJavascript(valeur, base = BASE_PAR_DEFAUT) {
+  if (typeof valeur !== 'string') return null;
+  let u; try { u = new URL(valeur, base); } catch { return null; }
+  if (u.protocol !== 'javascript:') return null;
+  const apres = u.href.slice(u.protocol.length);
+  try { return decodeURIComponent(apres); } catch { return apres; }
+}
+
+/**
+ * Le type MIME et le corps décodé d'une URL `data:`, ou null si `valeur`
+ * n'en est pas une. Le corps est décodé comme le fait le navigateur : base64
+ * si le préambule finit par `;base64`, sinon par pourcentage (une séquence
+ * `%` invalide reste telle quelle, comme dans Chromium). Un `<script>` dont le
+ * `src` est une URL data: exécute ce corps ; un script classique quel que
+ * soit le type MIME, un module seulement s'il est de type JavaScript.
+ */
+export function codeDataUrl(valeur) {
+  if (typeof valeur !== 'string') return null;
+  const m = /^data:([^,]*),([\s\S]*)$/i.exec(valeur.trim());
+  if (!m) return null;
+  const mime = m[1].split(';')[0];
+  if (/;base64\s*$/i.test(m[1])) {
+    try { return { mime, corps: Buffer.from(m[2], 'base64').toString('utf8') }; } catch { return null; }
+  }
+  try { return { mime, corps: decodeURIComponent(m[2]) }; } catch { return { mime, corps: m[2] }; }
+}
+
+/** Les corps `javascript:` posés par un attribut de navigation, un `<a>` SVG (href/xlink:href) ou un `<set>`/`<animate>` SVG qui anime href. */
+function urlsJavascriptDe(ns, nom, balise, base) {
+  const corps = [];
+  const attr = (n) => balise.attrs.find((a) => a.name === n)?.value;
+  const ajouter = (valeur, attribut) => { const c = corpsJavascript(valeur, base); if (c !== null) corps.push({ corps: c, attribut }); };
+  if (ns === 'html') {
+    for (const a of ATTRS_NAV_HTML[nom] ?? []) if (attr(a) !== undefined) ajouter(attr(a), a);
+  } else if (ns === 'svg') {
+    if (nom === 'a') { for (const a of ['href', 'xlink:href']) if (attr(a) !== undefined) ajouter(attr(a), a); }
+    // `<set>`/`<animate>` qui anime href/xlink:href : la valeur posée (to/from, ou chaque segment `;` de values) devient l'URL suivie. attributeName est sensible à la casse (SMIL).
+    else if ((nom === 'set' || nom === 'animate') && ['href', 'xlink:href'].includes(attr('attributename'))) {
+      for (const a of ['to', 'from']) if (attr(a) !== undefined) ajouter(attr(a), `${nom} ${a}`);
+      for (const seg of (attr('values') ?? '').split(';')) ajouter(seg, `${nom} values`);
+    }
+  }
+  return corps;
+}
+
 const CACHE = new Map();
 const TAILLE_CACHE = 32;
 
@@ -204,9 +263,12 @@ const TAILLE_CACHE = 32;
  * hôte. Un script porte en plus `src` (ou `href` pour un script SVG),
  * `genre` (voir `genreDeScript`) et, s'il est écrit dans la page, `texte`
  * et la position exacte de son premier caractère (`decalageLigne`,
- * `decalageColonne`). Résultat mis en cache par contenu : chaque règle qui
- * lit la page la relit sans la redécouper.
- * @returns {{scripts: Array<object>, ressources: Array<object>}}
+ * `decalageColonne`). Sont aussi relevés le code exécuté hors des balises
+ * script : `gestionnaires` (chaque attribut `on…`, HTML et SVG, son corps JS)
+ * et `urlsJs` (le corps d'une URL `javascript:` suivie par un attribut de
+ * navigation). Résultat mis en cache par contenu : chaque règle qui lit la
+ * page la relit sans la redécouper.
+ * @returns {{scripts: Array<object>, ressources: Array<object>, gestionnaires: Array<object>, urlsJs: Array<object>}}
  */
 export function lirePage(contenu) {
   const connu = CACHE.get(contenu);
@@ -215,11 +277,29 @@ export function lirePage(contenu) {
   const debuts = debutsDeLignes(contenu);
   const scripts = [];
   const ressources = [];
+  const gestionnaires = [];
+  const urlsJs = [];
   let base = null;
 
   parcourirPage(contenu, {
     ouverture(balise, element) {
       const { nom, ns } = element;
+      const { ligne, colonne } = positionDans(debuts, balise.location.startOffset);
+      const texteBalise = () => contenu.slice(balise.location.startOffset, balise.location.endOffset);
+
+      // Gestionnaires `on…` (HTML et SVG) : le corps est du JS. On lit TOUT
+      // attribut `on…`, pas seulement les noms que reconnaît une version donnée
+      // du navigateur — un corps qui ne se parse pas ne donnera aucun constat.
+      // `colonne` (position de l'élément) distingue deux gestionnaires portés
+      // par deux éléments d'une même ligne.
+      for (const { name, value } of balise.attrs) {
+        if (value && /^on./i.test(name)) gestionnaires.push({ corps: value, nom: name, ns, ligne, colonne, balise: texteBalise() });
+      }
+      // URL javascript: suivie par un attribut de navigation.
+      for (const u of urlsJavascriptDe(ns, nom, balise, base ?? BASE_PAR_DEFAUT)) {
+        urlsJs.push({ corps: u.corps, attribut: u.attribut, nom, ns, ligne, colonne, balise: texteBalise() });
+      }
+
       if (!ELEMENTS_LUS.has(nom) || (ns !== 'html' && !(ns === 'svg' && nom === 'script'))) return;
       const attributs = new Map(balise.attrs.map(({ name, value }) => [name, value]));
       const { startOffset: debut, endOffset: fin } = balise.location;
@@ -227,7 +307,8 @@ export function lirePage(contenu) {
         if (base === null && attributs.has('href')) base = resoudreUrl(attributs.get('href'))?.href ?? BASE_PAR_DEFAUT;
         return;
       }
-      const entree = { nom, ns, attributs, debut, fin, ligne: positionDans(debuts, debut).ligne, balise: contenu.slice(debut, fin), base: base ?? BASE_PAR_DEFAUT };
+      const pos = positionDans(debuts, debut);
+      const entree = { nom, ns, attributs, debut, fin, ligne: pos.ligne, colonne: pos.colonne, balise: contenu.slice(debut, fin), base: base ?? BASE_PAR_DEFAUT };
       if (nom !== 'script') {
         ressources.push(entree);
         return;
@@ -266,7 +347,7 @@ export function lirePage(contenu) {
     script.decalageColonne = colonne;
   }
 
-  const resultat = { scripts, ressources };
+  const resultat = { scripts, ressources, gestionnaires, urlsJs };
   if (CACHE.size >= TAILLE_CACHE) CACHE.clear();
   CACHE.set(contenu, resultat);
   return resultat;
