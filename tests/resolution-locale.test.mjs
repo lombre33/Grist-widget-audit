@@ -176,7 +176,7 @@ test('script classique : une var de premier niveau reste non garantie, et le tex
   const c = execution('var g = "return this";\nFunction(g)();');
   assert.equal(verdict(c), 'critique+B');
   assert.match(c.constat, /`g` est déclaré au premier niveau d'un script classique, comme une propriété de l'objet global que tout autre script de la page peut remplacer/);
-  assert.match(c.remediation, /Si ce code doit rester, déclarer `g` en `const`, dans une fonction englobante ou dans un module/);
+  assert.match(c.remediation, /Si ce code doit rester, déclarer `g` en `const`, ou dans une fonction englobante ou un module/);
 });
 
 test('script classique : pour un eval() direct, seul un const garantit la valeur (il écrirait une var ou un let local)', () => {
@@ -194,14 +194,14 @@ test('script classique : un let de premier niveau peut être réaffecté par tou
 test('script classique : la remédiation d\'une fonction globale propose un const, une fonction englobante ou un module, pas « passer une fonction » (printlabels.js)', () => {
   const c = minuteur('function tick() {}\nsetTimeout(tick, 0);');
   assert.equal(verdict(c), 'info');
-  assert.match(c.remediation, /^Déclarer `tick` en `const` \(`const tick = \(\) => …`\), dans une fonction englobante ou dans un module/);
+  assert.match(c.remediation, /^Déclarer `tick` en `const` \(`const tick = \(\) => …`\), ou dans une fonction englobante ou un module/);
   assert.doesNotMatch(c.remediation, /Passer/);
 });
 
 test('script classique : une chaîne dans un let de premier niveau, au minuteur, propose une fonction ou une déclaration qui garantit', () => {
   const c = minuteur('let code = "void 0";\nsetTimeout(code, 0);');
   assert.equal(verdict(c), 'critique+B');
-  assert.match(c.remediation, /^Passer une fonction : `setTimeout\(\(\) => …, délai\)`\. Si cette chaîne doit rester, déclarer `code` en `const`, dans une fonction englobante ou dans un module/);
+  assert.match(c.remediation, /^Passer une fonction : `setTimeout\(\(\) => …, délai\)`\. Si cette chaîne doit rester, déclarer `code` en `const`, ou dans une fonction englobante ou un module/);
 });
 
 // Annexe B : une fonction déclarée dans un bloc est aussi une var de sa fonction --

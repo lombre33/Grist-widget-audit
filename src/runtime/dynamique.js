@@ -376,12 +376,6 @@ async function construireHarnais(dossierTravail) {
   return harnaisRacine;
 }
 
-/** Cherche dans le HTML d'entrée l'URL (relative ou absolue) du script grist-plugin-api. */
-function urlScriptGrist(contenuHtml) {
-  const m = contenuHtml.match(/<script[^>]+src\s*=\s*["']([^"']*grist-plugin-api\.js)["']/i);
-  return m ? m[1] : null;
-}
-
 /**
  * @param {object} ctx        contexte construit par construireContexte()
  * @param {object} [options]
@@ -557,9 +551,6 @@ export async function auditDynamique(ctx, options = {}) {
       });
       ws.close({ code: 1008, reason: 'Connexion réseau neutralisée par l’audit' });
     });
-
-    const contenuEntree = ctx.fichiers.find((f) => f.chemin === entree)?.contenu ?? '';
-    const scriptGrist = urlScriptGrist(contenuEntree);
 
     await page.addInitScript(({ doc, widgetUrl }) => {
       window.__CONFIG_DOC__ = doc;

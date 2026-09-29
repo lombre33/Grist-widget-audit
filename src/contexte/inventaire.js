@@ -14,6 +14,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
+import { lirePage } from '../moteur/page-html.js';
 
 const EXCLUS = new Set(['.git', 'node_modules', 'dist', 'build', '.next', 'coverage', 'vendor', '.venv', '__pycache__']);
 
@@ -223,8 +224,14 @@ function referencesSortantes(f) {
   const refs = [];
   const c = f.contenu ?? '';
   if (f.ext === '.html' || f.ext === '.htm') {
-    for (const m of c.matchAll(/<script[^>]+src\s*=\s*["']([^"']+)["']/gi)) refs.push(m[1]);
-    for (const m of c.matchAll(/<link[^>]+href\s*=\s*["']([^"']+)["']/gi)) refs.push(m[1]);
+    // Lus par la passe unique du découpeur (voir `lirePage`), comme le
+    // navigateur : un `src`/`href` sans guillemets, un `>` dans un attribut ou
+    // un `<script>` en commentaire ne trompent plus l'inventaire. Les URL
+    // absolues (y compris via une `<base>` externe) sont écartées plus bas par
+    // le même filtre que les autres références sortantes.
+    const { scripts, ressources } = lirePage(c);
+    for (const s of scripts) if (s.src !== null) refs.push(s.src);
+    for (const r of ressources) if (r.nom === 'link') { const href = r.attributs.get('href'); if (href != null) refs.push(href); }
     refs.push(...referencesWorker(c)); // couvre un new Worker(...) écrit dans un <script> inline
   }
   if (f.ext === '.css') for (const m of c.matchAll(/url\(\s*["']?([^"')]+)/gi)) refs.push(m[1]);

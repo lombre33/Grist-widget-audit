@@ -20,6 +20,9 @@ import { promisify } from 'node:util';
 import fs from 'node:fs';
 import { constat } from '../moteur/modele.js';
 import { extraireImportMaps } from '../moteur/analyse-js.js';
+import { lirePage, integriteProtege } from '../moteur/page-html.js';
+
+const estLocalHote = (h) => !h || h === 'widget.local' || h === 'localhost' || h === '127.0.0.1';
 
 const execFileAsync = promisify(execFile);
 
@@ -41,17 +44,26 @@ export function analyserDependancesDistantes(ctx) {
 
   for (const f of ctx.fichiers) {
     if (!f.executee || f.binaire || !['.html', '.htm'].includes(f.ext)) continue;
-    for (const m of f.contenu.matchAll(/<script\b[^>]*\bsrc\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*>/gi)) {
-      const url = m[1];
-      if (/grist-plugin-api\.js/.test(url)) continue;       // traité par l'axe C
+    // Scripts à `src` lus par la passe unique du découpeur (voir `lirePage`) :
+    // une URL absolue http(s) ou relative au protocole (`//cdn…`) pointant
+    // vers un hôte tiers. Un `src` relatif au document reste local ; un
+    // `data:`/`blob:` porte son code en clair, ce n'est pas une dépendance
+    // distante (traité par l'axe C). `integrity` ne protège que s'il est bien
+    // formé — une valeur vide ou bidon laisse charger n'importe quoi.
+    for (const s of lirePage(f.contenu).scripts) {
+      if (s.src === null) continue;
+      let abs; try { abs = new URL(s.src, 'https://widget.local/'); } catch { continue; }
+      if (!/^https?:$/.test(abs.protocol) || estLocalHote(abs.hostname)) continue;
+      if (/grist-plugin-api\.js/.test(s.src)) continue;     // traité par l'axe C
       distantes.push({
         fichier: f.chemin,
-        ligne: f.contenu.slice(0, m.index).split('\n').length,
-        url,
-        sri: /\bintegrity\s*=/.test(m[0]),
-        versionFigee: /@\d+\.\d+\.\d+/.test(url) || /\/\d+\.\d+\.\d+\//.test(url),
-        cdn: CDN_CONNUS.test(url),
-        balise: m[0],
+        ligne: s.ligne,
+        url: s.src,
+        hote: abs.hostname,
+        sri: integriteProtege(s.attributs.get('integrity')),
+        versionFigee: /@\d+\.\d+\.\d+/.test(s.src) || /\/\d+\.\d+\.\d+\//.test(s.src),
+        cdn: CDN_CONNUS.test(s.src),
+        balise: s.balise,
       });
     }
     // Import map (<script type="importmap">) : une bibliothèque résolue par
@@ -66,6 +78,7 @@ export function analyserDependancesDistantes(ctx) {
         fichier: f.chemin,
         ligne: f.contenu.slice(0, e.index).split('\n').length,
         url: e.url,
+        hote: hote(e.url),
         sri: e.sri,
         versionFigee: /@\d+\.\d+\.\d+/.test(e.url) || /\/\d+\.\d+\.\d+\//.test(e.url),
         cdn: CDN_CONNUS.test(e.url),
@@ -82,7 +95,7 @@ export function analyserDependancesDistantes(ctx) {
       regle: 'E-DEP-01', axe: 'E',
       severite: !d.sri ? 'critique' : 'majeur', bloquant: !d.sri,
       confiance: 'certain',
-      titre: `Bibliothèque tierce chargée à l'exécution depuis ${hote(d.url)}`,
+      titre: `Bibliothèque tierce chargée à l'exécution depuis ${d.hote ?? hote(d.url)}`,
       fichier: d.fichier, ligne: d.ligne, extrait: d.balise,
       constat: `Le widget charge \`${d.url}\`${problemes.length ? ` — ${problemes.join(', ')}` : ''}.`,
       impact: "Ce code s'exécute chez chaque agent avec l'accès au document que le widget a obtenu. Le dépôt audité ne dit rien de ce qui sera réellement servi : le contenu peut changer à tout moment. Sans `integrity`, le navigateur accepte n'importe quel remplacement — c'est le scénario de compromission de CDN, et il ne laisse aucune trace dans l'historique Git.",

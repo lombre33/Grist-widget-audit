@@ -16,7 +16,8 @@
 import path from 'node:path';
 import * as acornWalk from 'acorn-walk';
 import { constat } from '../moteur/modele.js';
-import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique, extraireImportMaps, parser, syntaxeDeModule } from '../moteur/analyse-js.js';
+import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique, extraireImportMaps, parser, syntaxeDeModule, colonneDans } from '../moteur/analyse-js.js';
+import { lirePage, integriteProtege } from '../moteur/page-html.js';
 
 /** Hôtes considérés comme faisant partie de l'infrastructure Grist elle-même. */
 const HOTES_GRIST = [/(^|\.)getgrist\.com$/i, /(^|\.)grist\.numerique\.gouv\.fr$/i, /(^|\.)gristlabs\.com$/i];
@@ -227,28 +228,43 @@ export function analyserSortiesReseau(ctx) {
 /** Ressources externes déclarées dans le HTML et le CSS. */
 export function analyserRessourcesExternes(ctx) {
   const constats = [];
+
+  // Élément HTML porteur d'une ressource → attribut d'URL, libellé, sévérité de base.
+  const RESSOURCES = {
+    link: { attr: 'href', type: 'feuille de style ou préchargement', severite: 'majeur' },
+    iframe: { attr: 'src', type: 'iframe', severite: 'majeur' },
+    img: { attr: 'src', type: 'image', severite: 'mineur' },
+    object: { attr: 'data', type: 'objet (<object>)', severite: 'mineur' },
+    embed: { attr: 'src', type: 'contenu embarqué (<embed>)', severite: 'mineur' },
+  };
+  // Hôte de l'URL telle que le navigateur la résout depuis la base effective
+  // de la page : une `<base href>` externe fait charger un `src` relatif chez
+  // un tiers, ce qu'une lecture par expression régulière ne voyait pas.
+  const hoteResolu = (url, base) => { try { return new URL(url, base).hostname; } catch { return null; } };
+
   for (const f of ctx.fichiers) {
     if (!f.executee || f.binaire) continue;
-    if (!['.html', '.htm', '.css'].includes(f.ext)) continue;
 
-    const motifs = [
-      [/<script\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi, 'script', 'critique'],
-      [/<link\b[^>]*\bhref\s*=\s*["']([^"']+)["'][^>]*>/gi, 'feuille de style ou préchargement', 'majeur'],
-      [/<iframe\b[^>]*\bsrc\s*=\s*["']([^"']+)["'][^>]*>/gi, 'iframe', 'majeur'],
-      [/<img\b[^>]*\bsrc\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*>/gi, 'image', 'mineur'],
-      [/<object\b[^>]*\bdata\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*>/gi, 'objet (<object>)', 'mineur'],
-      [/<embed\b[^>]*\bsrc\s*=\s*["'](https?:\/\/[^"']+)["'][^>]*>/gi, 'contenu embarqué (<embed>)', 'mineur'],
-      [/@import\s+(?:url\()?["']?(https?:\/\/[^"')]+)/gi, '@import CSS', 'majeur'],
-      [/url\(\s*["']?(https?:\/\/[^"')]+)/gi, 'ressource CSS', 'mineur'],
-    ];
+    if (['.html', '.htm'].includes(f.ext)) {
+      const { scripts, ressources } = lirePage(f.contenu);
+      // Dans l'ordre du document : chaque script à `src`, puis chaque élément
+      // porteur d'une ressource. `protege` suit ce que `integrity` protège
+      // vraiment (un jeton bien formé) : une valeur vide ou bidon laisse le
+      // navigateur charger n'importe quoi, elle ne doit donc pas déclasser.
+      const elements = [
+        ...scripts.filter((s) => s.src !== null).map((s) => ({ url: s.src, type: 'script', severite: 'critique', protege: integriteProtege(s.attributs.get('integrity')), base: s.base, ligne: s.ligne, balise: s.balise })),
+        ...ressources.map((r) => {
+          const meta = RESSOURCES[r.nom];
+          if (!meta) return null;
+          const url = r.attributs.get(meta.attr);
+          return url == null ? null : { url, type: meta.type, severite: meta.severite, protege: integriteProtege(r.attributs.get('integrity')), base: r.base, ligne: r.ligne, balise: r.balise };
+        }).filter(Boolean),
+      ];
 
-    for (const [re, type, severiteBase] of motifs) {
-      for (const m of f.contenu.matchAll(re)) {
-        const url = m[1];
-        const h = hote(url);
-        if (estLocal(h)) continue;
-        const balise = m[0];
-        const gristPlugin = estGrist(h) && /grist-plugin-api\.js/.test(url);
+      for (const e of elements) {
+        const h = hoteResolu(e.url, e.base);
+        if (estLocal(h)) continue;                                 // relatif (widget.local), data:, blob:, about: … : pas une ressource tierce
+        const gristPlugin = estGrist(h) && /grist-plugin-api\.js/.test(e.url);
 
         if (gristPlugin) {
           // Cas très fréquent et spécifique : charger l'API Grist depuis
@@ -256,7 +272,7 @@ export function analyserRessourcesExternes(ctx) {
           constats.push(constat({
             regle: 'C-EXFIL-04', axe: 'C', severite: 'majeur', confiance: 'certain',
             titre: "L'API Grist est chargée depuis un domaine externe au lieu de l'instance hôte",
-            fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), extrait: balise,
+            fichier: f.chemin, ligne: e.ligne, extrait: e.balise,
             constat: `\`grist-plugin-api.js\` est chargé depuis \`${h}\`.`,
             impact: "Le widget hébergé sur une instance souveraine (grist.numerique.gouv.fr) va chercher son script pivot sur un domaine tiers. Cela crée une dépendance de disponibilité et de confiance envers ce domaine, envoie l'adresse IP de chaque agent à un tiers, et casse le widget si l'instance applique une CSP stricte ou fonctionne en réseau fermé.",
             remediation: "Charger l'API en relatif : `<script src=\"/grist-plugin-api.js\"></script>`. L'instance qui sert le widget sert aussi l'API ; c'est la forme attendue pour un hébergement sur instance officielle.",
@@ -268,16 +284,16 @@ export function analyserRessourcesExternes(ctx) {
         if (estGrist(h)) continue;
         enregistrerDestination(ctx, h);
 
-        const sri = /\bintegrity\s*=/.test(balise);
+        const sri = e.protege;
         constats.push(constat({
           regle: 'C-EXFIL-03', axe: 'C',
-          severite: type === 'script' && !sri ? 'critique' : severiteBase,
-          bloquant: type === 'script' && !sri,
+          severite: e.type === 'script' && !sri ? 'critique' : e.severite,
+          bloquant: e.type === 'script' && !sri,
           confiance: 'certain',
-          titre: `Ressource externe chargée depuis ${h} (${type})`,
-          fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), extrait: balise,
-          constat: `Le widget charge une ${type} depuis \`${h}\`${sri ? ' (avec attribut `integrity`)' : ' sans contrôle d\'intégrité (`integrity`)'}.`,
-          impact: type === 'script'
+          titre: `Ressource externe chargée depuis ${h} (${e.type})`,
+          fichier: f.chemin, ligne: e.ligne, extrait: e.balise,
+          constat: `Le widget charge une ${e.type} depuis \`${h}\`${sri ? ' (avec attribut `integrity`)' : ' sans contrôle d\'intégrité (`integrity`)'}.`,
+          impact: e.type === 'script'
             ? "Un script tiers s'exécute avec tous les privilèges du widget, donc avec l'accès que l'agent a accordé au document. Si ce domaine est compromis ou remplacé, le document entier l'est aussi. C'est le scénario type d'attaque par la chaîne d'approvisionnement."
             : "La ressource est récupérée sur un domaine tiers à chaque affichage : l'adresse IP et l'horodatage de chaque agent sont transmis à ce tiers, et la disponibilité du widget dépend de lui.",
           remediation: "Héberger la ressource dans le dépôt du widget (vendoring) et la servir en relatif. Si le chargement distant est réellement nécessaire, ajouter `integrity` et `crossorigin`, et documenter le domaine dans le README.",
@@ -286,13 +302,36 @@ export function analyserRessourcesExternes(ctx) {
       }
     }
 
+    // CSS : pas de balises, la passe HTML ne s'y applique pas — on garde la lecture par expression régulière des URL absolues de `@import` et `url()`.
+    if (f.ext === '.css') {
+      for (const [re, type, severiteBase] of [
+        [/@import\s+(?:url\()?["']?(https?:\/\/[^"')]+)/gi, '@import CSS', 'majeur'],
+        [/url\(\s*["']?(https?:\/\/[^"')]+)/gi, 'ressource CSS', 'mineur'],
+      ]) {
+        for (const m of f.contenu.matchAll(re)) {
+          const h = hote(m[1]);
+          if (estLocal(h) || estGrist(h)) continue;
+          enregistrerDestination(ctx, h);
+          constats.push(constat({
+            regle: 'C-EXFIL-03', axe: 'C', severite: severiteBase, confiance: 'certain',
+            titre: `Ressource externe chargée depuis ${h} (${type})`,
+            fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), extrait: m[0],
+            constat: `Le widget charge une ${type} depuis \`${h}\` sans contrôle d'intégrité (\`integrity\`).`,
+            impact: "La ressource est récupérée sur un domaine tiers à chaque affichage : l'adresse IP et l'horodatage de chaque agent sont transmis à ce tiers, et la disponibilité du widget dépend de lui.",
+            remediation: "Héberger la ressource dans le dépôt du widget (vendoring) et la servir en relatif. Si le chargement distant est réellement nécessaire, ajouter `integrity` et `crossorigin`, et documenter le domaine dans le README.",
+            referentiels: [REF_ANSSI, 'OWASP Top 10 A08:2021 — Intégrité logicielle', REF_GUIDE],
+          }));
+        }
+      }
+    }
+
     // Import map (<script type="importmap">) : le contenu est du JSON, jamais
-    // exécuté (voir `unitesJs`), donc invisible aux motifs ci-dessus comme à
-    // toute règle qui lit du JS. Une bibliothèque résolue par un import nu
-    // après une entrée d'import map est chargée à l'exécution comme un
-    // <script src>, avec la même exigence d'intégrité — les import maps
-    // prévoient une clé `integrity` de premier niveau à cet effet (WHATWG).
-    for (const e of extraireImportMaps(f.contenu)) {
+    // exécuté (voir `unitesJs`), donc invisible à toute règle qui lit du JS.
+    // Une bibliothèque résolue par un import nu après une entrée d'import map
+    // est chargée à l'exécution comme un <script src>, avec la même exigence
+    // d'intégrité — les import maps prévoient une clé `integrity` de premier
+    // niveau à cet effet (WHATWG).
+    if (['.html', '.htm'].includes(f.ext)) for (const e of extraireImportMaps(f.contenu)) {
       const h = hote(e.url);
       if (estLocal(h) || estGrist(h)) continue;
       enregistrerDestination(ctx, h);
@@ -1261,7 +1300,7 @@ function materialiserLitterauxEcrits(ctx, { unite, ligneDe, litteraux, profondeu
   for (const { noeud, valeur } of litteraux) {
     if (litterauxMaterialises.has(noeud)) continue;
     const { fichier } = traiterSiteConstruction(ctx, {
-      fichierOrigine: unite.chemin, ligneAppel: ligneDe(noeud), colonneAppel: (noeud.loc?.start?.column ?? 0) + 1, extrait: extraireSource(unite.source, noeud),
+      fichierOrigine: unite.chemin, ligneAppel: ligneDe(noeud), colonneAppel: colonneDans(unite, noeud), extrait: extraireSource(unite.source, noeud),
       texteBrut: envelopper ? `(function(){${valeur}})` : valeur, profondeur, regle: 'C-XSS-03', titreConstruction: '', texteConstruction: '', remediationSupprimer: '', impactConstruction: '',
     });
     if (fichier) litterauxMaterialises.add(noeud);
@@ -1274,7 +1313,7 @@ function materialiserLitterauxEcrits(ctx, { unite, ligneDe, litteraux, profondeu
  * initiale : le texte appelant dit ce qu'on y gagne.
  */
 function ouDeclarer(nomArg, { fonction = false } = {}) {
-  return `déclarer \`${nomArg}\` en \`const\`${fonction ? ` (\`const ${nomArg} = () => …\`)` : ''}, dans une fonction englobante ou dans un module (un \`<script type="module">\` écrit dans la page, ou un fichier qui contient un \`import\` ou un \`export\` ; sans l'un ni l'autre, un fichier peut toujours être chargé comme script classique)`;
+  return `déclarer \`${nomArg}\` en \`const\`${fonction ? ` (\`const ${nomArg} = () => …\`)` : ''}, ou dans une fonction englobante ou un module (un \`<script type="module">\` écrit dans la page, ou un fichier qui contient un \`import\` ou un \`export\` ; sans l'un ni l'autre, un fichier peut toujours être chargé comme script classique)`;
 }
 
 /**
@@ -1320,7 +1359,7 @@ function traiterAppelExecution(ctx, { unite, ligneDe, n, argument, walkAcorn, an
   }
   const texteAnalyse = brut !== null && envelopper ? `(function(){${brut}})` : brut;
   return traiterSiteConstruction(ctx, {
-    fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: (n.loc?.start?.column ?? 0) + 1, extrait: extraireSource(unite.source, n),
+    fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: colonneDans(unite, n), extrait: extraireSource(unite.source, n),
     texteBrut: texteAnalyse, profondeur, regle: 'C-XSS-03',
     titreConstruction, texteConstruction, remediationSupprimer: remediation, motifNonGaranti,
     impactConstruction: IMPACT_EXECUTION_CHAINE,
@@ -1400,7 +1439,7 @@ function traiterSiteConstructionMinuteur(ctx, { unite, ligneDe, n, nom, texteBru
   const remediation = `Passer une fonction : \`${nom}(() => …, délai)\`.`;
   const declaration = declarationQuiGarantit(nomArg, motif);
   return traiterSiteConstruction(ctx, {
-    fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: (n.loc?.start?.column ?? 0) + 1, extrait: extraireSource(unite.source, n),
+    fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: colonneDans(unite, n), extrait: extraireSource(unite.source, n),
     texteBrut, profondeur, regle: 'C-XSS-04',
     titreConstruction: titre,
     texteConstruction: texte,
@@ -1512,7 +1551,7 @@ function traiterWorker(ctx, { unite, ligneDe, n, profondeur }) {
 
   if (categorie === 'code-en-chaine') {
     return traiterSiteConstruction(ctx, {
-      fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: (n.loc?.start?.column ?? 0) + 1, extrait: extraireSource(unite.source, n),
+      fichierOrigine: unite.chemin, ligneAppel: ligneDe(n), colonneAppel: colonneDans(unite, n), extrait: extraireSource(unite.source, n),
       texteBrut: extraireCodeLitteralWorker(n.arguments[0]), profondeur, regle: 'C-XSS-07',
       titreConstruction: `${nomWorker} construit depuis du code assemblé en chaîne dans le dépôt`,
       texteConstruction: `Le code exécuté par ce ${nomWorker} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé.`,

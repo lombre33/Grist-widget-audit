@@ -81,6 +81,6 @@ test('script de la page, écart assumé : `type=" module "` est un module (le st
   assert.equal(genre('<script type=" \tmodule\n ">'), 'module');
 });
 
-test('script de la page : une valeur entre guillemets jamais refermée n\'affirme rien, donc pas de module', () => {
-  assert.equal(genre('<script type="module>'), 'classique');
+test('script de la page : une valeur entre guillemets jamais refermée engloutit la fin du document, la balise ne se referme pas et rien ne s\'exécute (vérifié dans Chromium)', () => {
+  assert.equal(genre('<script type="module>'), 'ignoré');
 });
