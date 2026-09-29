@@ -1,124 +1,75 @@
-# Vérifications au premier déploiement (VPS d'Antoine)
+# Vérifications de l'image V2
 
-Rien dans `docker/execution/`, `docker/egress-proxy/` ni
-`docker-compose.v2-execution.yml` n'a été construit ni démarré depuis ce
-dépôt : la politique réseau de l'environnement de développement cloud qui
-les a écrits bloque Docker Hub (voir `docker/README.md`). Ce qui suit n'est
-donc pas une checklist de confort — c'est la première fois que chacune de
-ces affirmations sera réellement mise à l'épreuve. À faire dans cet ordre,
-depuis le dossier `docker/` :
+L'image d'exécution (`docker/execution/`) et le proxy de sortie
+(`docker/egress-proxy/`) se construisent et sont vérifiés par GitHub Actions
+(`.github/workflows/image-v2.yml`, bouton « Run workflow » ou étiquette `v*`).
+Chaque vérification est une commande de `docker/ci/verifier.sh`, qui échoue
+au lieu de passer quand l'essai ne peut rien prouver : un blocage attendu a
+toujours un témoin (la même commande sur un réseau ouvert, sous le profil par
+défaut…) et une coupure n'est acceptée qu'après avoir constaté que la chose à
+couper tournait.
 
-```bash
-docker compose -f docker-compose.v2-execution.yml build
-```
-
-## 1. Le sandbox natif de Chromium démarre sous l'utilisateur non root
-
-Le point le plus incertain de toute l'esquisse (voir `docs/ARCHITECTURE-V2.md`
-§4) : `cap_drop: ALL` + `no-new-privileges` peuvent empêcher les namespaces
-utilisateur dont Chromium a besoin pour son sandbox natif.
+Rejouer la même chose sur n'importe quelle machine Linux avec Docker (cgroups
+v2, accès à github.com et registry.npmjs.org), depuis la racine du dépôt :
 
 ```bash
-docker compose -f docker-compose.v2-execution.yml run --rm execution-audit \
-  https://github.com/lombre33/Grist_Table_structure_import
+bash docker/ci/verifier.sh tout        # ou un seul : build | audit | securite | proxy | plafond | memoire | publication
 ```
 
-Un audit qui se termine normalement (rapport JSON dans `./out/`), **sans**
-la ligne `⚠ --no-sandbox` dans la sortie, confirme le sandbox actif. S'il
-plante au lancement de Chromium au lieu de dégrader proprement l'axe D
-(`D-INDISPONIBLE`), c'est ce point précis qui bloque — voir la note du
-service `execution-audit` dans le compose pour la marche à suivre (ne
-jamais céder à `--no-sandbox`, ajouter une couche d'isolation à la place).
+## Ce que la CI éprouve
 
-## 2. Le réseau est fermé par défaut, pas seulement filtré en applicatif
+| Sous-programme | Ce qui est prouvé | Comment |
+|---|---|---|
+| `build` | les deux images se construisent depuis la racine du dépôt (le compose a un contexte de construction qui le permet) | `docker compose build` |
+| `audit` | un vrai audit de `fixtures/widget-exemple` s'exécute dans le conteneur durci, **axe D compris**, sans axe non exécuté ni partiel ; Chromium y tourne **sans `--no-sandbox`** | rapport JSON contrôlé par `docker/ci/verifier-rapport.mjs` ; arguments du vrai processus Chromium relevés pendant l'audit (`docker top`), échec s'il n'y en a aucun ou si `--no-sandbox` y figure |
+| `securite` | non-root, aucune capacité effective, `no-new-privileges`, rootfs en lecture seule et `/tmp` inscriptible, réseau fermé (le conteneur n'atteint pas Internet) ; **le bac à sable de Chromium démarre** sous cette enveloppe | `/proc/self/status` ; sonde `docker/ci/sonde-reseau.mjs` (témoin sur réseau ouvert) ; sonde `docker/ci/sonde-sandbox.mjs` qui lit `chrome://sandbox` (« adequately sandboxed ») et qui **échoue** sous le profil seccomp par défaut de Docker (témoin) |
+| `proxy` | un hôte autorisé (github.com) se joint à travers le proxy ; deux hôtes hors liste blanche (dont un nom qui commence comme un hôte autorisé) sont refusés **par le proxy** (403) ; SSH n'ouvre pas de voie parallèle (échec par le réseau, pas par les identifiants : témoin sur réseau ouvert) ; un nom autorisé qui se résout vers 127.0.0.1 est refusé (anti-rebinding) ; l'audit d'une URL réelle va jusqu'au bout, clone et `npm audit` à travers le proxy | `git ls-remote`, proxy jetable avec `--add-host github.com:127.0.0.1`, audit de `lombre33/Grist_Table_structure_import` |
+| `plafond` | un `gwaudit` bloqué en boucle synchrone, avec un Chromium lancé, est coupé au plafond de durée (code 124) et aucun Chromium ne survit à la destruction du conteneur ; le vrai audit d'un widget qui boucle sans fin conclut de lui-même, sans Chromium orphelin | `gwaudit` de substitution monté sur `bin/gwaudit.js` (vrai `entrypoint.sh`, vraie image), `GWAUDIT_PLAFOND_S=20`, `pgrep` sur l'hôte ensuite |
+| `memoire` | un widget qui alloue sans fin est contenu : mémoire du conteneur sous la limite, `OOMKilled` à vrai (le noyau tue le rendu de Chromium), swap exclu ; l'audit conclut malgré tout par un verdict | `docker stats` échantillonné, `docker inspect` |
+| `publication` | `docker/ci/publier.sh` : étiquette invalide refusée ; une version d'essai (`v1.2.3-rc1`) ne déplace pas `latest` ; une version finale le déplace, pour les deux images ; l'image publiée porte l'étiquette de source et la révision exacte | registre local, sans identifiants (à blanc : rien n'est publié) |
 
-`reseau-ferme` est déclaré `internal: true` : `execution-audit` ne doit
-avoir *aucune* route vers Internet en dehors de `egress-proxy`, quel que
-soit le protocole.
+Sur ghcr.io, le premier `v*` publie vraiment, et `publier.sh` dit ensuite si le
+paquet est public (tirable sans identifiants) ou privé (et alors quoi cliquer
+dans GitHub : profil → Packages → le paquet → Package settings → Change
+visibility). Ce que la publication à blanc ne peut pas voir : les droits du
+jeton et la visibilité.
 
-```bash
-docker compose -f docker-compose.v2-execution.yml run --rm execution-audit \
-  sh -c "wget -T 5 -O- https://exemple-hors-liste.invalid || echo 'ÉCHEC ATTENDU'"
-```
+## Ce qui ne s'éprouve que sur le VPS
 
-Doit échouer (pas de route), **pas** un simple refus HTTP. Si ça réussit,
-`reseau-ferme` ne fait pas ce que le fichier prétend.
+Le runner GitHub n'est pas le VPS : mêmes scénarios, autre noyau. À rejouer
+(`bash docker/ci/verifier.sh tout`) sur le VPS, en regardant surtout :
 
-## 3. `git clone` et `npm audit` passent réellement par `egress-proxy`
+- **Le bac à sable de Chromium** : il dépend du noyau (espaces de noms
+  utilisateur non privilégiés autorisés, pas de restriction AppArmor
+  qui les interdise) autant que du profil seccomp. Si `securite` échoue sur la
+  sonde de bac à sable, ne jamais céder et remettre `--no-sandbox` : ajouter
+  une couche d'isolation indépendante de Chromium (voir
+  `docs/ARCHITECTURE-V2.md` §4).
+- **La limite mémoire** : cgroups v2 confirmé sur le runner ; `docker info |
+  grep -i cgroup` sur le VPS, et le swap (`memswap_limit` du compose l'exclut
+  s'il est pris en charge).
+- **La version de Docker** : le compose relit le profil seccomp par un chemin
+  relatif à lui-même ; à confirmer sur la version installée.
+- **L'usage réel** : ce dépôt livre la brique ; la file qui sérialise les jobs,
+  l'appel du conteneur avec l'URL soumise et le montage de `/out` sont
+  l'intégration (`docs/ARCHITECTURE-V2.md` §5). `/out` doit être inscriptible
+  par l'uid 1000 (`pwuser`).
 
-Ajoutées le 2026-09-28 après une revue de sécurité qui a trouvé qu'aucune
-variable ne disait à `git`/`npm` d'utiliser le proxy — sans elles, le job
-échoue simplement faute de route (voir point 2), il ne contourne rien,
-mais il ne marche pas non plus.
+## Codes de sortie du conteneur
 
-```bash
-# Doit réussir (github.com est dans la liste blanche de squid.conf) :
-docker compose -f docker-compose.v2-execution.yml run --rm execution-audit \
-  sh -c "git clone --depth 1 https://github.com/lombre33/Grist_Table_structure_import /tmp/t && echo OK"
+`0` CONFORME · `1` SOUS RÉSERVE ou NON CONFORME sans bloquant · `2` au moins un
+bloquant (un verdict, pas une panne) · `3` erreur interne de gwaudit · `124`
+(ou `137`) coupé par le plafond de durée (`GWAUDIT_PLAFOND_S`, 480 s par défaut) ·
+`137` avec `OOMKilled` si le noyau a tué le processus principal pour cause de
+mémoire. Un code 124 ou 137 ne garantit pas que les rapports ont été écrits.
 
-# Doit échouer (hôte hors liste blanche) :
-docker compose -f docker-compose.v2-execution.yml run --rm execution-audit \
-  sh -c "git clone --depth 1 https://gitlab.gnome.org/GNOME/gimp /tmp/t2 && echo 'FUITE — À CORRIGER' || echo 'REJET ATTENDU'"
-```
+## Ce que la CI a corrigé
 
-## 4. Une URL SSH (`git@hôte:chemin`) n'ouvre pas de voie parallèle
-
-`HTTP_PROXY`/`HTTPS_PROXY` ne s'appliquent pas au transport SSH de git —
-relevé par la même revue. L'hypothèse (non éprouvée) est que `reseau-ferme`
-coupe court quel que soit le protocole, puisqu'il n'y a de route que vers
-`egress-proxy`, qui ne relaie pas SSH.
-
-```bash
-docker compose -f docker-compose.v2-execution.yml run --rm execution-audit \
-  sh -c "timeout 10 git ls-remote git@github.com:lombre33/Grist_Table_structure_import.git || echo 'ÉCHEC ATTENDU (pas de route)'"
-```
-
-Doit échouer par absence de route (timeout/unreachable), pas seulement par
-absence de clé SSH — la différence compte : un échec de credentials ne
-prouve rien sur l'isolation réseau.
-
-## 5. La limite mémoire (cgroups v2) coupe réellement
-
-`ulimit -v` est structurellement inutilisable avec Chromium (voir constat
-10c, `docs/ARCHITECTURE-V2.md` §1) — seuls les cgroups conviennent. `mem_limit:
-768m` dans le compose s'appuie dessus, jamais vérifié faute de VPS.
-
-```bash
-docker info | grep -i cgroup   # confirmer cgroups v2 (unified) avant tout le reste
-```
-
-Un audit normal doit rester sous 768 Mio et se terminer ; un widget qui
-alloue délibérément au-delà doit voir son conteneur tué par le noyau (`docker
-compose ... ps` montre un statut OOMKilled), pas planter Chromium en
-silence ni continuer indéfiniment.
-
-## 6. Le plafond de durée coupe réellement un job bloqué, y compris Chromium
-
-Ajouté le 2026-09-28 (`docker/execution/entrypoint.sh` enveloppe désormais
-l'audit dans `timeout -k 10 480 node …`, voir `docs/ARCHITECTURE-V2.md`
-§4). Vérifié hors conteneur qu'un simple SIGTERM suffit à tuer un process
-Node bloqué en boucle synchrone — reste propre au conteneur :
-
-```bash
-# Doit se terminer aux alentours de 480 s (pas avant, pas après), avec un
-# code de sortie 124 ou 137 — jamais tourner indéfiniment :
-docker compose -f docker-compose.v2-execution.yml run --rm execution-audit \
-  https://exemple-qui-declenche-un-blocage-connu.invalid
-docker compose -f docker-compose.v2-execution.yml ps -a   # confirmer le code de sortie
-```
-
-Si un widget hostile fait tourner un sous-processus (Chromium notamment)
-qui survit à la fin de `node`, confirmer qu'aucun processus ne persiste
-après ce délai :
-
-```bash
-docker compose -f docker-compose.v2-execution.yml run --rm -d execution-audit \
-  https://exemple-qui-declenche-un-blocage-connu.invalid
-# quelques secondes après le plafond, sur l'hôte :
-docker exec <id-conteneur> ps aux 2>&1 || echo 'conteneur déjà détruit — attendu'
-```
-
----
-
-Ce fichier documente des vérifications à faire, pas des résultats obtenus —
-aucune des commandes ci-dessus n'a tourné depuis ce dépôt.
+Chacun de ces défauts était invisible à la relecture et est apparu à la
+première exécution réelle : un compose qui ne pouvait pas construire (contexte
+de construction), un chemin de Chromium faux, un `/tmp` en `noexec` qui
+empêchait l'axe D de démarrer, un audit d'URL qui échouait dès la première
+étape dans la zone fermée (pas de DNS : `GWAUDIT_RESOLUTION_PAR_PROXY=1`), et
+un Chromium qui tournait sans bac à sable parce que Playwright ajoute
+`--no-sandbox` de lui-même (`GWAUDIT_CHROMIUM_SANDBOX=1`, profil seccomp et
+`SYS_CHROOT`). Le détail est dans `docs/ARCHITECTURE-V2.md` (constat 3 et §7).

@@ -255,6 +255,9 @@ cmd_memoire() {
   local limite pic=0 mib
   limite="$(docker inspect -f '{{.HostConfig.Memory}}' "$nom")"
   [ "$limite" = "805306368" ] || echec "limite mémoire du conteneur = $limite octets au lieu de 768 Mio : le compose n'est pas appliqué"
+  local swap
+  swap="$(docker inspect -f '{{.HostConfig.MemorySwap}}' "$nom")"
+  [ "$swap" = "805306368" ] || echec "mémoire + swap du conteneur = $swap octets au lieu de 768 Mio : le swap n'est pas exclu"
   while [ "$(docker inspect -f '{{.State.Running}}' "$nom")" = "true" ]; do
     mib="$(docker stats --no-stream --format '{{.MemUsage}}' "$nom" 2>/dev/null | awk '{
       v=$1; u=v; gsub(/[0-9.]/,"",u); gsub(/[A-Za-z]/,"",v);

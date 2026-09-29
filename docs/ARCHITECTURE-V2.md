@@ -3,11 +3,15 @@
 ## Statut de ce document
 
 Conception et outillage, pas de déploiement : rien de ce qui suit n'a tourné
-sur l'infrastructure d'Antoine, et rien ici ne touche son VPS. Comme pour
-`docker/` en V1, la politique réseau de cet environnement cloud bloque
-Docker Hub et empêche de valider quoi que ce soit de conteneurisé
-directement ici — chaque pièce technique proposée reste à essayer sur sa
-machine.
+sur l'infrastructure d'Antoine, et rien ici ne touche son VPS. En revanche
+l'image d'exécution et le proxy de sortie **se construisent et sont vérifiés
+par GitHub Actions** (`.github/workflows/image-v2.yml`, scénarios dans
+`docker/ci/verifier.sh`, rejouables à la main sur toute machine Docker sous
+Linux) : audit réel dans le conteneur durci, bac à sable de Chromium, réseau
+fermé, liste blanche du proxy, plafond de durée, limite mémoire. Ce que cela
+prouve, et ce qui ne se prouve que sur le VPS, est dans
+`docker/README-V2-VERIFICATIONS.md`. Cette construction a corrigé des défauts
+que la relecture n'avait pas vus (voir le constat 3 ci-dessous et le §7).
 
 ## 1. Ce qui change de fond en comble
 
@@ -39,7 +43,7 @@ ce qui suit est la dernière, à jour.
 |---|---|---|---|
 | 1 | `git clone` recevait l'URL soumise sans résolution d'hôte ni liste blanche — SSRF | `bin/gwaudit.js` | `resoudreCible()` appelle `validerHoteClone()` avant tout clonage : résolution DNS puis rejet des adresses privées/loopback/lien-local/métadonnées cloud, refus du `http://` non chiffré. **Ce correctif avait lui-même un trou**, trouvé par revue adversariale le 2026-09-20 et corrigé au commit `19c0134` : `new URL()` normalise un `\` littéral en `/` avant de chercher la limite `userinfo@hôte`, alors que git/libcurl (RFC 3986) ne le font pas — une cible comme `https://hote-public.example\@CIBLE-INTERNE/x` passait la validation (hôte calculé : le domaine public) pendant que git se connectait réellement à `CIBLE-INTERNE`. Reproduit avec un vrai `git ls-remote`, fermé en rejetant tout `\` littéral et tout userinfo explicite avant la résolution DNS, non-régression prouvée par un test qui écoute réellement sur un port local (`tests/ssrf.test.mjs`). Toujours pas de protection anti-DNS-rebinding entre la vérification et la connexion — laissé au proxy de sortie V2 (§4), qui n'a structurellement pas ce type de trou : voir §4. |
 | 2 | `npm audit` héritait tout `process.env` et lisait le `.npmrc` du dépôt audité | `src/regles/e-dependances.js` | `npmAudit()` copie seulement `package.json`/`package-lock.json` dans un dossier neutre, avec un environnement dédié (`HOME` isolé, `npm_config_userconfig` pointé sur un `.npmrc` vide, `npm_config_registry` figé sur `registry.npmjs.org`, proxy d'entreprise transmis explicitement) : le `.npmrc` du dépôt audité n'est jamais lu. |
-| 3 | Chromium était lancé avec `--no-sandbox` | `src/runtime/dynamique.js` | Sandbox natif actif par défaut ; `--no-sandbox` seulement si `GWAUDIT_CHROMIUM_SANS_SANDBOX=1` est positionnée explicitement. |
+| 3 | Chromium était lancé avec `--no-sandbox` | `src/runtime/dynamique.js` | ~~Sandbox natif actif par défaut ; `--no-sandbox` seulement si `GWAUDIT_CHROMIUM_SANS_SANDBOX=1` est positionnée explicitement.~~ **Faux, rectifié le 2026-09-29** : Playwright ajoute lui-même `--no-sandbox` tant que `chromiumSandbox: true` n'est pas passé à `launch()`/`launchServer()`, ce que rien ne faisait — vu dans les arguments du vrai processus Chromium, sous `pwuser` dans le conteneur. Le widget audité tournait donc toujours sans bac à sable. Correction vérifiée en conteneur : `GWAUDIT_CHROMIUM_SANDBOX=1` (posée par le compose V2) demande `chromiumSandbox: true` ; sans elle, comportement inchangé (root, cloud de développement). Sous le profil seccomp par défaut de Docker Chromium refuse alors de démarrer : voir §4. **Toujours ouvert en V1** : par défaut, sans la variable, le bac à sable reste absent. |
 | 4 | Aucun hash de commit rattaché au rapport | `bin/gwaudit.js` | `commitDepot()` (`git rev-parse HEAD`) inclus dans `meta.commit` ; identité du dépôt tirée de l'URL réelle. |
 | 8 | Le passe-droit réseau « local » ne comparait que le *hostname* | `src/runtime/dynamique.js` | Compare désormais l'origine exacte (`urlOrigine === origine`, protocole + hôte + port), pas seulement le hostname. |
 | 9 | Aucun plafond de fichiers/octets cumulés pendant l'inventaire | `src/contexte/inventaire.js` | `MAX_FICHIERS` (20 000) et `MAX_OCTETS_LUS_CUMULES` (200 Mo), avec troncature explicite plutôt que crash, signalée dans `ctx.tronque`. |
@@ -148,8 +152,9 @@ nominale :
      cumulée lue) ;
    - analyse statique (axes A, B, C, E-partie-statique, F) — déjà sûre,
      inchangée ;
-   - analyse dynamique (axe D) durcie : sandbox Chromium natif actif (pas
-     `--no-sandbox`), `routeWebSocket()` ajouté à côté de `route()`,
+   - analyse dynamique (axe D) durcie : sandbox Chromium natif demandé
+     (`GWAUDIT_CHROMIUM_SANDBOX=1`, constat 3 — pas actif sans elle),
+     `routeWebSocket()` ajouté à côté de `route()`,
      `serviceWorkers: 'block'`, politique de désactivation WebRTC,
      comparaison à l'origine exacte du harnais (pas au seul hostname) pour
      le passe-droit local, timeout global forcé, plafonds CPU/mémoire/pids
@@ -179,14 +184,25 @@ entièrement remplacer — à éprouver sur le VPS d'Antoine.
   strictement nécessaire), `no-new-privileges`, rootfs en lecture seule
   avec un `tmpfs` borné en taille pour l'espace de travail du job,
   `pids_limit`, limites CPU/mémoire, pas de `docker.sock`.
-- **Chromium** : objectif = réactiver son sandbox natif (namespaces
-  utilisateur, seccomp) plutôt que `--no-sandbox`. Si l'environnement
-  Docker du VPS ne le permet pas sans capacités élevées, le bon réflexe
-  n'est pas de céder et remettre `--no-sandbox` : c'est d'ajouter une
-  deuxième couche d'isolation indépendante de Chromium (conteneur jetable +
-  réseau fermé, voire microVM de type Firecracker/gVisor si le volume le
-  justifie un jour), pour que le sandbox Chromium ne soit jamais la seule
-  barrière.
+- **Chromium** : son bac à sable natif (espaces de noms utilisateur, seccomp)
+  doit être actif — et il ne l'est pas par défaut : Playwright ajoute
+  `--no-sandbox` de lui-même (constat 3, §1). Éprouvé en conteneur : sous le
+  profil seccomp par défaut de Docker, Chromium refuse de démarrer avec son
+  bac à sable (« No usable sandbox! ») ; avec le profil de Playwright
+  (`docker/execution/seccomp-chromium.json`, qui autorise la création
+  d'espaces de noms utilisateur) il abandonne encore sur `chroot()` faute de
+  `CAP_SYS_CHROOT` dans l'ensemble borné ; avec le profil **et**
+  `cap_add: SYS_CHROOT`, `chrome://sandbox` répond « You are adequately
+  sandboxed » (couche 1 : espaces de noms, seccomp-BPF). Pour `pwuser` (non
+  root) la capacité ajoutée reste hors de l'ensemble effectif : le noyau refuse
+  toujours `chroot()` hors de l'espace de noms de Chromium. Ces deux réglages
+  et `GWAUDIT_CHROMIUM_SANDBOX=1` sont dans le compose ; **qui déploie l'image
+  sans ce compose doit les reproduire** (voir « Ce que l'image exige » plus
+  bas). Le bon réflexe si un hôte ne le permet pas reste de ne pas céder et
+  remettre `--no-sandbox` : c'est d'ajouter une deuxième couche d'isolation
+  indépendante de Chromium (conteneur jetable + réseau fermé, voire microVM de
+  type Firecracker/gVisor si le volume le justifie un jour), pour que le
+  sandbox Chromium ne soit jamais la seule barrière.
 - **Réseau pendant l'exécution du navigateur** : interdiction par défaut de
   toute sortie réelle (seule la boucle locale vers le harnais de la V1
   doit passer, sur l'origine exacte, pas sur un hostname générique). Ceci
@@ -280,13 +296,11 @@ entièrement remplacer — à éprouver sur le VPS d'Antoine.
   pathologique. Vérifié hors conteneur avec une vraie boucle Node
   synchrone sans gestionnaire de signal : un simple SIGTERM suffit à la
   tuer immédiatement, le repli `-k` en SIGKILL n'a même pas été
-  nécessaire ; reste à confirmer en conteneur réel, notamment que la
-  destruction du process 1 du conteneur (`timeout`, lui-même remplacé par
-  `exec`) entraîne bien celle d'un éventuel Chromium orphelin par arrêt de
-  l'espace de noms PID — propriété standard de Docker/Linux, pas
-  spécifique à ce script, mais jamais observée ici faute de pouvoir
-  démarrer un conteneur (voir `docker/README-V2-VERIFICATIONS.md` point
-  6).
+  nécessaire ; confirmé ensuite en conteneur réel : la destruction du
+  process 1 du conteneur (`timeout`, lui-même remplacé par `exec`) entraîne
+  bien celle d'un Chromium orphelin, par arrêt de l'espace de noms PID
+  (`bash docker/ci/verifier.sh plafond`, voir
+  `docker/README-V2-VERIFICATIONS.md`).
 
 ### Proposition concrète pour le VPS d'Antoine (Debian 13)
 
@@ -316,19 +330,23 @@ par Antoine sur sa propre machine**, la seule qui compte réellement :
   la mémoire **résidente** réellement utilisée — pas la mémoire **virtuelle
   adressée** que compte `ulimit -v` (RLIMIT_AS), et qui est précisément ce
   qui rend `ulimit -v` inutilisable avec Chromium (constat 10c, ci-dessus).
-  *À vérifier sur le VPS, pas supposé* : lancer le même Chromium dans un
-  conteneur avec `mem_limit: 768m` et confirmer qu'il démarre normalement
-  puis qu'il est bien tué s'il dépasse — le test qui a fait échouer
-  `ulimit -v` refait cette fois dans le bon cadre.
+  Éprouvé sur un runner GitHub (cgroups v2) : face à un widget qui alloue
+  sans fin, le noyau tue le processus le plus gros (le rendu de Chromium), la
+  mémoire du conteneur reste sous la limite (`OOMKilled` à vrai) et l'audit
+  conclut quand même par un verdict — pas de plantage silencieux, pas de
+  dépassement. `memswap_limit` égal à `mem_limit` interdit en plus de
+  compenser par du swap. *À refaire sur le VPS*, dont le noyau et la version
+  de Docker peuvent différer : `bash docker/ci/verifier.sh memoire`.
 - **Durcissement du conteneur, par priorité** :
   1. Ce qui est déjà dans l'esquisse ci-dessous (`cap_drop: ALL`,
      `no-new-privileges`, rootfs en lecture seule + `tmpfs` borné,
      `pids_limit`, `mem_limit`, `cpus`) — coût nul, à faire dès le premier
      conteneur.
-  2. Le profil seccomp par défaut de Docker (actif tant qu'il n'est pas
-     explicitement désactivé) — un profil personnalisé plus restrictif
-     n'est à envisager que si un besoin précis apparaît à l'usage, pas
-     comme prérequis.
+  2. Un profil seccomp : celui de Docker par défaut ne suffit **pas** ici (il
+     interdit les espaces de noms utilisateur dont le bac à sable de Chromium
+     a besoin) ; le profil de Playwright, repris tel quel, est celui du
+     compose. Un profil plus restrictif n'est à envisager que si un besoin
+     précis apparaît à l'usage.
   3. `userns-remap` dans `/etc/docker/daemon.json` sur l'hôte, en
      défense en profondeur : remappe l'UID root du conteneur vers un UID
      non privilégié côté VPS, pour qu'une évasion de conteneur n'atterrisse
@@ -359,6 +377,31 @@ par Antoine sur sa propre machine**, la seule qui compte réellement :
 Une esquisse de `docker-compose` pour cette zone est dans
 [`docker/docker-compose.v2-execution.yml`](../docker/docker-compose.v2-execution.yml)
 — non testée ici pour la même raison que le reste de `docker/`.
+
+### Ce que l'image exige de qui la déploie
+
+L'image seule ne suffit pas : les réglages ci-dessous sont dans
+`docker/docker-compose.v2-execution.yml`, qui est la référence ; qui l'exécute
+autrement (autre orchestrateur, `docker run`, Kubernetes) doit tous les
+reproduire, sans quoi soit l'audit échoue, soit — pire — il tourne avec moins
+d'isolation sans le dire.
+
+| Réglage | Pourquoi | Sans lui |
+|---|---|---|
+| utilisateur `pwuser` (par l'image), `read_only`, `tmpfs` `/tmp` avec `exec` | rien d'écrit hors du travail du job ; l'axe D exécute un lanceur de Chromium sous `/tmp` | `noexec` (défaut Docker du tmpfs) : axe D en `EACCES` |
+| `cap_drop: ALL`, `no-new-privileges`, `pids_limit`, `mem_limit` + `memswap_limit` égaux, `cpus` | enveloppe de base | — |
+| `seccomp=execution/seccomp-chromium.json` + `cap_add: SYS_CHROOT` | bac à sable de Chromium (voir §4) | Chromium ne démarre pas avec son bac à sable, ou sans lui |
+| `GWAUDIT_CHROMIUM_SANDBOX=1` | demande le bac à sable à Playwright (constat 3) | Chromium tourne avec `--no-sandbox` |
+| réseau `internal: true` + `HTTP_PROXY`/`HTTPS_PROXY` vers `egress-proxy` | seule sortie : le proxy à liste blanche | pas de sortie du tout, ou une sortie ouverte |
+| `GWAUDIT_RESOLUTION_PAR_PROXY=1` | le réseau interne n'a pas de DNS : le proxy résout et refuse les adresses internes | tout audit d'URL échoue (exit 3) |
+| `/out` inscriptible par l'uid 1000 (`pwuser`) | le rapport y est écrit | pas de rapport |
+
+Contrat de sortie du conteneur : `0` CONFORME ; `1` SOUS RÉSERVE ou NON
+CONFORME sans bloquant ; `2` au moins un bloquant (un verdict, pas une panne) ;
+`3` erreur interne de gwaudit ; `124` (ou `137`) coupé par le plafond de durée
+(`GWAUDIT_PLAFOND_S`, 480 s par défaut : ne pas la poser en production) ;
+`137` avec `OOMKilled` si le noyau a tué le processus principal pour cause de
+mémoire. Un code 124 ou 137 ne laisse aucune garantie sur les rapports écrits.
 
 ## 5. File d'attente, quotas, anti-abus
 
@@ -461,15 +504,19 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
 - Fait : les constats 1, 2, 3, 4, 5, 8, 9, 10a, 10b et 12 (§1) sont
   corrigés dans le moteur ; les constats 6 et 7 restent substantiellement
   atténués par le durcissement réseau ajouté en même temps.
-- Fait, mais **écrit et relu, jamais construit ni démarré** (Docker Hub
-  bloqué depuis cet environnement de développement, voir `docker/README.md`) :
+- Fait et **construit, vérifié par GitHub Actions** (2026-09-29) :
   `docker/execution/Dockerfile` (+ `entrypoint.sh`) et
-  `docker/egress-proxy/Dockerfile` (+ `squid.conf`), référencés désormais
-  par `docker-compose.v2-execution.yml` à la place des deux placeholders
-  qu'ils remplacent. La différence entre « prêt » et « ça devrait
-  marcher » tient tout entière à cette phrase : le premier `docker compose
-  build && up` de ces fichiers doit se faire sur le VPS d'Antoine, c'est
-  là qu'ils seront éprouvés pour la première fois.
+  `docker/egress-proxy/Dockerfile` (+ `squid.conf`), référencés par
+  `docker-compose.v2-execution.yml`. « Écrit et relu » ne valait pas
+  « construit et éprouvé » : la première vraie construction a trouvé un
+  compose qui ne pouvait pas construire (contexte de construction), un chemin
+  de Chromium faux, un `/tmp` en `noexec` qui empêchait l'axe D de démarrer, un
+  audit d'URL qui échouait dès la première étape dans la zone fermée (le réseau
+  interne n'a aucune résolution DNS, or `validerHoteClone()` en faisait une :
+  corrigé par `GWAUDIT_RESOLUTION_PAR_PROXY=1`, la résolution et le refus des
+  adresses internes revenant alors au proxy), et un Chromium qui tournait sans
+  bac à sable (constat 3). Reste ce que seul le VPS peut dire :
+  `docker/README-V2-VERIFICATIONS.md`.
 - Limite de mémoire résidente par job (constat 10c) : déjà dans l'esquisse
   (`mem_limit: 768m`, §4) — reste à valider sur le VPS (cgroups v2), pas à
   concevoir.
@@ -490,15 +537,13 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
 - Ajouté le 2026-09-28, après le blocage trouvé sur `F-RGAA-05` (§4) :
   `docker/execution/entrypoint.sh` enveloppe tout l'audit dans
   `timeout -k 10 480 …`, plafond au niveau du conteneur qui ne dépend
-  d'aucune limite interne à l'outil. Vérifié hors conteneur (SIGTERM seul
-  suffit sur une boucle Node synchrone) ; reste à confirmer en conteneur
-  réel, y compris l'arrêt d'un Chromium orphelin (`docker/README-V2-VERIFICATIONS.md`
-  point 6).
-- Faire valider sur le VPS d'Antoine, dans cet ordre : `docker compose
-  build` réussit ; le sandbox natif de Chromium démarre sous `pwuser` avec
-  `cap_drop: ALL` (sinon voir la note du service `execution-audit`) ; la
-  limite mémoire via `mem_limit`/cgroups v2 coupe réellement (comme prévu
-  au §4, pas testable depuis ce cloud) ; un `git ls-remote` et un `npm
-  audit` réels passent par `egress-proxy` et un hôte hors liste blanche
-  est refusé ; un job qui dépasse 480 s est coupé sans laisser de
-  processus survivant (point 6 ci-dessus).
+  d'aucune limite interne à l'outil. Éprouvé en conteneur réel : un `gwaudit`
+  de substitution qui lance Chromium puis boucle en synchrone est coupé au
+  plafond (code 124) et aucun Chromium ne survit à la destruction du
+  conteneur (`bash docker/ci/verifier.sh plafond`).
+- Faire rejouer sur le VPS d'Antoine, une fois l'image construite ou tirée :
+  `bash docker/ci/verifier.sh tout` (les mêmes scénarios que la CI ; il
+  faut Linux, Docker avec cgroups v2, et un accès à github.com et
+  registry.npmjs.org). Ce qui peut différer du runner : le noyau (espaces de
+  noms utilisateur, AppArmor), la version de Docker, le swap. Détail dans
+  `docker/README-V2-VERIFICATIONS.md`.

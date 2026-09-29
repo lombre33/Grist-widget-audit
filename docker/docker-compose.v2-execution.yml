@@ -80,6 +80,9 @@ services:
     # fait, et rien d'autre ; l'absence de variable de dérogation ne prouve rien.
     pids_limit: 128
     mem_limit: 768m
+    # Sans ceci Docker autorise autant de swap que de mémoire (le double au
+    # total) quand l'hôte en a : la limite ne limiterait alors que la RAM.
+    memswap_limit: 768m
     cpus: "1.0"
     networks:
       - reseau-ferme   # pas de route par défaut vers Internet
@@ -109,14 +112,13 @@ services:
       # processus Chromium pendant un audit, et chrome://sandbox).
       - GWAUDIT_CHROMIUM_SANDBOX=1
       # Une URL git@hôte:chemin (SSH) ignore HTTP_PROXY/HTTPS_PROXY —
-      # relevé par la même revue. Pas un trou pour autant : resoudreCible()
-      # valide déjà ce format exactement comme https:// (bin/gwaudit.js,
-      # résolution DNS + rejet des plages internes avant tout clonage), et
-      # côté réseau, reseau-ferme n'a de route que vers egress-proxy — un
-      # SSH (port 22) n'a nulle part où aller, quelle que soit la
-      # variable d'environnement. Affirmation lue dans ce fichier, jamais
-      # éprouvée : à vérifier au premier démarrage réel (voir la liste de
-      # vérifications en tête de docker/README-V2-VERIFICATIONS.md).
+      # relevé par une revue. Pas un trou pour autant, et deux fois : avec
+      # GWAUDIT_RESOLUTION_PAR_PROXY (ci-dessus) gwaudit refuse nettement une
+      # URL SSH, et côté réseau reseau-ferme n'a de route que vers
+      # egress-proxy — un SSH (port 22) n'a nulle part où aller, quelle que soit
+      # la variable d'environnement (éprouvé : échec par « Could not resolve
+      # hostname », alors que le même essai sur réseau ouvert atteint bien
+      # github.com — docker/ci/verifier.sh proxy).
     volumes:
       - ./out:/out   # emplacement illustratif : l'orchestrateur (§5) choisit le vrai montage par job
     # Volontairement aucune variable héritée du service "site" (secrets,

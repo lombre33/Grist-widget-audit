@@ -39,9 +39,10 @@ mkdir -p /out
 # thread bloqué par du retour arrière ne peut structurellement pas
 # exécuter le moindre setTimeout côté outil pour s'auto-interrompre. Seul
 # un mécanisme externe au process peut couper un blocage de cette nature
-# — vérifié ici avec une vraie boucle Node synchrone et sans gestionnaire
-# de signal : `timeout` la termine par un simple SIGTERM, sans même avoir
-# besoin du repli -k (voir docker/README-V2-VERIFICATIONS.md point 6).
+# — vérifié avec une vraie boucle Node synchrone et sans gestionnaire de
+# signal : `timeout` la termine par un simple SIGTERM, sans même avoir
+# besoin du repli -k ; et en conteneur réel, avec un Chromium lancé, par
+# `docker/ci/verifier.sh plafond` (code 124, aucun Chromium orphelin).
 #
 # 480 s = marge au-dessus de la somme des plafonds déjà internes à l'outil
 # (clone git 120 s, npm audit 120 s, scénario axe D ~90 s) : large pour ne
