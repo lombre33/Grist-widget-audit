@@ -50,14 +50,22 @@ COPY docker/execution/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh
 
 # L'image Playwright officielle fournit déjà un utilisateur non root,
-# "pwuser", avec les permissions nécessaires sur /ms-playwright — à
-# confirmer sur le VPS que cap_drop: ALL + no-new-privileges (voir
-# docker-compose.v2-execution.yml) n'empêchent pas le sandbox natif de
-# Chromium de démarrer sous cet utilisateur. Si c'est le cas, la réponse
-# documentée en §4 est une deuxième couche d'isolation indépendante de
-# Chromium (conteneur jetable + réseau fermé, déjà en place ; microVM si
-# le volume le justifie un jour) — jamais céder et repasser en
-# --no-sandbox.
+# "pwuser", avec les permissions nécessaires sur /ms-playwright.
+#
+# Le bac à sable natif de Chromium est actif par défaut dans gwaudit (le widget
+# audité est du code non fiable) et cette image REFUSE la dérogation
+# GWAUDIT_CHROMIUM_SANS_SANDBOX (entrypoint.sh). Sous cette enveloppe
+# (cap_drop: ALL, no-new-privileges, lecture seule), il ne démarre que si le
+# moteur de conteneurs reçoit, au lancement, le profil seccomp
+# docker/execution/seccomp-chromium.json ET la capacité SYS_CHROOT — ce que
+# fait docker-compose.v2-execution.yml, et que quiconque lance l'image sans lui
+# doit reproduire. Ces deux réglages ne sont pas dans l'image : sans eux,
+# Chromium ne démarre pas, l'axe D est « non exécuté » avec cette cause
+# (D-INDISPONIBLE) et l'audit ne tourne jamais sans bac à sable. La réponse
+# documentée en §4 de docs/ARCHITECTURE-V2.md si un noyau ne le permet pas est
+# une deuxième couche d'isolation indépendante de Chromium (conteneur jetable +
+# réseau fermé, déjà en place ; microVM si le volume le justifie un jour) —
+# jamais céder et repasser en --no-sandbox.
 USER pwuser
 
 ENTRYPOINT ["/app/entrypoint.sh"]

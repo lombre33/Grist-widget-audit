@@ -395,12 +395,14 @@ d'isolation sans le dire.
 | `seccomp=execution/seccomp-chromium.json` + `cap_add: SYS_CHROOT` | bac à sable de Chromium (voir §4) | Chromium ne démarre pas avec son bac à sable, ou sans lui |
 | ne **pas** poser `GWAUDIT_CHROMIUM_SANS_SANDBOX` | le bac à sable est actif par défaut ; la dérogation est refusée par `entrypoint.sh` (l'audit ne démarre pas) | — |
 | réseau `internal: true` + `HTTP_PROXY`/`HTTPS_PROXY` vers `egress-proxy` | seule sortie : le proxy à liste blanche | pas de sortie du tout, ou une sortie ouverte |
-| `GWAUDIT_RESOLUTION_PAR_PROXY=1` | le réseau interne n'a pas de DNS : le proxy résout et refuse les adresses internes | tout audit d'URL échoue (exit 3) |
+| `GWAUDIT_RESOLUTION_PAR_PROXY=1` | le réseau interne n'a pas de DNS : le proxy résout et refuse les adresses internes ; un littéral IP (IPv6 compris) et un nom que `NO_PROXY` fait joindre sans proxy restent vérifiés dans le conteneur | tout audit d'URL échoue (code 4, « Résolution DNS impossible ») |
 | `/out` inscriptible par l'uid 1000 (`pwuser`) | le rapport y est écrit | pas de rapport |
 
 Contrat de sortie du conteneur : `0` CONFORME ; `1` SOUS RÉSERVE ou NON
 CONFORME sans bloquant ; `2` au moins un bloquant (un verdict, pas une panne) ;
-`3` erreur interne de gwaudit ; `124` (ou `137`) coupé par le plafond de durée
+`3` erreur interne de gwaudit ; `4` cible refusée ou inaccessible (URL refusée
+par la validation ou par le proxy de sortie, clonage impossible : une soumission
+refusée, dite en clair et sans pile, pas une panne) ; `124` (ou `137`) coupé par le plafond de durée
 (`GWAUDIT_PLAFOND_S`, 480 s par défaut : ne pas la poser en production) ;
 `137` avec `OOMKilled` si le noyau a tué le processus principal pour cause de
 mémoire. Un code 124 ou 137 ne laisse aucune garantie sur les rapports écrits.
@@ -543,6 +545,22 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
   de substitution qui lance Chromium puis boucle en synchrone est coupé au
   plafond (code 124) et aucun Chromium ne survit à la destruction du
   conteneur (`bash docker/ci/verifier.sh plafond`).
+- Publication (`.github/workflows/image-v2.yml`) : le job qui construit et
+  éprouve les images (il exécute du code de widget de test, hostile compris) n'a
+  que `contents: read`. Il met les deux images de côté (empreinte et
+  identifiants relevés), un job à blanc les recharge et rejoue `publier.sh` sur
+  un registre local, et sur une étiquette `v*` un dernier job, **seul à avoir
+  `packages: write`**, recharge les mêmes images, vérifie qu'elles ont
+  l'empreinte et les identifiants relevés, et les pousse — il n'en exécute
+  aucune.
+- Profil seccomp : `docker/execution/seccomp-chromium.json` est identique au
+  fichier `utils/docker/seccomp_profile.json` de `microsoft/playwright` au
+  commit `1b025d7e20a026371cd5f98ba0cdce48892737c8` (étiquette `v1.63.0`, la
+  version de l'image de base) ; l'empreinte est épinglée dans
+  `seccomp-chromium.sha256` et vérifiée par la CI avant chaque construction, la licence
+  Apache-2.0 et le NOTICE de Playwright sont joints. Chacun des deux réglages de
+  l'enveloppe (profil, `SYS_CHROOT`) a son témoin : retiré seul, il fait
+  échouer la sonde du bac à sable.
 - Faire rejouer sur le VPS d'Antoine, une fois l'image construite ou tirée :
   `bash docker/ci/verifier.sh tout` (les mêmes scénarios que la CI ; il
   faut Linux, Docker avec cgroups v2, et un accès à github.com et

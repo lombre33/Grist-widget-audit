@@ -5,6 +5,8 @@
 # commande à taper sur le VPS est ici une commande qui tourne et échoue.
 #
 # Usage : bash docker/ci/verifier.sh <build|audit|securite|proxy|plafond|memoire|publication|tout>
+#         bash docker/ci/verifier.sh exporter <fichier.tar.gz>
+#         bash docker/ci/verifier.sh importer <fichier.tar.gz> <sha256> <id-execution> <id-proxy>
 #
 # Règle de ce script : une vérification qui ne peut rien prouver échoue au lieu
 # de passer. Chaque blocage attendu a donc un témoin (la même commande sur un
@@ -58,6 +60,14 @@ lancer_audit() {
 }
 
 cmd_build() {
+  titre "Profil seccomp : identique à celui de Playwright épinglé"
+  # Le profil n'est pas dans l'image mais donné au moteur de conteneurs au
+  # lancement : « repris tel quel » doit se vérifier. L'empreinte attendue est
+  # celle du fichier à l'étiquette v1.63.0 de microsoft/playwright (commit et
+  # licence dans docker/execution/seccomp-chromium.md).
+  (cd docker/execution && sha256sum -c seccomp-chromium.sha256) || echec "docker/execution/seccomp-chromium.json ne correspond plus à l'empreinte épinglée (seccomp-chromium.sha256) : profil modifié à la main ou remplacé sans mettre à jour sa provenance"
+  ok "profil seccomp identique à celui de Playwright v1.63.0 (empreinte épinglée)"
+
   titre "Construction des deux images (compose, contexte = racine du dépôt)"
   "${COMPOSE[@]}" build
   # Pour épingler la base du proxy par digest : à relever ici, puis à écrire dans son Dockerfile.
@@ -78,10 +88,14 @@ cmd_audit() {
   # de lui-même tant que gwaudit ne lui demande pas chromiumSandbox: true, donc
   # l'absence de variable de dérogation ne prouve rien — seuls les arguments du
   # processus réel disent si le bac à sable est actif.
-  local vus="$TRAVAIL/chromium-arguments.txt"
+  local vus="$TRAVAIL/chromium-arguments.txt" temoin_pgrep=0
   : > "$vus"
   while [ "$(docker inspect -f '{{.State.Running}}' "$nom")" = "true" ]; do
     docker top "$nom" 2>/dev/null | grep -E '/chrome-linux[^ ]*/chrome ' | grep -v -e '--type=' >> "$vus" || true
+    # Témoin du contrôle d'orphelins plus bas : le pgrep de l'hôte doit, lui,
+    # voir le Chromium du conteneur tant qu'il tourne. Sans cela, son silence
+    # après l'audit ne dirait rien (il chercherait au mauvais endroit).
+    if pgrep -f '[/]ms-playwright/chromium-' >/dev/null; then temoin_pgrep=1; fi
     sleep 0.3
   done
   local code
@@ -96,8 +110,10 @@ cmd_audit() {
   [ "$n" -ge 1 ] || echec "aucun processus Chromium observé pendant l'audit : impossible de dire si son bac à sable est actif"
   if grep -q -e '--no-sandbox' "$vus"; then sort -u "$vus" | cut -c1-300; echec "Chromium a tourné avec --no-sandbox pendant l'audit : le widget audité s'exécute sans bac à sable"; fi
   ok "audit complet dans le conteneur, axe D exécuté, Chromium lancé sans --no-sandbox ($n relevés du processus navigateur)"
+  [ "$temoin_pgrep" = "1" ] || echec "témoin du contrôle d'orphelins : le pgrep de l'hôte n'a jamais vu le Chromium du conteneur pendant l'audit, son silence ne prouverait rien"
+  ok "témoin : le pgrep de l'hôte voit les Chromium du conteneur tant qu'ils tournent"
   aucun_chromium_orphelin "à l'audit de widget-exemple, conteneur détruit"
-  ok "aucun Chromium ne survit à l'audit ni au conteneur"
+  ok "aucun Chromium de l'image ne reste côté hôte une fois le conteneur détruit (vrai par construction : PID 1 est timeout, la fin du conteneur détruit son espace de PID ; ce contrôle vérifie que rien n'a été laissé et, grâce au témoin, qu'il regarde au bon endroit)"
 }
 
 cmd_securite() {
@@ -136,17 +152,24 @@ cmd_securite() {
   ok "la dérogation au bac à sable est refusée par l'image (code $code_refus, aucun audit lancé)"
 
   local chromium='export GWAUDIT_CHROMIUM_PATH="$(ls -d /ms-playwright/chromium-*/chrome-linux*/chrome | head -n1)"; node /ci/sonde-sandbox.mjs'
-  local bac bac_temoin
+  local bac
   bac="$("${COMPOSE[@]}" run --rm -T -v "$RACINE/docker/ci:/ci:ro" --entrypoint sh execution-audit -c "$chromium" 2>&1 | tail -1 | tr -d '\r')"
-  # Témoin : même enveloppe (lecture seule, sans capacité, no-new-privileges)
-  # mais profil seccomp par défaut de Docker et sans SYS_CHROOT — la sonde doit
-  # y échouer, sinon un SANDBOX-OK ne prouverait pas qu'elle sait échouer.
-  bac_temoin="$(docker run --rm --network none --read-only --tmpfs /tmp:size=512m,mode=1777,exec --cap-drop ALL --security-opt no-new-privileges:true -e HOME=/tmp -v "$RACINE/docker/ci:/ci:ro" --entrypoint sh "$IMG_EXEC" -c "$chromium" 2>&1 | tail -1 | tr -d '\r')"
   echo "bac à sable de Chromium sous l'enveloppe du compose : $bac"
-  echo "bac à sable sous le profil seccomp par défaut (témoin) : $bac_temoin"
   [ "$bac" = "SANDBOX-OK" ] || echec "Chromium ne démarre pas avec son bac à sable sous l'enveloppe du compose ($bac)"
-  [[ "$bac_temoin" == SANDBOX-ABSENT* ]] || echec "témoin non concluant : la sonde ne détecte pas l'absence de bac à sable sous le profil par défaut ($bac_temoin)"
-  ok "Chromium démarre avec son bac à sable (chrome://sandbox : adequately sandboxed) ; la même sonde échoue sous le profil par défaut"
+  # Deux réglages font démarrer le bac à sable en conteneur : un profil seccomp
+  # qui autorise les espaces de noms utilisateur, et la capacité SYS_CHROOT.
+  # Un témoin par réglage, l'autre étant présent : chacun doit faire échouer la
+  # même sonde, sinon on ne saurait pas lequel est nécessaire, ni si la sonde
+  # sait échouer.
+  local enveloppe=(docker run --rm --network none --read-only --tmpfs /tmp:size=512m,mode=1777,exec --cap-drop ALL --security-opt no-new-privileges:true -e HOME=/tmp -v "$RACINE/docker/ci:/ci:ro" --entrypoint sh)
+  local sans_profil sans_capacite
+  sans_profil="$("${enveloppe[@]}" --cap-add SYS_CHROOT "$IMG_EXEC" -c "$chromium" 2>&1 | tail -1 | tr -d '\r')"
+  sans_capacite="$("${enveloppe[@]}" --security-opt "seccomp=$RACINE/docker/execution/seccomp-chromium.json" "$IMG_EXEC" -c "$chromium" 2>&1 | tail -1 | tr -d '\r')"
+  echo "profil seccomp par défaut de Docker, avec SYS_CHROOT (témoin du profil) : $sans_profil"
+  echo "profil de Playwright, sans SYS_CHROOT (témoin de la capacité) : $sans_capacite"
+  [[ "$sans_profil" == SANDBOX-ABSENT* ]] || echec "témoin du profil non concluant : avec SYS_CHROOT mais le profil par défaut, la sonde devrait échouer ($sans_profil)"
+  [[ "$sans_capacite" == SANDBOX-ABSENT* ]] || echec "témoin de la capacité non concluant : avec le profil de Playwright mais sans SYS_CHROOT, la sonde devrait échouer ($sans_capacite)"
+  ok "Chromium démarre avec son bac à sable (chrome://sandbox : adequately sandboxed) ; la même sonde échoue sans le profil de Playwright, et échoue sans SYS_CHROOT : les deux réglages sont nécessaires"
 
   local ferme temoin
   ferme="$("${COMPOSE[@]}" run --rm -T -v "$RACINE/docker/ci:/ci:ro" --entrypoint node execution-audit /ci/sonde-reseau.mjs http://1.1.1.1 | tr -d '\r')"
@@ -186,7 +209,7 @@ cmd_proxy() {
   [ -n "$ssh_sortie" ] || echec "SSH sans aucun message : essai non concluant"
   ok "SSH n'ouvre pas de voie parallèle (échec par le réseau, pas par les identifiants)"
 
-  titre "Anti-rebinding : un nom autorisé qui se résout vers 127.0.0.1 est refusé"
+  titre "Refus par adresse résolue : un nom autorisé qui se résout vers 127.0.0.1 est refusé"
   local reseau=gwaudit-rebind proxy=gwaudit-proxy-rebind
   docker rm -f "$proxy" >/dev/null 2>&1 || true
   docker network rm "$reseau" >/dev/null 2>&1 || true
@@ -200,7 +223,24 @@ cmd_proxy() {
   fi
   docker rm -f "$proxy" >/dev/null; docker network rm "$reseau" >/dev/null
   grep -q '403' <<<"$rebind" || echec "rebinding refusé, mais pas par le proxy (403 attendu) : $rebind"
-  ok "anti-rebinding : refusé par le proxy (403)"
+  # Ce que cet essai prouve, et ce qu'il ne prouve pas : avec un nom de la liste
+  # blanche fixé à 127.0.0.1 (--add-host, donc une résolution statique), le
+  # refus par adresse résolue privée l'emporte sur la liste blanche de noms, et
+  # c'est le proxy qui refuse (403). Il n'éprouve pas un vrai rebinding (une
+  # réponse DNS qui change entre deux résolutions), ni le chemin de clone propre
+  # à gwaudit : c'est `git ls-remote` seul.
+  ok "refus par adresse résolue : nom autorisé résolu vers 127.0.0.1 refusé par le proxy (403) — résolution statique et git seul, pas un rebinding dynamique"
+
+  titre "Cible refusée : gwaudit le dit en clair, avec le code 4 et sans pile"
+  local refus_code refus_msg
+  for refuse in "https://gitlab.gnome.org/GNOME/gimp.git:le proxy de sortie a refusé la connexion (403)" "https://[::1]:1/x.git:adresse interne" "https://[::ffff:7f00:1]:1/x.git:adresse interne"; do
+    refus_code=0
+    refus_msg="$("${COMPOSE[@]}" run --rm -T execution-audit "${refuse%:*}" 2>&1)" || refus_code=$?
+    [ "$refus_code" = "4" ] || echec "${refuse%:*} : code $refus_code au lieu de 4 : $refus_msg"
+    grep -q "Cible refusée ou inaccessible : .*${refuse##*:}" <<<"$refus_msg" || echec "${refuse%:*} : message attendu « ${refuse##*:} » absent : $refus_msg"
+    if grep -qE '^\s+at \S' <<<"$refus_msg"; then echec "${refuse%:*} : une pile de Node est sortie : $refus_msg"; fi
+    ok "${refuse%:*} refusé : code 4, ${refuse##*:}, sans pile"
+  done
 
   titre "Audit de bout en bout d'une URL : clone et npm audit à travers le proxy"
   preparer_sortie
@@ -264,11 +304,12 @@ JS
   fin="$(date +%s)"
   echo "durée $((fin - debut)) s, code $code"
   [ "$code" -le 2 ] || echec "l'audit d'un widget qui boucle n'a pas conclu (code $code) : coupé par le plafond de 150 s ou en panne"
-  # L'axe D ne peut pas mesurer une page qui ne finit jamais de charger : il est
-  # attendu « non exécuté » ; ce qui compte ici est que l'audit conclue et le dise.
-  node docker/ci/verifier-rapport.mjs --axe-d-libre "$SORTIE/rapport.json" || echec "pas de rapport exploitable pour le widget qui boucle"
+  # L'axe D ne peut pas mesurer une page qui ne finit jamais de charger : il doit
+  # le dire par D-TIMEOUT-01, bloquant (et non par « axe non exécuté », qui ferait
+  # mieux noter le widget qui empêche la mesure que celui qui la permet).
+  node docker/ci/verifier-rapport.mjs --axe-d-bloque "$SORTIE/rapport.json" || echec "le rapport du widget qui boucle ne dit pas que le widget a empêché la mesure"
   sleep 2
-  if pgrep -f '/ms-playwright/chromium-' >/dev/null; then pgrep -af '/ms-playwright/chromium-' || true; echec "un Chromium survit à l'audit du widget qui boucle"; fi
+  aucun_chromium_orphelin "à l'audit du widget qui boucle"
   ok "le vrai audit conclut en $((fin - debut)) s sur un widget qui boucle, aucun Chromium orphelin"
 }
 
@@ -352,6 +393,42 @@ cmd_publication() {
   docker rm -f "$reg" >/dev/null 2>&1 || true
 }
 
+cmd_exporter() {
+  local fichier="${1:?usage : verifier.sh exporter <fichier.tar.gz>}"
+  titre "Mise de côté des deux images éprouvées"
+  docker save "$IMG_EXEC" "$IMG_PROXY" | gzip -1 > "$fichier"
+  local empreinte id_exec id_proxy
+  empreinte="$(sha256sum "$fichier" | cut -d' ' -f1)"
+  id_exec="$(docker image inspect --format '{{.Id}}' "$IMG_EXEC")"
+  id_proxy="$(docker image inspect --format '{{.Id}}' "$IMG_PROXY")"
+  echo "fichier : $(du -h "$fichier" | cut -f1) ; sha256 $empreinte"
+  echo "$IMG_EXEC : $id_exec"
+  echo "$IMG_PROXY : $id_proxy"
+  # Lus par le job qui publie : il ne publie que des images dont l'identifiant
+  # est celui qui vient d'être éprouvé ici.
+  if [ -n "${GITHUB_OUTPUT:-}" ]; then
+    { echo "sha256=$empreinte"; echo "id_execution=$id_exec"; echo "id_proxy=$id_proxy"; } >> "$GITHUB_OUTPUT"
+  fi
+  ok "images mises de côté (identifiants relevés)"
+}
+
+cmd_importer() {
+  local fichier="${1:?usage : verifier.sh importer <fichier.tar.gz> <sha256> <id-execution> <id-proxy>}" attendu="${2:?}" id_exec_att="${3:?}" id_proxy_att="${4:?}"
+  titre "Rechargement des deux images éprouvées"
+  [[ "$attendu" =~ ^[0-9a-f]{64}$ ]] || echec "empreinte attendue invalide : « $attendu »"
+  local empreinte
+  empreinte="$(sha256sum "$fichier" | cut -d' ' -f1)"
+  [ "$empreinte" = "$attendu" ] || echec "le fichier d'images n'est pas celui qui a été éprouvé (sha256 $empreinte au lieu de $attendu)"
+  ok "fichier d'images conforme à l'empreinte relevée à la vérification"
+  docker load -i "$fichier" >/dev/null
+  local id_exec id_proxy
+  id_exec="$(docker image inspect --format '{{.Id}}' "$IMG_EXEC")"
+  id_proxy="$(docker image inspect --format '{{.Id}}' "$IMG_PROXY")"
+  [ "$id_exec" = "$id_exec_att" ] || echec "image d'exécution rechargée ($id_exec) différente de celle éprouvée ($id_exec_att)"
+  [ "$id_proxy" = "$id_proxy_att" ] || echec "image du proxy rechargée ($id_proxy) différente de celle éprouvée ($id_proxy_att)"
+  ok "les deux images rechargées ont l'identifiant de celles qui ont été éprouvées"
+}
+
 case "${1:-}" in
   build) cmd_build ;;
   audit) cmd_audit ;;
@@ -360,6 +437,8 @@ case "${1:-}" in
   plafond) cmd_plafond ;;
   memoire) cmd_memoire ;;
   publication) cmd_publication ;;
+  exporter) shift; cmd_exporter "$@" ;;
+  importer) shift; cmd_importer "$@" ;;
   tout) cmd_build; cmd_audit; cmd_securite; cmd_proxy; cmd_plafond; cmd_memoire; cmd_publication ;;
-  *) echo "usage : $0 <build|audit|securite|proxy|plafond|memoire|publication|tout>" >&2; exit 2 ;;
+  *) echo "usage : $0 <build|audit|securite|proxy|plafond|memoire|publication|tout> | exporter <fichier> | importer <fichier> <sha256> <id-execution> <id-proxy>" >&2; exit 2 ;;
 esac

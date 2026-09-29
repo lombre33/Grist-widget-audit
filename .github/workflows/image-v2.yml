@@ -4,9 +4,21 @@
 # étiquette v* seulement — publie ces mêmes images sur ghcr.io.
 #
 #   - « Run workflow » (workflow_dispatch) : construit et vérifie l'état
-#     courant de la branche choisie, ne publie rien.
-#   - étiquette v* poussée : construit, vérifie, puis publie
+#     courant de la branche choisie, répète la publication à blanc sur les
+#     images rechargées, ne publie rien.
+#   - étiquette v* poussée : idem, puis publie
 #     ghcr.io/<propriétaire>/gwaudit-execution et gwaudit-egress-proxy.
+#
+# Quatre jobs, pour que le droit d'écrire des paquets n'existe que là où aucun
+# code de widget ne tourne :
+#   image                : construit et éprouve (exécute du code de widget de
+#                          test, y compris hostile) — contents: read, rien d'autre ;
+#   publication-a-blanc  : recharge les images éprouvées et rejoue publier.sh
+#                          sur un registre local, sans identifiants ;
+#   publier              : seul à avoir packages: write ; recharge les mêmes
+#                          images (empreinte et identifiants relevés par
+#                          `image`) et les pousse — il n'exécute rien d'elles ;
+#   windows              : preuve du bac à sable sous Windows, indépendante.
 #
 # Les scénarios sont dans docker/ci/verifier.sh (un sous-programme par
 # vérification) : le fichier ci-dessous ne fait que les enchaîner, pour que
@@ -33,9 +45,14 @@ jobs:
   image:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    # Aucun droit d'écriture : ce job exécute du code de widget (des essais
+    # hostiles compris) et ne détient donc aucun jeton qui puisse publier.
     permissions:
       contents: read
-      packages: write   # utilisé par la seule étape de publication
+    outputs:
+      sha256: ${{ steps.exporter.outputs.sha256 }}
+      id_execution: ${{ steps.exporter.outputs.id_execution }}
+      id_proxy: ${{ steps.exporter.outputs.id_proxy }}
     steps:
       # v6.1.0 ; épinglée par SHA, comme toute action tierce ici.
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
@@ -82,21 +99,82 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: bash docker/ci/verifier.sh memoire
 
-      - name: Publication à blanc (registre local)
-        id: publication
-        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
-        run: bash docker/ci/verifier.sh publication
-
       - name: Nettoyage
         if: ${{ always() }}
         run: |
           docker ps -a --format '{{.Names}}' | grep -E '^gwaudit-' | xargs -r docker rm -f || true
           docker compose -p gwaudit-v2 -f docker/docker-compose.v2-execution.yml down --remove-orphans || true
 
-      # Seulement sur une étiquette, et seulement si tout ce qui précède a
-      # réussi (condition par défaut, success()).
+      # Seulement si tout ce qui précède a réussi (condition par défaut).
+      - name: Mise de côté des deux images éprouvées
+        id: exporter
+        run: bash docker/ci/verifier.sh exporter "$RUNNER_TEMP/images-v2.tar.gz"
+
+      # v7.0.1, épinglée par SHA. Déjà compressé : pas de seconde compression.
+      - name: Dépôt des images éprouvées
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: images-v2
+          path: ${{ runner.temp }}/images-v2.tar.gz
+          compression-level: 0
+          retention-days: 1
+          if-no-files-found: error
+
+  # Rejoue la publication (étiquettes, « latest », source, révision) sur les
+  # images rechargées depuis le dépôt d'artefacts, vers un registre local et
+  # sans identifiants : éprouve aussi le chemin de rechargement que suit la vraie
+  # publication.
+  publication-a-blanc:
+    needs: image
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      # v8.0.1, épinglée par SHA.
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: images-v2
+          path: ${{ runner.temp }}/images
+      - name: Rechargement des images éprouvées
+        env:
+          SHA256: ${{ needs.image.outputs.sha256 }}
+          ID_EXECUTION: ${{ needs.image.outputs.id_execution }}
+          ID_PROXY: ${{ needs.image.outputs.id_proxy }}
+        run: bash docker/ci/verifier.sh importer "$RUNNER_TEMP/images/images-v2.tar.gz" "$SHA256" "$ID_EXECUTION" "$ID_PROXY"
+      - name: Publication à blanc (registre local)
+        run: bash docker/ci/verifier.sh publication
+
+  # Le seul job qui écrit des paquets. Il ne lance aucune des images : il les
+  # recharge, vérifie que ce sont celles qui ont été éprouvées, et les pousse.
+  # Seulement sur une étiquette, et seulement après la vérification et la
+  # publication à blanc.
+  publier:
+    needs: [image, publication-a-blanc]
+    if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c
+        with:
+          name: images-v2
+          path: ${{ runner.temp }}/images
+      - name: Rechargement des images éprouvées
+        env:
+          SHA256: ${{ needs.image.outputs.sha256 }}
+          ID_EXECUTION: ${{ needs.image.outputs.id_execution }}
+          ID_PROXY: ${{ needs.image.outputs.id_proxy }}
+        run: bash docker/ci/verifier.sh importer "$RUNNER_TEMP/images/images-v2.tar.gz" "$SHA256" "$ID_EXECUTION" "$ID_PROXY"
       - name: Publication sur ghcr.io
-        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash docker/ci/publier.sh "${GITHUB_REF_NAME}"
@@ -126,5 +204,12 @@ jobs:
       - name: Chromium de Playwright
         run: npx playwright install chromium
 
-      - name: Bac à sable de Chromium sous Windows, pendant un vrai audit
+      - name: Bac à sable de Chromium sous Windows, pendant un vrai audit (et un widget qui boucle)
         run: node docker/ci/verifier-windows.mjs
+
+      # Ces tests posent eux-mêmes la dérogation au bac à sable (le bac à sable,
+      # lui, est éprouvé par l'étape précédente) : ils vérifient ce que dit un
+      # audit qui échoue ou qu'un widget bloque, et le refus des cibles.
+      # Un seul saut est attendu et dit sa raison : le faux Chromium en script shell.
+      - name: Axe D bloqué ou non exécuté, refus de cible, sous Windows
+        run: node --test tests/axe-d-bloque.test.mjs tests/ssrf.test.mjs
