@@ -1,12 +1,19 @@
 # Image de la zone d'exécution V2 — un conteneur = un seul job d'audit
 # (voir docs/ARCHITECTURE-V2.md §2, §3, §4).
 #
-# ÉCRITE ET RELUE ICI, JAMAIS CONSTRUITE NI DÉMARRÉE : la politique réseau
-# de cet environnement cloud bloque Docker Hub (voir docker/README.md) —
-# `docker build` n'a donc jamais pu être exécuté sur ce fichier. La
-# première construction et le premier `docker run`/`docker compose up`
-# doivent se faire sur le VPS d'Antoine : c'est là, et seulement là, que
-# ce Dockerfile sera pour la première fois éprouvé pour de vrai.
+# Construite pour la première fois le 2026-09-29, ce qui a révélé deux
+# défauts que la relecture n'avait pas vus (contexte de construction du
+# compose, chemin de Chromium dans entrypoint.sh) — voir
+# docker/README-V2-VERIFICATIONS.md pour ce qui est éprouvé et où. La
+# construction de référence est celle de GitHub Actions
+# (.github/workflows/image-v2.yml) : le contexte est la RACINE du dépôt,
+# `docker build -f docker/execution/Dockerfile .`.
+#
+# Base épinglée par digest (index multi-architecture de la balise
+# v1.63.0-jammy au 2026-09-29) : une balise peut être republiée sous le
+# même nom, un digest non. BASE_IMAGE ne se surcharge que pour un essai
+# local ou pour monter la version de Playwright (voir plus bas).
+ARG BASE_IMAGE=mcr.microsoft.com/playwright:v1.63.0-jammy@sha256:167d0506cfbe3c294fb214b2d11737326eeee028aa611fa1ba538e5057675847
 #
 # Base Playwright officielle plutôt qu'une image Node nue + apt-get manuel
 # des dépendances système de Chromium (fonts, libs) : cette image les
@@ -23,7 +30,7 @@
 # « Fraîcheur image Docker V2 ») constate ces écarts ; ce hash n'avance
 # qu'au moment où Antoine est prévenu qu'une reconstruction est à faire,
 # pas à chaque constat — voir docker/README-V2-VERIFICATIONS.md.
-FROM mcr.microsoft.com/playwright:v1.63.0-jammy
+FROM ${BASE_IMAGE}
 
 WORKDIR /app
 
@@ -54,3 +61,8 @@ RUN chmod +x /app/entrypoint.sh
 USER pwuser
 
 ENTRYPOINT ["/app/entrypoint.sh"]
+
+# Rattache l'image publiée à ce dépôt ; la révision exacte est posée à la
+# construction par le compose (GWAUDIT_REVISION).
+LABEL org.opencontainers.image.source="https://github.com/lombre33/Grist-widget-audit" \
+      org.opencontainers.image.description="Zone d'exécution gwaudit V2 : un conteneur = un audit"

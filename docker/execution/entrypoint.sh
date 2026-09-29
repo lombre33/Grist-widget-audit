@@ -8,11 +8,14 @@ set -eu
 # un dossier /out monté par l'appelant pour récupérer le rapport JSON +
 # Markdown, un code de sortie standard.
 
-# Le nom exact du dossier chromium-<révision> dépend de la version
-# embarquée par l'image de base Playwright — résolu ici plutôt qu'en dur
-# dans le Dockerfile, pour ne pas avoir à le retoucher à chaque mise à
-# jour de cette image de base.
-GWAUDIT_CHROMIUM_PATH="$(ls -d /ms-playwright/chromium-*/chrome-linux/chrome 2>/dev/null | head -n1)"
+# Le nom exact du dossier chromium-<révision>/chrome-linux64 dépend de la
+# version embarquée par l'image de base Playwright — résolu ici plutôt
+# qu'en dur dans le Dockerfile, pour ne pas avoir à le retoucher à chaque
+# mise à jour de cette image de base. Le sous-dossier est chrome-linux64
+# dans v1.63.0-jammy (constaté à la première vraie exécution, la version
+# précédente cherchait chrome-linux et ne trouvait rien) ; le motif
+# chrome-linux* couvre aussi l'ancienne disposition.
+GWAUDIT_CHROMIUM_PATH="$(ls -d /ms-playwright/chromium-*/chrome-linux*/chrome 2>/dev/null | head -n1)"
 if [ -z "$GWAUDIT_CHROMIUM_PATH" ]; then
   echo "entrypoint: GWAUDIT_CHROMIUM_PATH introuvable sous /ms-playwright — l'image de base a-t-elle changé de mise en page ?" >&2
   exit 1
@@ -50,4 +53,8 @@ mkdir -p /out
 # 137 (tué par SIGKILL) signale sans ambiguïté un job coupé par ce
 # plafond, à distinguer d'un échec normal de gwaudit — utile à
 # l'intégrateur qui appellera ce conteneur (§5, hors de ce dépôt).
-exec timeout -k 10 480 node bin/gwaudit.js "$CIBLE" --json --sortie /out
+#
+# GWAUDIT_PLAFOND_S existe pour que la vérification automatisée
+# (docker/ci/verifier.sh) coupe en quelques secondes au lieu de huit
+# minutes ; en production, ne pas la poser : 480 est la valeur voulue.
+exec timeout -k 10 "${GWAUDIT_PLAFOND_S:-480}" node bin/gwaudit.js "$CIBLE" --json --sortie /out

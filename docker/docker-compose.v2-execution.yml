@@ -1,13 +1,11 @@
 # Zone d'exécution durcie pour l'audit V2 (voir docs/ARCHITECTURE-V2.md).
 #
-# ÉCRIT ET RELU ICI, JAMAIS CONSTRUIT NI DÉMARRÉ : la politique réseau de
-# cet environnement cloud bloque Docker Hub (comme pour docker-compose.yml,
-# l'instance Grist réelle) — `docker compose build`/`up` n'a donc jamais pu
-# être exécuté sur ce fichier. À essayer en premier sur le VPS d'Antoine,
-# en particulier le point le plus incertain : le sandbox natif de Chromium
-# dans un conteneur Docker classique (voir la remarque dans le service
-# execution-audit ci-dessous).
-#
+# Construit et vérifié par GitHub Actions (.github/workflows/image-v2.yml,
+# scénarios dans docker/ci/verifier.sh) : ce qui est éprouvé, et ce qui ne
+# peut l'être que sur le VPS, est dans docker/README-V2-VERIFICATIONS.md.
+# Construction à la main : `docker compose -p gwaudit-v2 -f
+# docker/docker-compose.v2-execution.yml build` depuis n'importe où.
+
 # Antoine a tranché le 2026-09-28 : soumission sans compte (anonyme, donc
 # vigilance renforcée sur les URL soumises — voir resoudreCible()/
 # validerHoteClone() côté gwaudit et egress-proxy ci-dessous, tous deux
@@ -19,14 +17,36 @@
 # elle-même reste à écrire côté zone "site" (§5), hors de ce fichier.
 services:
   execution-audit:
-    build: ./execution   # docker/execution/Dockerfile : Node + Chromium (image Playwright officielle) + le même gwaudit que la V1, écrit mais jamais construit ici
+    # docker/execution/Dockerfile : Node + Chromium (image Playwright
+    # officielle) + le même gwaudit que la V1. Le contexte est la RACINE du
+    # dépôt, pas docker/execution : le Dockerfile copie bin/, src/,
+    # ressources/ et package.json, qui n'existent pas sous docker/execution
+    # (la version précédente, `build: ./execution`, ne pouvait pas
+    # construire — vu à la première vraie construction, voir .dockerignore).
+    build:
+      context: ..
+      dockerfile: docker/execution/Dockerfile
+      args:
+        - BASE_IMAGE   # facultatif : sans valeur dans l'environnement, le digest par défaut du Dockerfile s'applique
+      labels:
+        - org.opencontainers.image.revision=${GWAUDIT_REVISION:-inconnue}
     # Un conteneur = un seul job d'audit. L'orchestrateur (file d'attente,
     # hors de ce fichier) le démarre pour un job précis, lui passe l'URL
     # soumise en argument et détruit le conteneur ensuite — ne jamais le
     # laisser tourner pour un deuxième job.
     read_only: true
     tmpfs:
-      - /tmp:size=512m,mode=1777   # tout le travail d'un job (clone, inventaire, harnais) tient ici, purgé avec le conteneur
+      # Tout le travail d'un job (clone, inventaire, harnais) tient ici,
+      # purgé avec le conteneur. `exec` est nécessaire : Docker monte un
+      # tmpfs en `noexec` par défaut, or l'axe D écrit son lanceur de
+      # Chromium (lancer-chromium.sh) sous os.tmpdir() et l'exécute — sans
+      # `exec`, le lancement échoue en EACCES (vu à la première vraie
+      # exécution, l'axe D était alors indisponible). Contrepartie : un
+      # fichier exécutable d'un dépôt cloné pourrait s'exécuter ici, mais
+      # rien dans gwaudit n'exécute de fichier du dépôt audité, et le
+      # conteneur reste sans capacité, sans réseau (hors proxy), en lecture
+      # seule ailleurs, et détruit après le job.
+      - /tmp:size=512m,mode=1777,exec
     # Pas d'UID numérique forcé ici : le Dockerfile fixe déjà USER pwuser
     # (l'utilisateur non root fourni par l'image Playwright officielle).
     # Superposer un UID choisi au hasard ferait tourner le conteneur sous
@@ -78,7 +98,10 @@ services:
     # détenir qui ait de la valeur en dehors du job qu'il traite.
 
   egress-proxy:
-    build: ./egress-proxy   # docker/egress-proxy/Dockerfile + squid.conf : liste blanche par nom d'hôte (github.com, gitlab.com, registry.npmjs.org), écrit mais jamais construit ni testé contre un vrai CONNECT ici
+    build:   # docker/egress-proxy/Dockerfile + squid.conf : liste blanche par nom d'hôte (github.com, gitlab.com, registry.npmjs.org), éprouvée contre de vrais CONNECT par docker/ci/verifier.sh
+      context: ./egress-proxy
+      labels:
+        - org.opencontainers.image.revision=${GWAUDIT_REVISION:-inconnue}
     # Pour les deux seules étapes qui ont besoin d'une vraie sortie réseau
     # (clonage git, npm audit — voir docs/ARCHITECTURE-V2.md §4). Refait sa
     # propre résolution DNS et rejette les plages privées/loopback/

@@ -1,0 +1,17 @@
+# Contexte de construction de l'image d'exécution V2 (racine du dépôt,
+# voir docker/execution/Dockerfile) : seuls bin/, src/, ressources/,
+# package.json, package-lock.json et docker/execution/entrypoint.sh sont
+# copiés dans l'image. Tout le reste n'a rien à faire dans le contexte
+# envoyé au démon — et node_modules local ne doit jamais l'écraser.
+.git
+.github
+node_modules
+tests
+fixtures
+docs
+scripts
+*.md
+docker/*
+!docker/execution
+docker/execution/*
+!docker/execution/entrypoint.sh

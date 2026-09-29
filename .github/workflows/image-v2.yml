@@ -1,0 +1,97 @@
+# Construit les deux images de la zone d'exécution V2 (docker/execution et
+# docker/egress-proxy), rejoue sur le runner tout ce que
+# docker/README-V2-VERIFICATIONS.md permet hors du VPS, puis — sur une
+# étiquette v* seulement — publie ces mêmes images sur ghcr.io.
+#
+#   - « Run workflow » (workflow_dispatch) : construit et vérifie l'état
+#     courant de la branche choisie, ne publie rien.
+#   - étiquette v* poussée : construit, vérifie, puis publie
+#     ghcr.io/<propriétaire>/gwaudit-execution et gwaudit-egress-proxy.
+#
+# Les scénarios sont dans docker/ci/verifier.sh (un sous-programme par
+# vérification) : le fichier ci-dessous ne fait que les enchaîner, pour que
+# la même commande se rejoue à la main sur n'importe quelle machine Docker.
+name: Image V2
+
+on:
+  workflow_dispatch:
+  push:
+    tags:
+      - 'v*'
+
+concurrency:
+  group: image-v2-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  GWAUDIT_REVISION: ${{ github.sha }}
+
+jobs:
+  image:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      packages: write   # utilisé par la seule étape de publication
+    steps:
+      # v6.1.0 ; épinglée par SHA, comme toute action tierce ici.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Environnement du runner
+        run: |
+          docker version --format 'docker {{.Server.Version}}'
+          docker compose version
+          uname -r
+          stat -fc 'cgroup: %T' /sys/fs/cgroup
+          cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null | sed 's/^/apparmor_restrict_unprivileged_userns=/' || true
+          docker info --format 'sécurité: {{.SecurityOptions}}'
+
+      # Les étapes suivantes s'exécutent toutes même si l'une échoue : une
+      # seule exécution montre l'ensemble des défauts, pas le premier.
+      - name: Construction des deux images
+        id: build
+        run: bash docker/ci/verifier.sh build
+
+      - name: Audit réel de widget-exemple dans le conteneur
+        id: audit
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash docker/ci/verifier.sh audit
+
+      - name: Enveloppe du conteneur (non-root, lecture seule, réseau fermé)
+        id: securite
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash docker/ci/verifier.sh securite
+
+      - name: Proxy de sortie (liste blanche, SSH, rebinding, audit d'une URL)
+        id: proxy
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash docker/ci/verifier.sh proxy
+
+      - name: Plafond de durée et Chromium orphelin
+        id: plafond
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash docker/ci/verifier.sh plafond
+
+      - name: Limite mémoire
+        id: memoire
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash docker/ci/verifier.sh memoire
+
+      - name: Nettoyage
+        if: ${{ always() }}
+        run: |
+          docker ps -a --format '{{.Names}}' | grep -E '^gwaudit-' | xargs -r docker rm -f || true
+          docker compose -p gwaudit-v2 -f docker/docker-compose.v2-execution.yml down --remove-orphans || true
+
+      # Seulement sur une étiquette, et seulement si tout ce qui précède a
+      # réussi (condition par défaut, success()).
+      - name: Publication sur ghcr.io
+        if: ${{ startsWith(github.ref, 'refs/tags/v') }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash docker/ci/publier.sh "${GITHUB_REF_NAME}"
