@@ -553,6 +553,14 @@ worker, ce qui réduit d'autant la surface d'abus par soumissions répétées.
   `packages: write`**, recharge les mêmes images, vérifie qu'elles ont
   l'empreinte et les identifiants relevés, et les pousse — il n'en exécute
   aucune.
+- Images de base : celle d'exécution (`mcr.microsoft.com/playwright`, version
+  et empreinte dans le Dockerfile) et celle du proxy (`debian:bookworm-slim`)
+  sont épinglées par empreinte, pas par étiquette ; la CI le vérifie
+  (`tests/images-epinglees.test.mjs`). Conséquence : les correctifs de sécurité
+  d'une image de base n'arrivent que par un changement d'empreinte, décidé et
+  éprouvé par la CI. Le paquet `squid` du proxy, lui, est celui de bookworm au
+  moment de la construction. Le `docker-compose.yml` de validation manuelle d'un
+  widget (hors image V2) garde volontairement le Grist du jour.
 - Profil seccomp : `docker/execution/seccomp-chromium.json` est identique au
   fichier `utils/docker/seccomp_profile.json` de `microsoft/playwright` au
   commit `1b025d7e20a026371cd5f98ba0cdce48892737c8` (étiquette `v1.63.0`, la

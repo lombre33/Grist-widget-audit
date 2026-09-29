@@ -68,6 +68,11 @@ jobs:
           cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns 2>/dev/null | sed 's/^/apparmor_restrict_unprivileged_userns=/' || true
           docker info --format 'sécurité: {{.SecurityOptions}}'
 
+      # Une image de base repointée sans qu'aucun fichier du dépôt ne change ferait
+      # livrer autre chose que ce qui a été éprouvé : chaque FROM porte une empreinte.
+      - name: Images de base épinglées par empreinte
+        run: node --test tests/images-epinglees.test.mjs
+
       # Les étapes suivantes s'exécutent toutes même si l'une échoue : une
       # seule exécution montre l'ensemble des défauts, pas le premier.
       - name: Construction des deux images

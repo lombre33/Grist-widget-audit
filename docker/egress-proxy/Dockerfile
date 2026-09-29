@@ -12,7 +12,16 @@
 # est une configuration squid canonique et stable d'une version à l'autre,
 # alors que la syntaxe de filtrage de tinyproxy n'a pas pu être vérifiée
 # contre sa documentation actuelle (déjà signalé en §4).
-FROM debian:bookworm-slim
+# L'image de base est épinglée par empreinte (l'index multi-architectures de
+# debian:bookworm-slim au 2026-09-29) : une étiquette peut être repointée, une
+# empreinte non, et la construction échoue si elle disparaît au lieu de prendre
+# autre chose en silence. Pour la mettre à jour, reprendre l'empreinte d'index
+# (`docker buildx imagetools inspect debian:bookworm-slim`) et relancer le
+# workflow image-v2.yml ; les correctifs de sécurité de l'image de base
+# n'arrivent donc que par ce geste. Le paquet squid, lui, est celui de bookworm
+# au moment de la construction (non épinglé) ; `tests/images-epinglees.test.mjs`
+# vérifie que toute image de base des Dockerfile de docker/ porte une empreinte.
+FROM debian:bookworm-slim@sha256:3783cc01769c7b2b1b83a5c5ad96c815348e28ed7da68e2e3687004faa906251
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends squid \

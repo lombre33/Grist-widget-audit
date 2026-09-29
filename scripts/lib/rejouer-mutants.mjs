@@ -78,8 +78,11 @@ export function rejouerMutants({ mutants, groupes, exigerChromium = true, partie
       if (occurrences !== 1) { problemes.push(`mutant ${numero + 1} (${m.libelle}) : « ${m.ancien.slice(0, 70).replace(/\n/g, ' ')} » trouvé ${occurrences} fois dans ${m.fichier}, exactement une attendue`); continue; }
       if (m.nouveau === m.ancien) { problemes.push(`mutant ${numero + 1} (${m.libelle}) : la chaîne mutée est identique à l'originale`); continue; }
       fs.writeFileSync(chemin, original.replace(m.ancien, () => m.nouveau));
-      // Un script shell se vérifie avec bash, le reste avec node : un mutant qui ne s'analyse pas ne prouve rien.
-      const syntaxe = chemin.endsWith('.sh') ? spawnSync('bash', ['-n', chemin], { encoding: 'utf8' }) : spawnSync('node', ['--check', chemin], { encoding: 'utf8' });
+      // Un script shell se vérifie avec bash, un fichier JavaScript avec node : un mutant qui ne s'analyse pas ne prouve rien.
+      // Tout autre fichier (Dockerfile, YAML…) n'a pas d'analyse ici.
+      const syntaxe = chemin.endsWith('.sh') ? spawnSync('bash', ['-n', chemin], { encoding: 'utf8' })
+        : /\.[cm]?js$/.test(chemin) ? spawnSync('node', ['--check', chemin], { encoding: 'utf8' })
+          : { status: 0 };
       fs.writeFileSync(chemin, original);
       if (syntaxe.status !== 0) problemes.push(`mutant ${numero + 1} (${m.libelle}) : le code muté ne compile pas, ce qui « tuerait » n'importe quoi`);
     }
