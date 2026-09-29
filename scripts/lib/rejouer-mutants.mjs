@@ -50,6 +50,8 @@ export function rejouerMutants({ mutants, groupes, exigerChromium = true, partie
   }
 
   const copie = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-mutants-'));
+  // mkdtemp crée un dossier 0700 : un test qui lance le code sous un autre utilisateur (bac à sable de Chromium sous root) doit pouvoir le lire. Ce n'est qu'une copie de sources publiques.
+  fs.chmodSync(copie, 0o755);
   // Une interruption (Ctrl-C, kill) ne laisse pas la copie mutée derrière elle ; le signal n'est vu qu'entre deux lancements de suite.
   for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
     process.on(signal, () => { fs.rmSync(copie, { recursive: true, force: true }); process.exit(code); });
@@ -76,7 +78,8 @@ export function rejouerMutants({ mutants, groupes, exigerChromium = true, partie
       if (occurrences !== 1) { problemes.push(`mutant ${numero + 1} (${m.libelle}) : « ${m.ancien.slice(0, 70).replace(/\n/g, ' ')} » trouvé ${occurrences} fois dans ${m.fichier}, exactement une attendue`); continue; }
       if (m.nouveau === m.ancien) { problemes.push(`mutant ${numero + 1} (${m.libelle}) : la chaîne mutée est identique à l'originale`); continue; }
       fs.writeFileSync(chemin, original.replace(m.ancien, () => m.nouveau));
-      const syntaxe = spawnSync('node', ['--check', chemin], { encoding: 'utf8' });
+      // Un script shell se vérifie avec bash, le reste avec node : un mutant qui ne s'analyse pas ne prouve rien.
+      const syntaxe = chemin.endsWith('.sh') ? spawnSync('bash', ['-n', chemin], { encoding: 'utf8' }) : spawnSync('node', ['--check', chemin], { encoding: 'utf8' });
       fs.writeFileSync(chemin, original);
       if (syntaxe.status !== 0) problemes.push(`mutant ${numero + 1} (${m.libelle}) : le code muté ne compile pas, ce qui « tuerait » n'importe quoi`);
     }

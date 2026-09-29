@@ -289,8 +289,7 @@ JS
   echo "durée $((t1 - t0)) s depuis le démarrage (plafond 20 s), code de sortie $code"
   { [ "$code" = "124" ] || [ "$code" = "137" ]; } || echec "code $code au lieu de 124 (timeout) ou 137 (SIGKILL de repli)"
   [ $((t1 - t0)) -ge 18 ] && [ $((t1 - t0)) -le 35 ] || echec "coupure à $((t1 - t0)) s, attendue autour de 20 s (plafond GWAUDIT_PLAFOND_S=20)"
-  sleep 2
-  if pgrep -f '/ms-playwright/chromium-' >/dev/null; then pgrep -af '/ms-playwright/chromium-' || true; echec "un Chromium survit à la destruction du conteneur"; fi
+  aucun_chromium_orphelin "à la destruction du conteneur, coupé au plafond"
   ok "audit coupé au plafond (code $code), aucun Chromium orphelin"
 
   titre "Widget qui boucle sans fin : le vrai audit conclut de lui-même, sans Chromium orphelin"
