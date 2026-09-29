@@ -15,7 +15,7 @@
 # si l'une des deux bouge, sinon GWAUDIT_CHROMIUM_PATH (résolu au
 # lancement par entrypoint.sh) peut ne plus rien trouver.
 #
-# Dernière vérification de fraîcheur : commit a6b6ee8 (2026-09-28). Cette
+# Dernière vérification de fraîcheur : commit 0ddf056 (2026-09-29). Cette
 # image COPY bin/, src/, ressources/, package.json et package-lock.json
 # (voir plus bas) : tout commit qui touche l'un de ces chemins après celui
 # ci-dessus rend l'image obsolète et impose une reconstruction avant le

@@ -260,8 +260,10 @@ entièrement remplacer — à éprouver sur le VPS d'Antoine.
   2026-09-28 après qu'une revue a trouvé, dans une règle de l'axe F
   (`F-RGAA-05`), une expression régulière à retour arrière catastrophique
   qui a bloqué un audit reproductible sur un widget officiel Grist. La
-  règle se corrige ailleurs (hors périmètre de ce document), mais la
-  classe de bug reste : `analyseStatique()` (`src/moteur/statique.js`)
+  règle elle-même a été corrigée ailleurs le jour même (`d4a2e39`, deux
+  passes déterministes sans quantificateur imbriqué ; hors périmètre de ce
+  document), mais la classe de bug reste : `analyseStatique()`
+  (`src/moteur/statique.js`)
   exécute les axes A/B/C/F en JavaScript synchrone dans le même process
   que le reste de l'outil, sans aucune limite propre — et un thread
   Node bloqué par du retour arrière ne peut structurellement pas exécuter
