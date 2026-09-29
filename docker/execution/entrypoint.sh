@@ -27,9 +27,10 @@ mkdir -p /out
 # le 2026-09-28 après qu'une revue a trouvé une expression régulière à
 # retour arrière catastrophique dans une règle de l'axe F (F-RGAA-05,
 # src/regles/f-conformite.js) qui a bloqué un audit reproductible sur un
-# widget officiel Grist. La règle elle-même a été corrigée ailleurs
-# (d4a2e39, hors périmètre de ce fil, pas touchée ici) — mais la classe
-# de bug reste :
+# widget officiel Grist. La règle elle-même se reprend ailleurs (hors
+# périmètre de ce fil, pas touchée ici ; correctif vérifié par exécution :
+# 8643599, le premier, d4a2e39, prenait encore 302 s sur une page piégée)
+# — mais la classe de bug reste :
 # analyseStatique() (src/moteur/statique.js) exécute les axes A/B/C/F en
 # JavaScript synchrone dans CE process, sans aucune limite propre, et un
 # thread bloqué par du retour arrière ne peut structurellement pas
