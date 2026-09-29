@@ -201,7 +201,9 @@ JS
   fin="$(date +%s)"
   echo "durée $((fin - debut)) s, code $code"
   [ "$code" -le 2 ] || echec "l'audit d'un widget qui boucle n'a pas conclu (code $code) : coupé par le plafond de 150 s ou en panne"
-  node docker/ci/verifier-rapport.mjs "$SORTIE/rapport.json" || echec "rapport incomplet pour le widget qui boucle"
+  # L'axe D ne peut pas mesurer une page qui ne finit jamais de charger : il est
+  # attendu « non exécuté » ; ce qui compte ici est que l'audit conclue et le dise.
+  node docker/ci/verifier-rapport.mjs --axe-d-libre "$SORTIE/rapport.json" || echec "pas de rapport exploitable pour le widget qui boucle"
   sleep 2
   if pgrep -f '/ms-playwright/chromium-' >/dev/null; then pgrep -af '/ms-playwright/chromium-' || true; echec "un Chromium survit à l'audit du widget qui boucle"; fi
   ok "le vrai audit conclut en $((fin - debut)) s sur un widget qui boucle, aucun Chromium orphelin"
