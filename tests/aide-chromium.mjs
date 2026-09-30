@@ -26,3 +26,18 @@ export function axeDNonExecute(t, constats = []) {
   }
   assert.fail(`Axe D non exécuté : ${raison} — ce test ne prouve rien sans lui. Sur une machine sans Chromium, GWAUDIT_SUITE_SANS_CHROMIUM=1 saute explicitement ces tests.`);
 }
+
+/**
+ * À appeler quand un test qui compare la règle à Chromium ne trouve aucun
+ * Chromium à lancer : même règle que `axeDNonExecute`, la suite ÉCHOUE (un
+ * différentiel qui ne tourne pas ne prouve rien et un saut sortirait avec le
+ * code 0) ; seule `GWAUDIT_SUITE_SANS_CHROMIUM=1`, posée explicitement, autorise
+ * le saut, et il se voit. `raison` dit ce qui manque.
+ */
+export function chromiumIndisponible(t, raison) {
+  if (process.env.GWAUDIT_SUITE_SANS_CHROMIUM === '1') {
+    t.skip(`Chromium indisponible (GWAUDIT_SUITE_SANS_CHROMIUM=1) : ${raison}`);
+    return;
+  }
+  assert.fail(`Chromium indisponible : ${raison} — ce test ne prouve rien sans lui. Sur une machine sans Chromium, GWAUDIT_SUITE_SANS_CHROMIUM=1 saute explicitement ces tests.`);
+}

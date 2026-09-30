@@ -32,6 +32,24 @@ const TETE = '<!doctype html><html lang="fr"><title>t</title>';
 const N = (n, f) => Array.from({ length: n }, (_, i) => f(i)).join('');
 const imbrique = (c, niveaux) => { for (let i = 0; i < niveaux; i++) c = `@import url("data:text/css,${encodeURIComponent(c)}");`; return c; };
 
+/** `pages` pages d'entrée qui chargent le même `app.js` : un import distant que la carte de chaque page couvre, et `modules` modules locaux (la surface de document de chaque page a `modules` arêtes). */
+function graphePartage(pages, modules) {
+  const integrity = { 'https://e.example/m.js': `sha384-${'A'.repeat(64)}` };
+  const fichiers = { 'app.js': `import "https://e.example/m.js";\n${N(modules, (j) => `import "./m${j}.js";\n`)}` };
+  for (let j = 0; j < modules; j++) fichiers[`m${j}.js`] = 'export const x = 1;\n';
+  for (let i = 0; i < pages; i++) fichiers[`p${i}/index.html`] = `${TETE}<script type="importmap">${JSON.stringify({ integrity })}</script><script type="module" src="/app.js"></script>`;
+  return fichiers;
+}
+
+/** `pages` pages d'entrée, l'empreinte de `https://e.example/m.js` dans chacune, un `entree.js` commun qui importe `racines` modules, chacun important cette adresse : chaque module est chargé par chaque page. */
+function pagesEtRacines(pages, racines) {
+  const integrity = { 'https://e.example/m.js': `sha384-${'A'.repeat(64)}` };
+  const fichiers = { 'entree.js': N(racines, (j) => `import "./r${j}.js";\n`) };
+  for (let j = 0; j < racines; j++) fichiers[`r${j}.js`] = 'import "https://e.example/m.js";\n';
+  for (let i = 0; i < pages; i++) fichiers[`p${i}/index.html`] = `${TETE}<script type="importmap">${JSON.stringify({ integrity })}</script><script type="module" src="/entree.js"></script>`;
+  return fichiers;
+}
+
 /** `page` : lirePage(html) seule ; `analyse` : construireContexte puis analyseStatique sur les fichiers donnés. */
 const CAS = [
   // --- lecture de la page (l'analyseur HTML du standard, sur des entrées qui le mettent en difficulté)
@@ -189,6 +207,49 @@ const CAS = [
     'index.html': `${TETE}<script src="app.js"></script>`,
     'app.js': N(20000, (j) => `new Worker("w${j}.js");\n`),
   })],
+
+  // --- analyse complète : imports distants et ordre carte / chargeur (liens de préchargement, script qui couvre
+  //     une ligne, graphes de document partagés entre pages d'entrée, budget d'arêtes)
+  ['analyse : 50 000 <link rel=modulepreload> vers la même adresse distante', 'analyse', () => ({
+    'index.html': `${TETE}${N(50000, () => '<link rel=modulepreload href="https://e.example/m.js">\n')}<script type="importmap">${JSON.stringify({ imports: { m: 'https://e.example/m.js' }, integrity: { 'https://e.example/m.js': `sha384-${'A'.repeat(64)}` } })}</script><script type="module">import "m";</script>`,
+  })],
+  ['analyse : 15 000 <link rel=modulepreload> vers des adresses distinctes, 15 000 entrées d\'import map', 'analyse', () => {
+    // La page reste sous le plafond de 4 Mio par fichier : au-delà elle ne serait pas lue et le cas ne mesurerait rien.
+    const imports = {};
+    const integrity = {};
+    for (let i = 0; i < 15000; i++) { imports[`m${i}`] = `https://e.example/m${i}.js`; integrity[`https://e.example/m${i}.js`] = `sha384-${'A'.repeat(64)}`; }
+    return { 'index.html': `${TETE}${N(15000, (i) => `<link rel=modulepreload href="https://e.example/m${i}.js">\n`)}<script type="importmap">${JSON.stringify({ imports, integrity })}</script>` };
+  }],
+  ['analyse : 15 000 entrées d\'import map distantes, une par ligne (le numéro de ligne de chaque entrée se lit dans un index, pas en recopiant le début de la page)', 'analyse', () => {
+    const lignes = N(15000, (i) => `"m${i}": "https://e.example/m${i}.js",\n`);
+    return { 'index.html': `${TETE}<script type="importmap">{"imports": {\n${lignes}"z": "https://e.example/z.js"}}</script>` };
+  }],
+  ['analyse : 20 000 scripts, chacun son import https:// (une ligne chacun), import map en tête', 'analyse', () => ({
+    'index.html': `${TETE}<script type="importmap">${JSON.stringify({ imports: { m: 'https://e.example/m.js' } })}</script>\n${N(20000, (i) => `<script type="module">import "https://e.example/m${i}.js";</script>\n`)}`,
+  })],
+  ['analyse : 20 000 scripts, chacun son import https:// (tous sur la même ligne)', 'analyse', () => ({
+    'index.html': `${TETE}<script type="importmap">${JSON.stringify({ imports: { m: 'https://e.example/m.js' } })}</script>${N(20000, (i) => `<script type="module">import "https://e.example/m${i}.js";</script>`)}`,
+  })],
+  ['analyse : 20 000 scripts, chacun un eval d\'un littéral qui importe une adresse distante', 'analyse', () => ({
+    'index.html': `${TETE}<script type="importmap">${JSON.stringify({ imports: { m: 'https://e.example/m.js' } })}</script>\n${N(20000, (i) => `<script type="module">eval("import('https://e.example/m${i}.js')")</script>\n`)}`,
+  })],
+  // Les cas qui suivent portent un import distant que l'import map de chaque page couvre : seul un import dont
+  // l'empreinte est trouvée fait lire le graphe de document de la page (sans elle, la règle s'arrête à « pas d'empreinte »).
+  ['analyse : 1 000 pages d\'entrée × un graphe partagé de 1 000 modules (1 Mio d\'arêtes)', 'analyse', () => graphePartage(1000, 1000)],
+  ['analyse : 2 000 pages d\'entrée × un graphe partagé de 2 000 modules (au-delà du budget d\'arêtes)', 'analyse', () => graphePartage(2000, 2000)],
+  ['analyse : 1 000 pages d\'entrée (import map sans empreinte) × 5 000 imports distants', 'analyse', () => {
+    const fichiers = { 'app.js': N(5000, (j) => `import "https://e.example/m${j}.js";\n`) };
+    for (let i = 0; i < 1000; i++) fichiers[`p${i}/index.html`] = `${TETE}<script type="importmap">{"imports":{}}</script><script type="module" src="/app.js"></script>`;
+    return fichiers;
+  }],
+  ['analyse : 3 000 pages d\'entrée × 3 000 modules qui importent chacun la même adresse distante, l\'empreinte dans chaque page', 'analyse', () => pagesEtRacines(3000, 3000)],
+  ['analyse : 300 pages d\'entrée, chacune l\'empreinte de 300 imports distants (90 000 couples)', 'analyse', () => {
+    const integrity = {};
+    for (let j = 0; j < 300; j++) integrity[`https://e.example/m${j}.js`] = `sha384-${'A'.repeat(64)}`;
+    const fichiers = { 'app.js': N(300, (j) => `import "https://e.example/m${j}.js";\n`) };
+    for (let i = 0; i < 300; i++) fichiers[`p${i}/index.html`] = `${TETE}<script type="importmap">${JSON.stringify({ integrity })}</script><script type="module" src="/app.js"></script>`;
+    return fichiers;
+  }],
 ];
 
 const { values, positionals } = parseArgs({

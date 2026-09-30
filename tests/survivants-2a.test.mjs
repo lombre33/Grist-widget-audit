@@ -252,6 +252,15 @@ test('C12a : l\'entrée d\'une import map est protégée par une empreinte bien 
   assert.equal(avec('{}'), false);
 });
 
+test('C12a : la valeur d\'une clé ne protège que sa propre adresse : deux clés d\'une même carte, l\'une bien formée, l\'autre non, dans les deux ordres', () => {
+  const AUTRE = 'https://cdn.tiers.example/b.js';
+  const imports = `"imports":{"a":"${URL_TIERCE}","b":"${AUTRE}"}`;
+  const bienFormeePuisMal = carte(`{${imports},"integrity":{"${URL_TIERCE}":"${EMPREINTE}","${AUTRE}":"x"}}`);
+  assert.deepEqual(bienFormeePuisMal.map((e) => [e.url, e.sri]), [[URL_TIERCE, true], [AUTRE, false]]);
+  const malPuisBienFormee = carte(`{${imports},"integrity":{"${AUTRE}":"x","${URL_TIERCE}":"${EMPREINTE}"}}`);
+  assert.deepEqual(malPuisBienFormee.map((e) => [e.url, e.sri]), [[URL_TIERCE, true], [AUTRE, false]]);
+});
+
 test('C12a : un integrity absent, nul, de mauvais type ou hérité ne protège ni ne plante', () => {
   assert.equal(carte(`{"imports":{"a":"${URL_TIERCE}"}}`)[0].sri, false);
   for (const integrity of ['null', '"texte"', '[]', '42', 'true']) assert.equal(carte(`{"imports":{"a":"${URL_TIERCE}"},"integrity":${integrity}}`)[0].sri, false, integrity);

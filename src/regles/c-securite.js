@@ -17,7 +17,9 @@ import path from 'node:path';
 import * as acornWalk from 'acorn-walk';
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs, nomPointe, chaineLitterale, estDynamique, extraireImportMaps, parser, syntaxeDeModule, colonneDans } from '../moteur/analyse-js.js';
+import { importsDistants, raisonsEntreeNonProtegee } from '../contexte/imports-distants.js';
 import { lirePage, integriteProtege, urlDe, urlDeCarte, mentionDe } from '../moteur/page-html.js';
+import { nomFinal, plierLitteraux, decoderAtobLitteral, decoderFromCharCodeLitteral, coercerLitteralNonChaine, prefixeConcatenationLitteral, classifierSourceWorker, extraireCodeLitteralWorker } from '../moteur/litteraux.js';
 import { lireFeuille, nouveauBudgetCss, LIMITES_CSS } from '../moteur/css.js';
 
 /** Hôtes considérés comme faisant partie de l'infrastructure Grist elle-même. */
@@ -148,100 +150,100 @@ export function analyserSortiesReseau(ctx) {
   const constats = [];
   const vus = new Set();
 
-  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite, fichier }) => {
+  /** `protection` : pour un module chargé par son adresse, ce que `importsDistants` dit de l'empreinte qui le protège (fonction, calculée seulement si le constat est émis). */
+  const signaler = ({ unite, ligne, canal, cible, dynamique, protection = null }) => {
+    const h = hote(cible);
+    if (estLocal(h) && !dynamique) return;                 // requête sur soi-même
+    if (estGrist(h)) return;                               // API Grist : hors périmètre de ce constat
+    // `cible` fait partie de la clé : `importScripts('./a.js', 'https://x')`
+    // signale les deux arguments sur le même nœud, avec le même `canal` —
+    // sans elle, le second argument serait pris pour un doublon du premier.
+    const cle = `${unite.chemin}:${ligne}:${canal}:${cible}`;
+    if (vus.has(cle)) return;
+    vus.add(cle);
+    if (!dynamique) enregistrerDestination(ctx, h);
+
+    const chargeDuCode = CANAUX_DE_CODE.has(canal);
+    // Un module chargé par son adresse est figé quand la clé `integrity` d'une import map de la page le couvre : c'est le même verdict que E-DEP-01
+    // (`importsDistants`), majeur alors, jamais quand un worker l'exécute ou que la carte est lue après le script qui le charge.
+    const { sri, raisons, obstacle } = chargeDuCode && protection ? protection() : { sri: false, raisons: [], obstacle: null };
+    const bloquant = !dynamique && !sri;
+    constats.push(constat({
+      regle: dynamique ? 'C-EXFIL-02' : 'C-EXFIL-01', axe: 'C',
+      // Une destination littérale externe est un fait : elle bloque.
+      // Une destination calculée n'est qu'une question ouverte, que l'axe D
+      // tranche en capturant le trafic réellement émis. La marquer bloquante
+      // reviendrait à condamner sur une hypothèse — et à apprendre au
+      // lecteur à ignorer les constats bloquants.
+      // Du code tiers figé par une empreinte n'est plus du code que le tiers peut changer : majeur.
+      severite: dynamique || sri ? 'majeur' : 'critique', bloquant,
+      confiance: dynamique ? 'a_verifier' : 'certain',
+      titre: dynamique
+        ? `Requête réseau sortante vers une destination calculée à l'exécution (${canal})`
+        : `Requête réseau sortante vers un service externe : ${h}`,
+      fichier: unite.chemin, ligne,
+      extrait: cible ? String(cible).slice(0, 200) : canal,
+      constat: dynamique
+        ? `Le code construit l'URL de destination à l'exécution : la lecture du code seule ne permet pas de savoir vers où part la requête.`
+        : chargeDuCode
+          ? `Le widget charge et exécute du code depuis \`${h}\` (${canal}), un service extérieur à l'instance Grist${sri ? " ; l'empreinte de la clé `integrity` d'une import map de la page fige ce code, un remplacement est refusé par le navigateur." : raisons.length ? ` — non protégé : ${raisons.join(', ')}.` : '.'}`
+          : `Le widget émet une requête ${canal} vers \`${h}\`, un service extérieur à l'instance Grist.`,
+      impact: chargeDuCode
+        ? sri
+          ? "Un module tiers s'exécute avec tous les privilèges du widget, donc avec l'accès que l'agent a accordé au document. Son contenu est figé par l'empreinte de l'import map, mais le service qui l'héberge voit chaque chargement (adresse IP, navigateur de l'agent) et son indisponibilité casse le widget."
+          : "Un module tiers s'exécute avec tous les privilèges du widget, donc avec l'accès que l'agent a accordé au document. Si ce domaine est compromis ou remplacé, le document entier l'est aussi : c'est le scénario type d'attaque par la chaîne d'approvisionnement."
+        : "Le widget a accès aux données du document. Toute requête sortante est un canal de sortie possible pour ces données, y compris à l'insu de l'agent. C'est le point qu'un RSSI regarde en premier, et le guide de contribution l'interdit explicitement pour les services non documentés.",
+      remediation: dynamique
+        ? "Restreindre la destination à une liste blanche de constantes, et documenter dans le README la liste exhaustive des hôtes appelés. L'axe D capture le trafic réellement émis et confirmera ou lèvera ce constat."
+        : chargeDuCode
+          ? obstacle === 'worker'
+            ? "Héberger le module dans le dépôt (vendoring) et l'importer en relatif : dans un worker, l'empreinte d'une import map ne s'applique pas. Documenter le domaine dans le README si l'import distant est conservé."
+            : "Héberger le module dans le dépôt (vendoring) et l'importer en relatif. Si l'import distant est réellement nécessaire, le déclarer dans une import map avec `integrity`, et documenter le domaine dans le README."
+          : `Supprimer l'appel, ou documenter dans le README ce qui est envoyé à \`${h}\`, pourquoi, et sur quelle base juridique (RGPD) si des données personnelles transitent. Un hébergement sur instance officielle suppose une validation explicite de ce flux.`,
+      referentiels: [REF_GUIDE, 'RGPD art. 5 (minimisation)', 'OWASP Top 10 A10:2021 — SSRF / flux sortants'],
+    }));
+  };
+
+  pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
-    const signaler = (n, canal, cible, dynamique) => {
-      const h = hote(cible);
-      if (estLocal(h) && !dynamique) return;                 // requête sur soi-même
-      if (estGrist(h)) return;                               // API Grist : hors périmètre de ce constat
-      // `cible` fait partie de la clé : `importScripts('./a.js', 'https://x')`
-      // signale les deux arguments sur le même nœud, avec le même `canal` —
-      // sans elle, le second argument serait pris pour un doublon du premier.
-      const cle = `${unite.chemin}:${ligneDe(n)}:${canal}:${cible}`;
-      if (vus.has(cle)) return;
-      vus.add(cle);
-      if (!dynamique) enregistrerDestination(ctx, h);
-
-      const chargeDuCode = CANAUX_DE_CODE.has(canal);
-      constats.push(constat({
-        regle: dynamique ? 'C-EXFIL-02' : 'C-EXFIL-01', axe: 'C',
-        // Une destination littérale externe est un fait : elle bloque.
-        // Une destination calculée n'est qu'une question ouverte, que l'axe D
-        // tranche en capturant le trafic réellement émis. La marquer bloquante
-        // reviendrait à condamner sur une hypothèse — et à apprendre au
-        // lecteur à ignorer les constats bloquants.
-        severite: dynamique ? 'majeur' : 'critique', bloquant: !dynamique,
-        confiance: dynamique ? 'a_verifier' : 'certain',
-        titre: dynamique
-          ? `Requête réseau sortante vers une destination calculée à l'exécution (${canal})`
-          : `Requête réseau sortante vers un service externe : ${h}`,
-        fichier: unite.chemin, ligne: ligneDe(n),
-        extrait: cible ? String(cible).slice(0, 200) : canal,
-        constat: dynamique
-          ? `Le code construit l'URL de destination à l'exécution : la lecture du code seule ne permet pas de savoir vers où part la requête.`
-          : chargeDuCode
-            ? `Le widget charge et exécute du code depuis \`${h}\` (${canal}), un service extérieur à l'instance Grist.`
-            : `Le widget émet une requête ${canal} vers \`${h}\`, un service extérieur à l'instance Grist.`,
-        impact: chargeDuCode
-          ? "Un module tiers s'exécute avec tous les privilèges du widget, donc avec l'accès que l'agent a accordé au document. Si ce domaine est compromis ou remplacé, le document entier l'est aussi : c'est le scénario type d'attaque par la chaîne d'approvisionnement."
-          : "Le widget a accès aux données du document. Toute requête sortante est un canal de sortie possible pour ces données, y compris à l'insu de l'agent. C'est le point qu'un RSSI regarde en premier, et le guide de contribution l'interdit explicitement pour les services non documentés.",
-        remediation: dynamique
-          ? "Restreindre la destination à une liste blanche de constantes, et documenter dans le README la liste exhaustive des hôtes appelés. L'axe D capture le trafic réellement émis et confirmera ou lèvera ce constat."
-          : chargeDuCode
-            ? "Héberger le module dans le dépôt (vendoring) et l'importer en relatif. Si l'import distant est réellement nécessaire, le déclarer dans une import map avec `integrity`, et documenter le domaine dans le README."
-            : `Supprimer l'appel, ou documenter dans le README ce qui est envoyé à \`${h}\`, pourquoi, et sur quelle base juridique (RGPD) si des données personnelles transitent. Un hébergement sur instance officielle suppose une validation explicite de ce flux.`,
-        referentiels: [REF_GUIDE, 'RGPD art. 5 (minimisation)', 'OWASP Top 10 A10:2021 — SSRF / flux sortants'],
-      }));
-    };
-
-    // Ce qu'un module charge : `import`, `export … from` et `import()` à littéral. Une adresse relative se résout
-    // contre la base du document pour un script écrit dans la page (sous une `<base>` externe, elle mène chez un
-    // tiers), contre l'emplacement du fichier pour un fichier ; un nom nu n'est pas une adresse (seule une import
-    // map en fait une, lue ailleurs). Un `import` statique d'un script classique de la page est une erreur de
-    // syntaxe : rien n'y est chargé, rien n'est dit.
-    const importer = (n, source, canal) => {
-      if (canal !== 'import() distant' && unite.inline && !unite.module) return;
-      const valeur = chaineLitterale(source);
-      if (valeur === null) return;
-      const url = cibleReseau(urlDeCarte(valeur, unite.inline ? unite.baseBrute : null, fichier.chemin));
-      if (url) signaler(n, canal, url.href, false);
-    };
+    const appel = (n, canal, cible, dynamique) => signaler({ unite, ligne: ligneDe(n), canal, cible, dynamique });
 
     walk.simple(ast, {
       CallExpression(n) {
         const nom = nomPointe(n.callee) || '';
         if (/(^|\.)fetch$/.test(nom)) {
           const arg = n.arguments[0];
-          signaler(n, 'fetch()', chaineLitterale(arg) ?? '(URL calculée)', estDynamique(arg));
+          appel(n, 'fetch()', chaineLitterale(arg) ?? '(URL calculée)', estDynamique(arg));
         }
         if (/\.open$/.test(nom) && n.arguments.length >= 2) {
           const arg = n.arguments[1];
           const v = chaineLitterale(arg);
-          if (v !== null || estDynamique(arg)) signaler(n, 'XMLHttpRequest', v ?? '(URL calculée)', estDynamique(arg));
+          if (v !== null || estDynamique(arg)) appel(n, 'XMLHttpRequest', v ?? '(URL calculée)', estDynamique(arg));
         }
-        if (/sendBeacon$/.test(nom)) signaler(n, 'navigator.sendBeacon()', chaineLitterale(n.arguments[0]) ?? '(URL calculée)', estDynamique(n.arguments[0]));
+        if (/sendBeacon$/.test(nom)) appel(n, 'navigator.sendBeacon()', chaineLitterale(n.arguments[0]) ?? '(URL calculée)', estDynamique(n.arguments[0]));
         if (/importScripts$/.test(nom)) {
           // `importScripts(a, b, c)` charge TOUS ses arguments, pas seulement
           // le premier — un seul appel avec une source sûre en tête et une
           // source externe en second argument échappait entièrement à ce
           // constat avant cette boucle.
           for (const arg of n.arguments) {
-            signaler(n, 'importScripts()', chaineLitterale(arg) ?? '(URL calculée)', estDynamique(arg));
+            appel(n, 'importScripts()', chaineLitterale(arg) ?? '(URL calculée)', estDynamique(arg));
           }
         }
       },
       NewExpression(n) {
         const nom = nomPointe(n.callee) || '';
         if (/^(WebSocket|EventSource)$/.test(nom)) {
-          signaler(n, nom, chaineLitterale(n.arguments[0]) ?? '(URL calculée)', estDynamique(n.arguments[0]));
+          appel(n, nom, chaineLitterale(n.arguments[0]) ?? '(URL calculée)', estDynamique(n.arguments[0]));
         }
       },
-      ImportExpression(n) { importer(n, n.source, 'import() distant'); },
-      ImportDeclaration(n) { importer(n, n.source, 'import statique'); },
-      ExportAllDeclaration(n) { importer(n, n.source, 'export … from'); },
-      ExportNamedDeclaration(n) { if (n.source) importer(n, n.source, 'export … from'); },
     });
   });
+
+  // Ce qu'un module charge : `import`, `export … from` et `import()` à littéral, lus par le même lecteur que E-DEP-01 (`importsDistants`), avec ce qui les protège.
+  for (const { unite, ligne, canal, url, protection } of importsDistants(ctx).imports) {
+    signaler({ unite, ligne, canal, cible: url.href, dynamique: false, protection });
+  }
 
   return constats;
 }
@@ -460,7 +462,7 @@ export function analyserRessourcesExternes(ctx) {
     // est chargée à l'exécution comme un <script src>, avec la même exigence
     // d'intégrité — les import maps prévoient une clé `integrity` de premier
     // niveau à cet effet (WHATWG).
-    if (['.html', '.htm'].includes(f.ext)) for (const e of extraireImportMaps(f.contenu)) {
+    if (['.html', '.htm'].includes(f.ext)) for (const e of extraireImportMaps(f.contenu, f.chemin)) {
       const cible = cibleReseau(urlDeCarte(e.url, e.baseBrute, f.chemin));
       if (!cible) continue;
       const h = cible.hostname;
@@ -472,7 +474,7 @@ export function analyserRessourcesExternes(ctx) {
         confiance: 'certain',
         titre: `Import map : dépendance chargée depuis ${h} (${e.spec})`,
         fichier: f.chemin, ligne: numeroLigne(f.contenu, e.index), extrait: `"${e.spec}": "${e.url}"`,
-        constat: precise(`L'import map fait résoudre \`${e.spec}\` vers \`${e.url}\`${e.sri ? " (couverte par la clé `integrity` de l'import map)" : ' sans empreinte `integrity` valide dans l\'import map'}.`, e.mention),
+        constat: precise(`L'import map fait résoudre \`${e.spec}\` vers \`${e.url}\`${e.sri ? " (couverte par la clé `integrity` de l'import map)" : e.carte === undefined ? ' sans empreinte `integrity` valide dans l\'import map' : ` : la clé \`integrity\` d'une import map de la page porte une empreinte de cette adresse, qui ne la protège pourtant pas — ${raisonsEntreeNonProtegee(e, lirePage(f.contenu)).join(', ')}`}.`, e.mention),
         impact: "Un import nu résolu par cette carte s'exécute avec tous les privilèges du widget, exactement comme une balise <script src> : si ce domaine est compromis ou remplacé, le document entier l'est aussi. C'est le scénario type d'attaque par la chaîne d'approvisionnement.",
         remediation: "Héberger la bibliothèque dans le dépôt (vendoring) et la faire résoudre vers un chemin relatif, ou ajouter une entrée `integrity` pour cette URL dans l'import map et documenter le domaine dans le README.",
         referentiels: [REF_ANSSI, 'OWASP Top 10 A08:2021 — Intégrité logicielle', REF_GUIDE],
@@ -488,20 +490,6 @@ export function analyserRessourcesExternes(ctx) {
 
 const SINKS_HTML = /(innerHTML|outerHTML|insertAdjacentHTML|srcdoc)$/;
 
-/** Partie littérale de tête d'une chaîne de `+` (`'data:...' + code` → `'data:...'`), ou d'un gabarit (son premier segment fixe). null si le nœud ne commence par rien de littéral. */
-function prefixeConcatenationLitteral(noeud) {
-  if (!noeud) return null;
-  if (noeud.type === 'Literal' && typeof noeud.value === 'string') return noeud.value;
-  if (noeud.type === 'TemplateLiteral') return noeud.quasis[0]?.value.cooked ?? null;
-  if (noeud.type === 'BinaryExpression' && noeud.operator === '+') return prefixeConcatenationLitteral(noeud.left);
-  return null;
-}
-
-/** Nom simple d'un appelé (`Worker`, `createObjectURL`…), sans se soucier d'un alias global de tête (`window.`, `self.`, `globalThis.`) : `nomPointe(noeud)` donne la chaîne pointée complète, on ne garde que son dernier segment. Un objet non lié à l'alias qui porte la même propriété (`monObjet.Worker`) matche aussi — un compromis déjà fait par ce fichier pour `eval`/`Function`/`document.write`, gardé ici pour la même raison : l'angle mort d'un nom réel manqué coûte plus qu'un faux positif rarissime. */
-function nomFinal(noeud) {
-  return (nomPointe(noeud) || '').split('.').pop();
-}
-
 /** Chaîne littérale résolue (ou son préfixe de concaténation/gabarit) qui commence par l'un des schémas donnés (`data:`, `blob:`, `javascript:`…), sans se soucier de la forme d'écriture. */
 function debuteParSchema(noeud, ...schemas) {
   const texte = chaineLitterale(noeud) ?? prefixeConcatenationLitteral(noeud);
@@ -510,189 +498,7 @@ function debuteParSchema(noeud, ...schemas) {
   return schemas.some((s) => new RegExp(`^${s}:`, 'i').test(t));
 }
 
-/** Classe une chaîne littérale résolue (ou son préfixe) par son schéma. */
-function classifierSchemaLitteral(texte) {
-  const t = texte.trim();
-  if (/^(data|blob):/i.test(t)) return 'code-en-chaine';
-  if (/^https?:\/\//i.test(t)) return 'url-absolue';
-  return 'chemin-local';
-}
-
-/**
- * Classe la source passée à `new Worker(...)`/`new SharedWorker(...)`.
- * Vérifié par l'exécution (vraie Chromium) : un `importScripts()` vers un
- * domaine externe, sans aucun en-tête CORS, s'exécute aussi bien depuis un
- * worker `blob:` que depuis un worker `data:` — ni l'un ni l'autre n'a de
- * mécanisme d'intégrité, et surtout ni l'un ni l'autre n'est un fichier que
- * l'audit peut lire. Reconnaît un alias global de tête (`window.Worker`,
- * `self.URL.createObjectURL`…) via `nomFinal()`.
- *
- * - 'chemin-local' : chemin relatif littéral (`./w.js`), ou
- *   `new URL('./w.js', <base quelconque>)` — déjà suivi par
- *   `referencesSortantes()` pour la surface exécutée, rien à signaler ici.
- *   C'est le SCHÉMA du premier argument de `new URL(...)` qui décide, jamais
- *   sa base : si ce premier argument résout en `data:`/`blob:`, l'URL
- *   obtenue l'est aussi quelle que soit la base (ces schémas s'auto-suffisent
- *   et ignorent la base par construction) ; s'il est relatif, le résultat
- *   est local quelle que soit la base — et si la base est elle-même une URL
- *   absolue externe écrite en dur, le résultat est une URL absolue externe,
- *   qui retombe dans le cas 'url-absolue' ci-dessous (mort par construction,
- *   donc sans risque réel) : rien de ce qu'une base peut faire ne rend ce
- *   raisonnement par le seul premier argument incorrect.
- * - 'url-absolue' : URL http(s) littérale — lève toujours une
- *   `SecurityError` synchrone (vérifié), donc jamais exécutée : rien à
- *   signaler (voir be1b5f4, C-EXFIL-07 retirée pour cette raison).
- * - 'code-en-chaine' : une URL `data:`/`blob:` littérale ou obtenue par
- *   concaténation/gabarit, ou tout appel à `createObjectURL(...)` (quel que
- *   soit son propre argument — Blob littéral, Blob depuis une variable, ou
- *   variable déjà porteuse d'un Blob/File : aucune de ces formes n'est un
- *   fichier que l'audit peut lire, la question de fond est la même dans
- *   tous les cas). Signalé quel que soit le CONTENU, au même titre qu'`eval()`
- *   est signalé quel que soit son argument : chercher une source de confiance
- *   dans ce contenu ne prouve rien, et ne pas le faire n'enlève rien à la
- *   question de fond, qui est la construction elle-même — récupérer un
- *   contenu (déjà vu par C-EXFIL-01/02 si le Blob vient d'un `fetch`) et
- *   l'exécuter comme du code sont deux faits distincts, comme un `eval()` de
- *   la réponse d'un `fetch` relève à la fois de C-EXFIL et d'`eval`.
- * - 'non-resolue' : tout le reste (variable, gabarit interpolé, expression
- *   calculée) — y compris une URL `blob:` assemblée dans une instruction
- *   précédente, que l'analyse d'une seule expression ne peut pas remonter.
- */
-/**
- * Un préfixe littéral de tête (concaténation, gabarit interpolé) ne peut
- * décider QUE le cas `code-en-chaine` : une fois le schéma `data:`/`blob:`
- * confirmé en tête, aucune suite ne peut plus le changer. Il ne décide
- * jamais `chemin-local` : une suite inconnue (variable de sélection du
- * fichier) peut désigner n'importe quel fichier, que l'analyse ne peut pas
- * énumérer — ce cas reste `non-resolue`, pas un chemin réputé sûr.
- */
-function estPrefixeCodeEnChaine(noeud) {
-  const prefixe = prefixeConcatenationLitteral(noeud);
-  return prefixe !== null && /^(data|blob):/i.test(prefixe.trim());
-}
-
-/**
- * Extrait le texte du code exécuté par un Worker/SharedWorker classé
- * `code-en-chaine`, quand il est ENTIÈREMENT littéral (data: littérale — y
- * compris en base64 — ou Blob dont TOUS les éléments du tableau sont des
- * littéraux). Retourne null si une partie est calculée (variable, `atob()`,
- * concaténation avec une variable) : ce contenu reste hors de portée, comme
- * avant — c'est là qu'est le vrai risque, pas dans un littéral qu'on peut lire.
- */
-function decoderDataLitteral(lit) {
-  const m = /^data:([^,]*),([\s\S]*)$/i.exec(lit.trim());
-  if (!m) return null;
-  if (/;base64\s*$/i.test(m[1])) {
-    try { return Buffer.from(m[2], 'base64').toString('utf8'); } catch { return null; }
-  }
-  try { return decodeURIComponent(m[2]); } catch { return m[2]; }
-}
-
-function extraireCodeLitteralWorker(arg) {
-  // `plierLitteraux` (pas seulement `chaineLitterale`) : une URL data:/blob:
-  // ou un élément de tableau assemblés par concaténation de CONSTANTES
-  // (`'data:...,' + '...'`, `Blob(['a' + 'b'])`) sont tout aussi littéraux
-  // qu'écrits en une seule chaîne — sans ce repli, ce cas précis retombait
-  // à tort dans le texte « calculé à l'exécution : rien n'est lu », alors
-  // qu'il n'y a rien de calculé (relevé par la coordination le 2026-09-28).
-  const lit = plierLitteraux(arg);
-  if (lit !== null) return decoderDataLitteral(lit);
-
-  if (arg.type === 'CallExpression' && nomFinal(arg.callee) === 'createObjectURL') {
-    const blob = arg.arguments[0];
-    if (blob?.type === 'NewExpression' && nomFinal(blob.callee) === 'Blob' && blob.arguments[0]?.type === 'ArrayExpression') {
-      // Chaque élément du tableau peut être un littéral direct, une
-      // concaténation de constantes (`plierLitteraux`), OU lui-même encodé
-      // (`atob(...)`, `String.fromCharCode(...)`) : un eval() équivalent
-      // décode déjà ces deux formes (voir `traiterAppelExecution`), le même
-      // contenu caché dans un Worker doit recevoir le même traitement, pas
-      // rester à tort « pas entièrement littéral » (relevé par la
-      // coordination le 2026-09-28).
-      const morceaux = blob.arguments[0].elements.map((el) => plierLitteraux(el) ?? decoderAtobLitteral(el) ?? decoderFromCharCodeLitteral(el));
-      if (morceaux.length && morceaux.every((m) => m !== null)) return morceaux.join('');
-    }
-  }
-
-  // `new URL('data:...')` : classifierSourceWorker fait déjà dépendre la
-  // classification du seul premier argument, quelle que soit la base
-  // (voir sa documentation) — extraire le contenu suit le même
-  // raisonnement, en ignorant `arg.arguments[1]` de la même façon. Sans
-  // cette branche, ce cas précis retombait à tort dans le texte « contenu
-  // pas entièrement littéral », alors qu'il l'est.
-  if (arg.type === 'NewExpression' && nomFinal(arg.callee) === 'URL') {
-    return extraireCodeLitteralWorker(arg.arguments[0]);
-  }
-
-  return null;
-}
-
-function classifierSourceWorker(arg) {
-  if (!arg) return 'non-resolue';
-
-  const lit = chaineLitterale(arg);
-  if (lit !== null) return classifierSchemaLitteral(lit);
-  if (estPrefixeCodeEnChaine(arg)) return 'code-en-chaine';
-
-  if (arg.type === 'CallExpression' && nomFinal(arg.callee) === 'createObjectURL') {
-    return 'code-en-chaine';
-  }
-
-  if (arg.type === 'NewExpression' && nomFinal(arg.callee) === 'URL') {
-    const xLit = chaineLitterale(arg.arguments[0]);
-    if (xLit !== null) return classifierSchemaLitteral(xLit);
-    if (estPrefixeCodeEnChaine(arg.arguments[0])) return 'code-en-chaine';
-  }
-
-  return 'non-resolue';
-}
-
 const MAX_PROFONDEUR_CODE_IMBRIQUE = 5;
-
-/**
- * Replie une concaténation de `+` entre littéraux/gabarits statiques en une
- * seule chaîne : `'al' + 'ert(1)'` vaut alors comme le littéral `'alert(1)'`,
- * pas comme une valeur « calculée à l'exécution » — le texte que produisait
- * `chaineLitterale` seul (qui ne traite pas `BinaryExpression`) était inexact
- * sur ce cas précis, relevé par la coordination le 2026-09-28 : une
- * concaténation de constantes n'est pas une inconnue, c'est un peu
- * d'arithmétique de chaînes qu'on peut faire soi-même à l'analyse. Retourne
- * null dès qu'une partie n'est pas entièrement littérale (variable, appel).
- */
-function plierLitteraux(noeud) {
-  if (!noeud) return null;
-  const direct = chaineLitterale(noeud);
-  if (direct !== null) return direct;
-  if (noeud.type === 'BinaryExpression' && noeud.operator === '+') {
-    const gauche = plierLitteraux(noeud.left);
-    if (gauche === null) return null;
-    const droite = plierLitteraux(noeud.right);
-    if (droite === null) return null;
-    return gauche + droite;
-  }
-  return null;
-}
-
-/** `atob(x)` retourne toujours une chaîne : si `x` est lui-même littéral (ou une concaténation qui se replie), son décodage est aussi peu une boîte noire qu'un littéral direct. */
-function decoderAtobLitteral(noeud) {
-  if (noeud?.type !== 'CallExpression' || nomFinal(noeud.callee) !== 'atob' || noeud.arguments.length !== 1) return null;
-  const arg = plierLitteraux(noeud.arguments[0]);
-  if (arg === null) return null;
-  try { return Buffer.from(arg, 'base64').toString('utf8'); } catch { return null; }
-}
-
-/**
- * Un littéral NON-chaîne (`null`, un nombre, un booléen) a une valeur
- * entièrement déterminée à la lecture : `ToString()` la fixe sans ambiguïté
- * (`String(null) === 'null'`, `String(42) === '42'`…), exactement comme une
- * chaîne littérale directe. Exclut une regex littérale (`/x/`), dont la
- * valeur n'est pas un primitif simple à coercer ainsi. `null` retourné
- * signifie ici « n'est pas un tel littéral », pas « vaut null » — comme le
- * reste des fonctions `plierLitteraux`/`decoder*Litteral` de ce fichier.
- */
-function coercerLitteralNonChaine(noeud) {
-  if (noeud?.type !== 'Literal' || typeof noeud.value === 'string' || noeud.regex) return null;
-  return String(noeud.value);
-}
 
 /**
  * Noms liés par un motif de paramètre ou de déclaration, récursivement
@@ -1308,26 +1114,6 @@ function resoudreArgument(noeud, { walkAcorn, ancetres, estModule }) {
 }
 
 /**
- * `String.fromCharCode(...)` retourne toujours une chaîne : si tous ses
- * arguments sont des codes numériques littéraux, son résultat est aussi peu
- * une boîte noire qu'un littéral direct — comme `atob()`. La comparaison
- * tolère un alias global de tête (`window.String.fromCharCode`,
- * `self.String.fromCharCode`…), comme le fait déjà `nomFinal` ailleurs dans
- * ce fichier pour `eval`/`Function`/`document.write` : une correspondance
- * exacte manquait cette forme pourtant courante en code minifié/empaqueté
- * (relevé par la coordination le 2026-09-28).
- */
-function decoderFromCharCodeLitteral(noeud) {
-  if (noeud?.type !== 'CallExpression' || !/(^|\.)String\.fromCharCode$/.test(nomPointe(noeud.callee) || '') || !noeud.arguments.length) return null;
-  const codes = [];
-  for (const a of noeud.arguments) {
-    if (a.type !== 'Literal' || typeof a.value !== 'number') return null;
-    codes.push(a.value);
-  }
-  return String.fromCharCode(...codes);
-}
-
-/**
  * Cœur du modèle « littéral audité, pas puni » (revu avec la coordination le
  * 2026-09-28 : `Function("return this")`, l'idiome lodash bundlé par l'API
  * Grist officielle elle-même, ne justifiait aucune sanction — C-CSP-01
@@ -1367,7 +1153,7 @@ function decoderFromCharCodeLitteral(noeud) {
  * créé (utile à l'appelant pour poursuivre l'extraction en profondeur),
  * absent quand l'argument est calculé ou ne se parse pas.
  */
-function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, colonneAppel, extrait, texteBrut, profondeur, regle, titreConstruction, texteConstruction, remediationSupprimer, impactConstruction, referentielsSupp = [], motifNonGaranti = "L'analyse statique ne peut pas garantir la valeur de son argument au moment de l'appel : ce qui sera réellement exécuté n'est pas lu." }) {
+function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, colonneAppel, extrait, texteBrut, profondeur, regle, titreConstruction, texteConstruction, remediationSupprimer, impactConstruction, referentielsSupp = [], worker = false, motifNonGaranti = "L'analyse statique ne peut pas garantir la valeur de son argument au moment de l'appel : ce qui sera réellement exécuté n'est pas lu." }) {
   const constatCalculeOuIllisible = (motif) => constat({
     regle, axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
     titre: titreConstruction, fichier: fichierOrigine, ligne: ligneAppel, extrait,
@@ -1405,6 +1191,8 @@ function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, colonneAppel
   const fichier = {
     chemin, contenu: texteBrut, lignes: texteBrut.split('\n'), ext: '.js',
     binaire: false, executee: true, vendorise: true, litteralImbrique: true,
+    // Le code d'un Worker s'exécute hors du document : l'empreinte d'une import map de la page ne s'y applique pas (E-DEP-01).
+    ...(worker ? { executeParUnWorker: true } : {}),
     // Origine réelle (fichier + ligne du site d'appel qui a produit ce
     // fichier synthétique) : sert à deux choses hors de cette fonction — ne
     // pas compter deux fois, dans une règle qui scanne le TEXTE brut (comme
@@ -1728,6 +1516,7 @@ function traiterWorker(ctx, { unite, ligneDe, n, profondeur }) {
       texteConstruction: `Le code exécuté par ce ${nomWorker} est fourni sous forme de chaîne écrite dans le dépôt (\`Blob\` ou URL \`data:\`), pas comme un fichier séparé.`,
       remediationSupprimer: `Déplacer ce code dans un fichier de worker séparé, chargé par \`new ${nomWorker}('./chemin/local.js')\` : il redevient un fichier du dépôt, lisible et audité comme le reste du widget.`,
       impactConstruction: "Équivalent fonctionnel d'eval() : ce code s'exécute avec les privilèges réseau du widget dès la construction du worker, et rien de son contenu — par exemple un appel vers un domaine externe — n'est lu par l'analyse statique, qui ne lit que des fichiers.",
+      worker: true,
     }).constats;
   }
 

@@ -51,7 +51,7 @@ const CODE_WEB = new Set(['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.html',
  * @param {{ maxEntreesListees?: number, maxResolutions?: number }} [plafonds] `maxEntreesListees` : les entrées de dossier que la lecture d'un préfixe d'import map peut parcourir (`MAX_ENTREES_LISTEES` par défaut) ; `maxResolutions` : les résolutions d'adresse de worker sous une page d'entrée que la fermeture peut faire (`MAX_RESOLUTIONS`). Seuls les essais les changent.
  * @returns {{racine:string, fichiers:Array, entrees:Array, surface:Set<string>, paquet:object|null, manifestes:Array}}
  */
-export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LISTEES, maxResolutions = MAX_RESOLUTIONS } = {}) {
+export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LISTEES, maxResolutions = MAX_RESOLUTIONS, maxPasDocuments = MAX_PAS_DOCUMENTS } = {}) {
   const fichiers = [];
   const etat = { octetsLus: 0, tronqueFichiers: false, tronqueOctets: false, tronqueListage: false, exclus: [] };
   parcourir(racine, racine, fichiers, etat);
@@ -65,7 +65,7 @@ export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LIS
   const parChemin = new Map(fichiers.map((f) => [f.chemin, f]));
   const trouver = (chemin) => parChemin.get(chemin) ?? ouvrirHorsInventaire(racine, chemin, fichiers, parChemin, etat);
   const entrees = trouverPointsDEntree(fichiers, manifestes, trouver);
-  const { surface, mentions, partiel } = calculerSurface(entrees, trouver, nouveauListeur(racine, fichiers, etat, maxEntreesListees), { maxResolutions });
+  const { surface, mentions, partiel, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments } = calculerSurface(entrees, trouver, nouveauListeur(racine, fichiers, etat, maxEntreesListees), { maxResolutions, maxPasDocuments });
 
   for (const f of fichiers) {
     f.executee = surface.has(f.chemin);
@@ -86,7 +86,7 @@ export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LIS
   // non du code dans une chaîne.
   const fichiersReels = fichiers.length;
 
-  return { racine, fichiers, entrees, surface, paquet, manifestes, tronque, fichiersReels };
+  return { racine, fichiers, entrees, surface, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments, paquet, manifestes, tronque, fichiersReels };
 }
 
 function parcourir(racine, dossier, acc, etat) {
@@ -198,6 +198,11 @@ const MAX_ENTREES_LISTEES = 100_000;
  * ce plafond en fait quelques secondes, une seule fois par audit.
  */
 const MAX_RESOLUTIONS = 2_000_000;
+
+/**
+ * Pas que l'analyse de document fait au plus, toutes pages confondues : les arêtes que les graphes de document (`surfaceDuDocument`) parcourent, et les pages qu'une règle évalue pour un chargement de code distant (`depenserPasDocuments`). Un dépôt hostile qui multiplie les pages par un graphe commun, ou par des milliers d'imports, ferait sinon un produit (pages × modules, sans borne). Le plafond en fait quelques secondes au pire (`scripts/chronometrer-pieges.mjs` le mesure : les entrées « pages d'entrée × un graphe partagé » et « modules qui importent chacun la même adresse distante »). Au-delà, le chargeur est inconnu : rien n'est dit protégé, et la raison le dit.
+ */
+const MAX_PAS_DOCUMENTS = 2_000_000;
 
 /**
  * Ce qui a tronqué l'inventaire, une phrase par plafond atteint : le rapport
@@ -395,10 +400,10 @@ export function resolveurDeDocument(contextes, budget = { restant: Infinity, epu
  * @param {string[]} entrees
  * @param {(chemin: string) => object|null|undefined} trouver le fichier de l'inventaire à ce chemin (lu à la demande hors d'un dossier exclu)
  * @param {(prefixe: string) => string[]} lister les modules JavaScript sous un dossier (voir `nouveauListeur`), pour une adresse d'import map qui finit par `/` ou un `import()` à début fixe
- * @param {{ maxResolutions?: number }} [plafonds] le budget de résolutions d'adresse de worker (voir `MAX_RESOLUTIONS`)
- * @returns {{ surface: Set<string>, mentions: Map<string, string>, partiel: boolean }} `partiel` : le budget de résolutions est épuisé, la surface n'est pas complète
+ * @param {{ maxResolutions?: number, maxPasDocuments?: number }} [plafonds] le budget de résolutions d'adresse de worker (voir `MAX_RESOLUTIONS`) et celui des arêtes que les graphes de document parcourent (voir `MAX_PAS_DOCUMENTS`)
+ * @returns {{ surface: Set<string>, mentions: Map<string, string>, partiel: boolean, surfaceDuDocument: (page: string) => ?Set<string>, debutDeChargement: (page: string, chemin: string) => ?number, surfaceDesWorkers: () => Set<string>, pasDocuments: () => number, depenserPasDocuments: (pas: number) => boolean }} `partiel` : le budget de résolutions est épuisé, la surface n'est pas complète ; `surfaceDuDocument(page)` : les fichiers que le document de cette page charge dans son propre contexte (null : budget d'arêtes épuisé) ; `debutDeChargement(page, chemin)` : le décalage, dans la page, de la première balise qui mène à ce fichier (`Infinity` : aucune balise ne le charge d'elle-même ; null : la page ne le charge pas, ou le budget d'arêtes est épuisé) ; `surfaceDesWorkers()` : ceux que des workers exécutent, avec ce qu'ils importent ; `pasDocuments()` : les pas que l'analyse de document a faits jusqu'ici, arêtes parcourues par les graphes et pages évaluées pour un chargement (à comparer à `maxPasDocuments`) ; `depenserPasDocuments(pas)` : en fait de nouveaux, faux quand le budget n'y suffit plus
  */
-export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX_RESOLUTIONS } = {}) {
+export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX_RESOLUTIONS, maxPasDocuments = MAX_PAS_DOCUMENTS } = {}) {
   const budget = { restant: maxResolutions, epuise: false };
   let resoudreDocument = null;
   const cheminsDuDocument = (relative) => (resoudreDocument ??= resolveurDeDocument(contextesDeDocument(entrees, trouver), budget))(relative);
@@ -407,7 +412,7 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
     const objet = typeof ref === 'object';
     const cibles = new Set();
     if (objet && ref.chemin !== undefined) cibles.add(ref.chemin);   // déjà résolue depuis la racine du widget (page HTML, `<base>` comprise)
-    const relative = objet ? ref.documentRelatif : ref;
+    const relative = objet ? (ref.documentRelatif ?? ref.relatif) : ref;
     if (relative === undefined || /^(https?:)?\/\//i.test(relative) || relative.startsWith('data:') || relative.startsWith('blob:')) return cibles;
     // `path.posix.*` ici aussi, même raison que dans trouverPointsDEntree().
     // Une adresse qui commence par `/` part de la racine du widget (comme dans une page), non du dossier du fichier.
@@ -415,10 +420,10 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
       cibles.add(path.posix.normalize(chemin.startsWith('/') ? chemin.slice(1) : path.posix.join(path.posix.dirname(rel), chemin)));
     }
     // Une référence qui s'adresse au document (`new Worker('w.js')`) se résout aussi contre la page qui charge le script.
-    if (objet) for (const cheminDuDocument of cheminsDuDocument(relative)) cibles.add(cheminDuDocument);
+    if (objet && ref.documentRelatif !== undefined) for (const cheminDuDocument of cheminsDuDocument(relative)) cibles.add(cheminDuDocument);
     return cibles;
   };
-  const aretesDe = new Map();                                    // chemin → [{ cible | dossier, gabarit, standard }], lues une fois
+  const aretesDe = new Map();                                    // chemin → [{ cible | dossier, gabarit, standard, worker, position }], lues une fois
   const aretes = (rel) => {
     let liste = aretesDe.get(rel);
     if (liste) return liste;
@@ -427,12 +432,14 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
       const objet = typeof ref === 'object';
       const gabarit = objet && Boolean(ref.dansTemplate);
       const standard = objet && Boolean(ref.seulementStandard);
-      if (objet && ref.dossier !== undefined) liste.push({ dossier: ref.dossier, gabarit, standard });
-      else if (objet && ref.dossierRelatif !== undefined) for (const dossier of dossiersDepuis(rel, ref.dossierRelatif)) liste.push({ dossier, gabarit, standard });
+      const worker = objet && Boolean(ref.worker);
+      const position = objet ? ref.position : undefined;
+      if (objet && ref.dossier !== undefined) liste.push({ dossier: ref.dossier, gabarit, standard, worker, position });
+      else if (objet && ref.dossierRelatif !== undefined) for (const dossier of dossiersDepuis(rel, ref.dossierRelatif)) liste.push({ dossier, gabarit, standard, worker, position });
       else {
         for (const cible of ciblesDe(ref, rel)) {
           for (const candidat of [cible, `${cible}.js`, `${cible}.mjs`, path.posix.join(cible, 'index.js')]) {
-            if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard });
+            if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard, worker, position });
           }
         }
       }
@@ -440,11 +447,11 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
     aretesDe.set(rel, liste);
     return liste;
   };
-  /** Fichiers atteints depuis les entrées, sans emprunter les arêtes qui portent la réserve `evite` (`gabarit`, `standard`). Chaque chemin entre une fois dans la file et chaque dossier se lit une fois : la fermeture est linéaire en arêtes, quel que soit le nombre de fois qu'un même fichier ou un même dossier est nommé. */
-  const atteints = (evite) => {
+  /** Fichiers atteints depuis `departs` (les entrées par défaut), sans emprunter les arêtes qui portent la réserve `evite` (`gabarit`, `standard`). Chaque chemin entre une fois dans la file et chaque dossier se lit une fois : la fermeture est linéaire en arêtes, quel que soit le nombre de fois qu'un même fichier ou un même dossier est nommé. */
+  const atteints = (evite, departs = entrees) => {
     const vus = new Set();
     const dossiersVus = new Set();
-    const file = [...entrees];
+    const file = [...departs];
     const mis = new Set(file);
     const mettre = (chemin) => { if (!mis.has(chemin)) { mis.add(chemin); file.push(chemin); } };
     for (let i = 0; i < file.length; i++) {
@@ -465,19 +472,79 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
   const surface = atteints(null);
   const sansGabarit = atteints('gabarit');
   const sansStandard = atteints('standard');
+  // Ce que le document d'une page charge dans son propre contexte, pour une règle qui doit savoir de quelle import map un module dépend : ni ce que ses workers exécutent (Chromium 141 n'applique jamais l'import map de la page, ni la clé `integrity`, à un worker), ni ce que charge une autre page HTML. À la demande, une fois par page, dans un budget d'arêtes commun ; null quand il est épuisé (l'appelant compte alors la page comme chargeur, il ne blanchit rien).
+  // Chaque fichier porte le décalage de la PREMIÈRE balise de la page qui mène à lui : une empreinte d'import map ne protège que les chargements qui commencent après la carte (mesuré dans Chromium 141 : un module placé avant la carte et lu avant elle, page livrée en deux morceaux, s'exécute malgré l'empreinte). Les balises se suivent dans l'ordre du document, chacune ne visite que ce que les précédentes n'ont pas atteint : la fermeture reste linéaire. Une arête sans position (`<link>`, feuille) mène au bout de la file (`Infinity`) : elle ne charge aucun module qu'une empreinte protège.
+  const budgetDocuments = { restant: maxPasDocuments };
+  const parcourirDocument = (page) => {
+    const racine = trouver(page);
+    const positions = new Map();
+    if (!racine || racine.binaire) return positions;
+    const vus = new Set([page]);
+    const dossiersVus = new Set();
+    if ((budgetDocuments.restant -= aretes(page).length + 1) < 0) return null;
+    const departs = aretes(page).filter((arete) => !arete.worker).sort((a, b) => (a.position ?? Infinity) - (b.position ?? Infinity));
+    for (const depart of departs) {
+      const position = depart.position ?? Infinity;
+      const file = [];
+      const mettre = (chemin) => {
+        if (vus.has(chemin)) return;
+        vus.add(chemin);
+        const f = trouver(chemin);
+        if (!f || f.binaire) return;
+        positions.set(chemin, position);
+        file.push(chemin);
+      };
+      const lireDossier = (dossier) => {
+        if (dossiersVus.has(dossier)) return;                    // un dossier ne se relit pas : ses modules sont déjà dans la file
+        dossiersVus.add(dossier);
+        for (const chemin of lister(dossier)) mettre(chemin);
+      };
+      if (depart.dossier === undefined) mettre(depart.cible); else lireDossier(depart.dossier);
+      for (let i = 0; i < file.length; i++) {
+        const rel = file[i];
+        if (['.html', '.htm'].includes(trouver(rel).ext)) continue;   // une autre page : son document, ses cartes, son graphe
+        if ((budgetDocuments.restant -= aretes(rel).length + 1) < 0) return null;
+        for (const arete of aretes(rel)) {
+          if (arete.worker) continue;
+          if (arete.dossier === undefined) mettre(arete.cible); else lireDossier(arete.dossier);
+        }
+      }
+    }
+    return positions;
+  };
+  const positionsDeDocument = new Map();
+  const positionsDuDocument = (page) => {
+    if (!positionsDeDocument.has(page)) positionsDeDocument.set(page, parcourirDocument(page));
+    return positionsDeDocument.get(page);
+  };
+  const surfacesDeDocument = new Map();
+  const surfaceDuDocument = (page) => {
+    if (!surfacesDeDocument.has(page)) {
+      const positions = positionsDuDocument(page);
+      surfacesDeDocument.set(page, positions === null ? null : new Set([page, ...positions.keys()]));
+    }
+    return surfacesDeDocument.get(page);
+  };
+  const debutDeChargement = (page, chemin) => positionsDuDocument(page)?.get(chemin) ?? null;
+  // Ce que les workers exécutent, avec tout ce qu'ils importent : des contextes hors de tout document. Un fichier qui y figure n'hérite jamais de l'empreinte d'une page, même si une page le charge aussi.
+  let desWorkers = null;
+  const surfaceDesWorkers = () => (desWorkers ??= atteints(null, [...surface].flatMap((rel) => aretes(rel).filter((arete) => arete.worker).map((arete) => arete.cible))));
   const mentions = new Map();
   for (const rel of surface) {
     const mention = mentionDe({ dansTemplate: !sansGabarit.has(rel), seulementStandard: !sansStandard.has(rel) });
     if (mention) mentions.set(rel, mention);
   }
-  return { surface, mentions, partiel: budget.epuise };
+  const pasDocuments = () => maxPasDocuments - budgetDocuments.restant;
+  // Un pas de plus que l'analyse de document veut faire (une page évaluée pour un chargement) : faux quand il n'en reste plus, et le budget reste épuisé.
+  const depenserPasDocuments = (pas) => (budgetDocuments.restant -= pas) >= 0;
+  return { surface, mentions, partiel: budget.epuise, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments };
 }
 
 const ALIAS_GLOBAL = '(?:(?:window|self|globalThis)\\.)?';
 const NOM_WORKER = new RegExp(`^${ALIAS_GLOBAL}(?:Worker|SharedWorker)$`);
 const NOM_URL = new RegExp(`^${ALIAS_GLOBAL}URL$`);
-const NOM_ENREGISTREMENT = /(^|\.)serviceWorker\.register$/;
-const NOM_MODULE_DE_WORKLET = /(^|\.)\w*[Ww]orklet\.addModule$/;
+export const NOM_ENREGISTREMENT = /(^|\.)serviceWorker\.register$/;
+export const NOM_MODULE_DE_WORKLET = /(^|\.)\w*[Ww]orklet\.addModule$/;
 
 /**
  * Une référence de code qui s'adresse au document, non au fichier qui l'écrit :
@@ -490,6 +557,11 @@ const NOM_MODULE_DE_WORKLET = /(^|\.)\w*[Ww]orklet\.addModule$/;
  * chaque page d'entrée.
  */
 const relatifAuDocument = (valeur) => ({ documentRelatif: valeur });
+
+/**
+ * Une référence vers un fichier qu'un worker, un service worker ou un module de worklet exécute (`worker`) : hors de tout document, où Chromium 141 n'applique ni l'import map de la page ni la clé `integrity` (voir `surfaceDesWorkers`). Une référence en chaîne est relative au fichier qui l'écrit (`relatif`).
+ */
+const duWorker = (ref) => (typeof ref === 'object' ? { ...ref, worker: true } : { relatif: ref, worker: true });
 
 /**
  * Références vers un worker, un service worker, un module de worklet ou un
@@ -517,18 +589,18 @@ function referencesWorkerDansAst(n) {
   if (n.type === 'NewExpression' && NOM_WORKER.test(nomPointe(n.callee) ?? '')) {
     const arg = n.arguments[0];
     const direct = chaineLitterale(arg);
-    if (direct !== null) return [relatifAuDocument(direct)];
+    if (direct !== null) return [duWorker(relatifAuDocument(direct))];
     if (arg?.type === 'NewExpression' && NOM_URL.test(nomPointe(arg.callee) ?? '')) {
       const emballe = chaineLitterale(arg.arguments[0]);
       // `new URL('./w.js', import.meta.url)` : relative au module, exactement ; toute autre base (`document.baseURI`, aucune…), dans le doute, aussi au document.
-      if (emballe !== null) return [estImportMetaUrl(arg.arguments[1]) ? emballe : relatifAuDocument(emballe)];
+      if (emballe !== null) return [duWorker(estImportMetaUrl(arg.arguments[1]) ? emballe : relatifAuDocument(emballe))];
     }
   } else if (n.type === 'CallExpression') {
     const nom = nomPointe(n.callee) ?? '';
-    if (/(^|\.)importScripts$/.test(nom)) return n.arguments.map((a) => chaineLitterale(a)).filter((v) => v !== null);
+    if (/(^|\.)importScripts$/.test(nom)) return n.arguments.map((a) => chaineLitterale(a)).filter((v) => v !== null).map(duWorker);
     if (NOM_ENREGISTREMENT.test(nom) || NOM_MODULE_DE_WORKLET.test(nom)) {
       const valeur = chaineLitterale(n.arguments[0]);
-      if (valeur !== null) return [relatifAuDocument(valeur)];
+      if (valeur !== null) return [duWorker(relatifAuDocument(valeur))];
     }
   }
   return [];
@@ -542,12 +614,12 @@ function referencesWorkerDansAst(n) {
  */
 function referencesWorkerParRegex(contenu) {
   const refs = [];
-  for (const m of contenu.matchAll(new RegExp(`\\bnew\\s+${ALIAS_GLOBAL}(?:Worker|SharedWorker)\\s*\\(\\s*(?:["']([^"']+)["']|\`([^\`$]+)\`)`, 'g'))) refs.push(relatifAuDocument(m[1] ?? m[2]));
-  for (const m of contenu.matchAll(new RegExp(`\\bnew\\s+${ALIAS_GLOBAL}(?:Worker|SharedWorker)\\s*\\(\\s*new\\s+${ALIAS_GLOBAL}URL\\s*\\(\\s*(?:["']([^"']+)["']|\`([^\`$]+)\`)\\s*[,)]`, 'g'))) refs.push(relatifAuDocument(m[1] ?? m[2]));
+  for (const m of contenu.matchAll(new RegExp(`\\bnew\\s+${ALIAS_GLOBAL}(?:Worker|SharedWorker)\\s*\\(\\s*(?:["']([^"']+)["']|\`([^\`$]+)\`)`, 'g'))) refs.push(duWorker(relatifAuDocument(m[1] ?? m[2])));
+  for (const m of contenu.matchAll(new RegExp(`\\bnew\\s+${ALIAS_GLOBAL}(?:Worker|SharedWorker)\\s*\\(\\s*new\\s+${ALIAS_GLOBAL}URL\\s*\\(\\s*(?:["']([^"']+)["']|\`([^\`$]+)\`)\\s*[,)]`, 'g'))) refs.push(duWorker(relatifAuDocument(m[1] ?? m[2])));
   for (const m of contenu.matchAll(/\bimportScripts\s*\(([^)]*)\)/g)) {
-    for (const t of m[1].matchAll(/["']([^"']+)["']/g)) refs.push(t[1]);
+    for (const t of m[1].matchAll(/["']([^"']+)["']/g)) refs.push(duWorker(t[1]));
   }
-  for (const m of contenu.matchAll(/(?:^|[^\w$])(?:\w+\.)*(?:serviceWorker\.register|\w*[Ww]orklet\.addModule)\s*\(\s*["']([^"']+)["']/g)) refs.push(relatifAuDocument(m[1]));
+  for (const m of contenu.matchAll(/(?:^|[^\w$])(?:\w+\.)*(?:serviceWorker\.register|\w*[Ww]orklet\.addModule)\s*\(\s*["']([^"']+)["']/g)) refs.push(duWorker(relatifAuDocument(m[1])));
   return refs;
 }
 
@@ -654,24 +726,26 @@ function referencesSortantes(f) {
       const chemin = cheminLocal(urlDe(valeur, baseBrute, f.chemin));
       if (chemin !== null) refs.push({ dossier: chemin, ...reserves });
     };
+    // `position` : le décalage, dans la page, de la balise qui mène au fichier (voir `debutDeChargement`).
     for (const s of scripts) {
-      for (const ch of s.chargements) if (ch.execute) local(ch.valeur, s.baseBrute, { dansTemplate: s.dansTemplate, seulementStandard: ch.seulementStandard });
+      for (const ch of s.chargements) if (ch.execute) local(ch.valeur, s.baseBrute, { dansTemplate: s.dansTemplate, seulementStandard: ch.seulementStandard, position: s.debut });
       if (s.unite) {
         // Un worker écrit en commentaire ou en gabarit n'y figure pas ; dans la page, tout se résout contre la base du document.
-        const reserves = { dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard };
+        const reserves = { dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard, position: s.debut };
         for (const ref of referencesDeCode(s.texte)) {
+          const propres = ref.worker ? { ...reserves, worker: true } : reserves;      // ce qu'un worker exécute est dit à la fermeture (`surfaceDesWorkers`)
           if (typeof ref === 'string') local(ref, s.baseBrute, reserves);
-          else if (ref.dossierRelatif !== undefined) dossier(ref.dossierRelatif, s.baseBrute, reserves);
-          else local(ref.documentRelatif, s.baseBrute, reserves);
+          else if (ref.dossierRelatif !== undefined) dossier(ref.dossierRelatif, s.baseBrute, propres);
+          else local(ref.documentRelatif ?? ref.relatif, s.baseBrute, propres);
         }
       }
     }
     for (const r of ressources) if (r.nom === 'link') { const href = r.attributs.get('href'); if (href != null) local(href, r.baseBrute, { dansTemplate: r.dansTemplate }); }
     // Une import map dit où se trouve chaque module que la page importe par un nom : ce qu'elle désigne en local est du code que le navigateur charge (un import nu n'a pas d'autre chemin), sans qu'aucun `<script src>` ni `import` de chemin le nomme.
-    for (const e of extraireImportMaps(c)) {
+    for (const e of extraireImportMaps(c, f.chemin)) {
       const chemin = cheminLocal(urlDeCarte(e.url, e.baseBrute, f.chemin));
       if (chemin === null) continue;
-      const reserves = { dansTemplate: e.dansTemplate, seulementStandard: e.seulementStandard };
+      const reserves = { dansTemplate: e.dansTemplate, seulementStandard: e.seulementStandard, position: e.index };   // la carte se lit avant tout import par un nom : ce qu'elle désigne ne se charge pas avant elle
       // Une adresse qui finit par `/` est un préfixe (`"lib/": "./libs/"` : `import 'lib/x.js'` charge `libs/x.js`) : tout module du dossier peut être chargé.
       refs.push(chemin === '' || chemin.endsWith('/') ? { dossier: chemin, ...reserves } : { chemin, ...reserves });
     }

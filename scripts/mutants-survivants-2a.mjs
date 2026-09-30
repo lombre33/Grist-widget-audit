@@ -87,10 +87,11 @@ const MUTANTS = [
   dansLigne(P, "const LUS_MATHML = new Set(['script']);", "['script']", '[]', 'C11i : MathML ne lit plus ses scripts'),
 
   // C12a : l'integrity d'une import map
-  dansLigne(J, 'entrees.push({ spec, url, sri:', "integriteProtege(Object.prototype.hasOwnProperty.call(integrites, url) ? integrites[url] : undefined)", 'Object.prototype.hasOwnProperty.call(integrites, url)', 'C12a : une clé integrity suffit, quelle que soit sa valeur'),
-  dansLigne(J, 'entrees.push({ spec, url, sri:', "integriteProtege(Object.prototype.hasOwnProperty.call(integrites, url) ? integrites[url] : undefined)", 'true', 'C12a : toute entrée est protégée'),
-  dansLigne(J, 'entrees.push({ spec, url, sri:', "integriteProtege(Object.prototype.hasOwnProperty.call(integrites, url) ? integrites[url] : undefined)", 'false', 'C12a : aucune entrée n\'est protégée'),
-  dansLigne(J, 'entrees.push({ spec, url, sri:', "integriteProtege(Object.prototype.hasOwnProperty.call(integrites, url) ? integrites[url] : undefined)", 'integriteProtege(Object.values(integrites)[0])', 'C12a : l\'empreinte d\'une autre URL protège celle-ci'),
+  dansLigne(J, 'return new Map([...valeurs].filter(', 'integriteProtege(valeur)', 'true', 'C12a : une clé integrity suffit, quelle que soit sa valeur'),
+  dansLigne(J, 'entrees.push({ spec, url, sri:', 'carteDeLEmpreinte !== undefined && carteDeLEmpreinte <= s.debut && !lien', 'true', 'C12a : toute entrée est protégée'),
+  dansLigne(J, 'entrees.push({ spec, url, sri:', 'carteDeLEmpreinte !== undefined && carteDeLEmpreinte <= s.debut && !lien', 'false', 'C12a : aucune entrée n\'est protégée'),
+  dansLigne(J, 'const carteDeLEmpreinte = resolue === null', 'protegees.get(resolue.href)', '[...protegees.values()][0]', 'C12a : l\'empreinte d\'une autre URL protège celle-ci'),
+  dansLigne(J, "if (url && typeof valeur === 'string') propres.set(", 'propres.set(url.href, valeur)', 'propres.set(url.href, Object.values(integrites)[0])', 'C12a : la valeur d\'une autre clé de la carte protège cette adresse'),
   dansLigne(J, 'const integrites = carte &&', ' && carte.integrity ? carte.integrity : {}', ' ? carte.integrity : {}', 'C12a : un integrity nul plante la lecture'),
   dansLigne(J, 'ajouter(carte?.imports);', 'ajouter(carte?.imports);', 'void 0;', 'C12a : les imports ne sont plus lus'),
   dansLigne(J, 'for (const portee of Object.values(carte?.scopes ?? {})) ajouter(portee);', 'ajouter(portee)', 'void portee', 'C12a : les scopes ne sont plus lus'),

@@ -20,6 +20,7 @@ import { promisify } from 'node:util';
 import fs from 'node:fs';
 import { constat } from '../moteur/modele.js';
 import { extraireImportMaps } from '../moteur/analyse-js.js';
+import { importsDistants, raisonCarteTardiveBalise, raisonLienDePrechargement, raisonsEntreeNonProtegee } from '../contexte/imports-distants.js';
 import { lirePage, integriteProtege, urlDe, urlDeCarte, mentionDe } from '../moteur/page-html.js';
 
 const estLocalHote = (h) => !h || h === 'widget.local' || h === 'localhost' || h === '127.0.0.1';
@@ -35,12 +36,37 @@ const execFileAsync = promisify(execFile);
  */
 const NPM_BIN = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
+/** Comment le code charge un module, pour le dire dans le constat (les canaux de `visiteursDImports`). */
+const CANAL_DE_CODE = { 'import statique': 'un `import` statique', 'export … from': 'un `export … from`', 'import() distant': 'un `import()`' };
+
+const RAISON_SANS_INTEGRITE = "aucun contrôle d'intégrité (`integrity`)";
+
+/**
+ * Ce qui protège un script distant d'une page : son attribut `integrity` bien formé ; ou, pour un `<script type="module" src>` sans aucun attribut `integrity`, la clé `integrity` d'une import map qui précède la balise (mesuré dans Chromium 141 : le module falsifié est refusé, page seule et iframe). Un attribut présent l'emporte même vide ou mal formé, et la carte n'est plus consultée ; un script classique n'est jamais couvert par la carte ; une carte lue après la balise ne protège pas, la balise résout son adresse avant de la voir ; un `<link rel="modulepreload">` de la même adresse, lu avant la carte ou muni d'un attribut vide ou mal formé, a déjà chargé le module sans elle, et la balise le trouve tel quel.
+ * `seulementStandard` : Chromium n'exécute pas ce script (un `type` que seul le standard lit), il ne peut donc rien garantir de plus que l'attribut.
+ */
+function protectionDeLaBalise({ page, lue, s, c, url, carteQuiProtege, lienQuiBrise }) {
+  if (integriteProtege(s.attributs.get('integrity'))) return { sri: true, raisons: [] };
+  const sansEmpreinte = { sri: false, raisons: [RAISON_SANS_INTEGRITE] };
+  if (s.genre !== 'module' || c.seulementStandard || s.attributs.has('integrity')) return sansEmpreinte;
+  const carte = carteQuiProtege(page, url.href);
+  if (carte === undefined) return sansEmpreinte;
+  const lien = lienQuiBrise(page, url.href, carte);
+  const causes = [
+    ...(carte <= s.debut ? [] : [raisonCarteTardiveBalise(lue.positionDe(carte).ligne, s.ligne)]),
+    ...(lien ? [raisonLienDePrechargement(lue.positionDe(carte).ligne, lien)] : []),
+  ];
+  if (!causes.length) return { sri: true, raisons: [], parLaCarte: true };
+  return { sri: false, raisons: [`${RAISON_SANS_INTEGRITE} sur la balise, et ${causes.join(', et ')}`] };
+}
+
 const CDN_CONNUS = /(cdn\.jsdelivr\.net|unpkg\.com|cdnjs\.cloudflare\.com|code\.jquery\.com|ajax\.googleapis\.com|esm\.sh|skypack\.dev|jspm\.io|cdn\.skypack\.dev)/i;
 
 /** Anneau 1 : code tiers chargé depuis un domaine distant au moment de l'exécution. */
 export function analyserDependancesDistantes(ctx) {
   const constats = [];
   const distantes = [];
+  const { carteQuiProtege, lienQuiBrise } = importsDistants(ctx);
 
   for (const f of ctx.fichiers) {
     if (!f.executee || f.binaire || !['.html', '.htm'].includes(f.ext)) continue;
@@ -53,18 +79,22 @@ export function analyserDependancesDistantes(ctx) {
     // Seul un script que le navigateur exécute est une dépendance (`execute`) ;
     // l'URL se résout depuis la base effective de la page : sous une `<base>`
     // externe, un `src` relatif est chargé chez un tiers.
-    for (const s of lirePage(f.contenu).scripts) {
+    const lue = lirePage(f.contenu);
+    for (const s of lue.scripts) {
       for (const c of s.chargements) {
         if (!c.execute) continue;
         const abs = urlDe(c.valeur, s.baseBrute, f.chemin);
         if (!abs || !/^https?:$/.test(abs.protocol) || estLocalHote(abs.hostname)) continue;
         if (/grist-plugin-api\.js/.test(c.valeur)) continue;     // traité par l'axe C
+        const protection = protectionDeLaBalise({ page: f, lue, s, c, url: abs, carteQuiProtege, lienQuiBrise });
         distantes.push({
           fichier: f.chemin,
           ligne: s.ligne,
           url: c.valeur,
           hote: abs.hostname,
-          sri: integriteProtege(s.attributs.get('integrity')),
+          sri: protection.sri,
+          raisons: protection.raisons,
+          parLaCarte: protection.parLaCarte,
           versionFigee: /@\d+\.\d+\.\d+/.test(c.valeur) || /\/\d+\.\d+\.\d+\//.test(c.valeur),
           cdn: CDN_CONNUS.test(c.valeur),
           balise: s.balise,
@@ -78,15 +108,17 @@ export function analyserDependancesDistantes(ctx) {
     // jamais — ni `src`, ni contenu JS (c'est du JSON, voir `unitesJs`).
     // L'intégrité s'y vérifie via la clé `integrity` de premier niveau de
     // l'import map, pas un attribut de balise.
-    for (const e of extraireImportMaps(f.contenu)) {
+    for (const e of extraireImportMaps(f.contenu, f.chemin)) {
       const abs = urlDeCarte(e.url, e.baseBrute, f.chemin);
       if (!abs || !/^https?:$/.test(abs.protocol) || estLocalHote(abs.hostname) || /grist-plugin-api\.js/.test(e.url)) continue;
+      // Une empreinte portée par une carte lue après l'entrée, ou brisée par un lien `modulepreload` de l'adresse, ne protège pas : le constat le dit.
       distantes.push({
         fichier: f.chemin,
-        ligne: f.contenu.slice(0, e.index).split('\n').length,
+        ligne: lue.positionDe(e.index).ligne,                    // et non `contenu.slice(0, index).split('\n')` : recopié à chaque entrée, il rendait la règle quadratique (`scripts/chronometrer-pieges.mjs`, entrée « entrées d'import map distantes, une par ligne »)
         url: e.url,
         hote: abs.hostname,
         sri: e.sri,
+        raisons: e.sri ? [] : e.carte === undefined ? [RAISON_SANS_INTEGRITE] : raisonsEntreeNonProtegee(e, lue),
         versionFigee: /@\d+\.\d+\.\d+/.test(e.url) || /\/\d+\.\d+\.\d+\//.test(e.url),
         cdn: CDN_CONNUS.test(e.url),
         balise: `"${e.spec}": "${e.url}"`,
@@ -95,9 +127,33 @@ export function analyserDependancesDistantes(ctx) {
     }
   }
 
+  // Le code JavaScript qui charge un module par son adresse (`import 'https://…'`, `export … from`, `import()` à littéral) le charge comme une entrée
+  // d'import map : même code tiers, même protection possible, la clé `integrity` d'une import map de la page qui le charge. C'est la seule qui s'applique à
+  // lui (Chromium ne lit pas d'attribut sur un `import`). Une adresse d'import nommée ici et dans une import map donne deux constats, à deux endroits.
+  // Ce qui protège chaque chargement (et pourquoi certains ne le sont jamais : un worker, l'ordre de la carte et du script) se décide dans
+  // `contexte/imports-distants.js`, que C-EXFIL-01 lit aussi.
+  for (const { noeud, canal, valeur, url, unite, fichier, ligne, protection } of importsDistants(ctx).imports) {
+    if (estLocalHote(url.hostname) || /grist-plugin-api\.js/.test(valeur)) continue;     // traité par l'axe C
+    const { sri, raisons, obstacle } = protection();
+    distantes.push({
+      fichier: fichier.chemin,
+      ligne,
+      url: url.href,
+      hote: url.hostname,
+      sri,
+      raisons,
+      obstacle,
+      versionFigee: /@\d+\.\d+\.\d+/.test(url.href) || /\/\d+\.\d+\.\d+\//.test(url.href),
+      cdn: CDN_CONNUS.test(url.href),
+      balise: unite.source.slice(noeud.start, noeud.end).replace(/\s+/g, ' ').slice(0, 200),
+      mention: unite.mention,
+      canal,
+    });
+  }
+
   for (const d of distantes) {
     const problemes = [];
-    if (!d.sri) problemes.push("aucun contrôle d'intégrité (`integrity`)");
+    if (!d.sri) problemes.push(...d.raisons);
     if (!d.versionFigee) problemes.push('version non figée dans l\'URL');
     constats.push(constat({
       regle: 'E-DEP-01', axe: 'E',
@@ -105,9 +161,13 @@ export function analyserDependancesDistantes(ctx) {
       confiance: 'certain',
       titre: `Bibliothèque tierce chargée à l'exécution depuis ${d.hote ?? hote(d.url)}`,
       fichier: d.fichier, ligne: d.ligne, extrait: d.balise,
-      constat: `Le widget charge \`${d.url}\`${problemes.length ? ` — ${problemes.join(', ')}` : ''}.${d.mention ? ` Précision : ${d.mention}.` : ''}`,
+      constat: `Le widget charge \`${d.url}\`${d.canal ? ` par ${CANAL_DE_CODE[d.canal]}` : ''}${problemes.length ? ` — ${problemes.join(', ')}` : ''}.${d.parLaCarte ? " Son empreinte est portée par la clé `integrity` d'une import map de la page, lue avant cette balise." : ''}${d.mention ? ` Précision : ${d.mention}.` : ''}`,
       impact: "Ce code s'exécute chez chaque agent avec l'accès au document que le widget a obtenu. Le dépôt audité ne dit rien de ce qui sera réellement servi : le contenu peut changer à tout moment. Sans `integrity`, le navigateur accepte n'importe quel remplacement — c'est le scénario de compromission de CDN, et il ne laisse aucune trace dans l'historique Git.",
-      remediation: "Embarquer la bibliothèque dans le dépôt (`vendor/`), la servir en relatif, et noter sa version et son origine dans le README. Si le chargement distant doit être conservé, figer la version dans l'URL et ajouter `integrity` et `crossorigin=\"anonymous\"`.",
+      remediation: !d.canal
+        ? "Embarquer la bibliothèque dans le dépôt (`vendor/`), la servir en relatif, et noter sa version et son origine dans le README. Si le chargement distant doit être conservé, figer la version dans l'URL et ajouter `integrity` et `crossorigin=\"anonymous\"`."
+        : d.obstacle === 'worker'
+          ? "Embarquer le module dans le dépôt (`vendor/`), l'importer en relatif, et noter sa version et son origine dans le README : c'est le seul moyen de le protéger dans un worker, où l'empreinte d'une import map ne s'applique pas."
+          : `Embarquer le module dans le dépôt (\`vendor/\`), l'importer en relatif, et noter sa version et son origine dans le README. Si l'import distant doit être conservé, figer la version dans l'URL et déclarer son adresse dans la clé \`integrity\` d'une import map de la page (\`{ "integrity": { "https://…": "sha384-…" } }\`)${d.obstacle === 'worker-non-resolu' ? " ; écrire aussi l'adresse du worker en littéral (`new Worker('./w.js')`), pour que l'audit établisse quel fichier il exécute" : ''}.`,
       referentiels: ['OWASP Top 10 A08:2021 — Software and Data Integrity Failures', 'ANSSI — Recommandations pour la sécurisation des sites web', 'Guide de contribution Grist.Gouv — « no unnecessary dependencies »'],
     }));
   }

@@ -9,7 +9,7 @@
  */
 import { parse } from 'acorn';
 import * as walk from 'acorn-walk';
-import { lirePage, integriteProtege } from './page-html.js';
+import { lirePage, integriteProtege, urlDe, urlDeCarte } from './page-html.js';
 
 /**
  * Extrait les unités de code JavaScript d'un fichier : le fichier entier pour
@@ -27,12 +27,14 @@ import { lirePage, integriteProtege } from './page-html.js';
  * la précède, null sinon) : ses références relatives se résolvent contre la
  * base du document, quand celles d'un fichier .js se résolvent contre son
  * propre emplacement.
- * @returns {Array<{chemin:string, source:string, positionDe:?Function, mention:?string, debutLigne:number, finLigne:number, inline:boolean, module:boolean, baseBrute:?string}>}
+ * `debut` est le décalage de la balise `<script>` dans la page (null pour un
+ * fichier .js) : l'ordre des balises dit quelle import map précède quel script.
+ * @returns {Array<{chemin:string, source:string, positionDe:?Function, mention:?string, debutLigne:number, finLigne:number, inline:boolean, module:boolean, baseBrute:?string, debut:?number}>}
  */
 export function unitesJs(fichier) {
   if (fichier.binaire || !fichier.contenu) return [];
   if (['.js', '.mjs', '.cjs', '.jsx'].includes(fichier.ext)) {
-    return [{ chemin: fichier.chemin, source: fichier.contenu, positionDe: null, mention: null, debutLigne: 1, finLigne: Infinity, inline: false, module: false, baseBrute: null }];
+    return [{ chemin: fichier.chemin, source: fichier.contenu, positionDe: null, mention: null, debutLigne: 1, finLigne: Infinity, inline: false, module: false, baseBrute: null, debut: null }];
   }
   if (!['.html', '.htm'].includes(fichier.ext)) return [];
 
@@ -43,7 +45,7 @@ export function unitesJs(fichier) {
     unites.push({
       chemin: fichier.chemin, source: s.texte, positionDe: s.positionDe, mention: s.mention,
       debutLigne: page.positionDe(s.debutContenu).ligne, finLigne: page.positionDe(s.finContenu).ligne,
-      inline: true, module: s.genre === 'module', baseBrute: s.baseBrute,
+      inline: true, module: s.genre === 'module', baseBrute: s.baseBrute, debut: s.debut,
     });
   }
   return unites;
@@ -182,31 +184,132 @@ export function estDynamique(noeud) {
 }
 
 /**
+ * Les cartes d'import de la page que Chromium applique, lues : `{ carte, s }`
+ * (`s` : l'entrée de `lirePage`, avec sa `baseBrute`), dans l'ordre du document.
+ * Une carte dont le JSON est invalide n'affirme rien.
+ */
+function cartesDeLaPage(contenu) {
+  const cartes = [];
+  for (const s of lirePage(contenu).scripts) {
+    if (!s.carteImport) continue;                                 // une carte que Chromium applique : contenu en clair, fermée, ni `src`, ni `href`
+    try { cartes.push({ carte: JSON.parse(s.texte), s }); } catch { /* JSON invalide : rien à affirmer */ }
+  }
+  return cartes;
+}
+
+/**
+ * Les adresses que les clés `integrity` des cartes d'une page protègent, en
+ * `href` d'URL absolue, avec le décalage (dans la page) de la carte qui les
+ * protège. Chaque clé est une adresse d'import map (`urlDeCarte`, relative à
+ * la base du document au moment où la carte est lue) et se compare résolue,
+ * comme Chromium 141 le fait : une clé dont l'hôte est en capitales ou qui
+ * porte un segment `/./` protège encore, une clé pour `U?v=1` ne protège pas
+ * `U`, une clé qui n'est pas une adresse (`x`) ne protège rien. Seule une
+ * valeur qui porte une empreinte bien formée (`integriteProtege`) protège :
+ * Chromium écrit en console qu'une valeur vide, `x`, `md5-…` ou `sha384-` est
+ * ignorée, et exécute. Deux clés d'une même carte qui se résolvent à la même
+ * adresse : la dernière s'applique ; deux cartes qui nomment la même adresse :
+ * la première s'applique, et une valeur vide ou mal formée d'une carte
+ * antérieure n'est pas remplacée par une valeur correcte d'une carte
+ * postérieure (mesuré dans Chromium 141, comme la spécification le veut).
+ */
+function adressesProtegees(cartes, cheminPage) {
+  const valeurs = new Map();                                       // href → { valeur, position } de la première carte qui nomme l'adresse
+  for (const { carte, s } of cartes) {
+    const integrites = carte && typeof carte.integrity === 'object' && carte.integrity ? carte.integrity : {};
+    const propres = new Map();
+    for (const [cle, valeur] of Object.entries(integrites)) {
+      const url = urlDeCarte(cle, s.baseBrute, cheminPage);
+      if (url && typeof valeur === 'string') propres.set(url.href, valeur);
+    }
+    for (const [href, valeur] of propres) if (!valeurs.has(href)) valeurs.set(href, { valeur, position: s.debut });
+  }
+  return new Map([...valeurs].filter(([, { valeur }]) => integriteProtege(valeur)).map(([href, { position }]) => [href, position]));
+}
+
+/**
+ * Les `<link rel="modulepreload">` d'une page, par adresse résolue (`href` d'URL
+ * absolue, contre la `<base>` qui précède le lien). Un tel lien charge le module à
+ * son adresse quand la balise est lue, et le module qu'un `import` ou un
+ * `<script type="module" src>` trouve ensuite est celui-là : mesuré dans Chromium 141
+ * (page seule et iframe), une carte lue après le lien n'y ajoute pas l'empreinte, et
+ * un attribut `integrity` du lien, même vide ou mal formé, l'emporte sur la carte pour
+ * ce chargement. Ni `preload`, ni `prefetch` ne font cela (mesuré : l'empreinte
+ * s'applique encore), ni un lien vers un fichier local (ses imports se résolvent plus
+ * tard, avec la carte). Un lien dans un `<template>` est inerte. Un lien dont
+ * l'attribut est une empreinte bien formée vérifie lui-même son chargement (mesuré :
+ * un module falsifié est refusé) : il n'est pas gardé.
+ * Deux liens par adresse suffisent à répondre en temps constant, quel que soit leur
+ * nombre : le premier sans empreinte valide (dans l'ordre du document), et le premier
+ * dont l'attribut est présent mais vide ou mal formé.
+ * @param {string} contenu la page
+ * @param {string} cheminPage son chemin dans le widget
+ * @returns {Map<string, { premier: object, attributMal: ?object }>} chaque lien : `{ debut, ligne, attribut }` (le décalage du lien dans la page, sa ligne, et s'il porte un attribut `integrity`)
+ */
+export function modulepreloadsDeLaPage(contenu, cheminPage) {
+  const parAdresse = new Map();
+  for (const r of lirePage(contenu).ressources) {
+    if (r.nom !== 'link' || r.dansTemplate) continue;
+    if (integriteProtege(r.attributs.get('integrity'))) continue;
+    for (const usage of r.usages) {
+      if (usage.genre !== 'modulepreload') continue;
+      const url = urlDe(usage.urls[0], r.baseBrute, cheminPage);
+      if (!url) continue;
+      const lien = { debut: r.debut, ligne: r.ligne, attribut: r.attributs.has('integrity') };
+      const vus = parAdresse.get(url.href) ?? { premier: lien, attributMal: null };
+      if (lien.attribut) vus.attributMal ??= lien;
+      parAdresse.set(url.href, vus);
+    }
+  }
+  return parAdresse;
+}
+
+/**
+ * Le premier `<link rel="modulepreload">` (dans l'ordre du document) qui charge le
+ * module sans que l'empreinte de la carte lue au décalage `carte` s'y applique : un
+ * lien lu avant la carte, ou un lien dont l'attribut `integrity` (présent, même
+ * vide) l'emporte sur la carte. Un lien qui vérifie lui-même son chargement (attribut
+ * bien formé) ne brise rien.
+ * @param {?{ premier: object, attributMal: ?object }} liens ceux de `modulepreloadsDeLaPage` pour cette adresse
+ * @param {number} carte le décalage de la carte qui porte l'empreinte
+ * @returns {?object} le lien, ou undefined
+ */
+export function lienQuiBriseLEmpreinte(liens, carte) {
+  if (!liens) return undefined;
+  if (liens.premier.attribut || liens.premier.debut < carte) return liens.premier;
+  return liens.attributMal ?? undefined;
+}
+
+/**
  * Extrait les entrées d'un `<script type="importmap">` : chaque spécificateur
  * mappé (`imports`, et chaque bloc de `scopes`) avec l'URL cible et si elle
  * est couverte par la clé `integrity` de premier niveau (WHATWG — Import
- * Maps). `sri` n'est vrai que si la valeur de la clé est une empreinte bien
- * formée (`integriteProtege`) : dans Chromium 141, une valeur vide, `x`,
- * `md5-…`, `sha384-` ou `null` laisse charger et exécuter n'importe quel
- * module, comme pour l'attribut d'un `<script>`. Ce contenu est du JSON, jamais exécuté comme du JS (`unitesJs`
- * l'exclut explicitement), donc invisible à toute règle qui lit du JS ou qui
- * ne regarde que l'attribut `src` d'un `<script>` : une bibliothèque résolue
- * par un import nu après une entrée d'import map est pourtant chargée à
- * l'exécution comme n'importe quel `<script src>`.
- * @returns {Array<{spec:string, url:string, sri:boolean, index:number, baseBrute:?string, mention:?string, dansTemplate:boolean, seulementStandard:boolean}>}
+ * Maps). `sri` n'est vrai que si l'adresse, résolue contre `cheminPage`, est
+ * protégée par la carte de l'entrée ou par une carte qui la précède (voir
+ * `adressesProtegees`) : une empreinte lue après l'entrée laisse le temps à un
+ * chargement de commencer sans elle ; et si aucun `<link rel="modulepreload">` de
+ * l'adresse ne l'a chargée sans elle (voir `modulepreloadsDeLaPage`). Ce contenu est du JSON, jamais exécuté
+ * comme du JS (`unitesJs` l'exclut explicitement), donc invisible à toute règle
+ * qui lit du JS ou qui ne regarde que l'attribut `src` d'un `<script>` : une
+ * bibliothèque résolue par un import nu après une entrée d'import map est
+ * pourtant chargée à l'exécution comme n'importe quel `<script src>`.
+ * @param {string} contenu la page
+ * @param {string} [cheminPage] son chemin dans le widget, contre lequel les clés et les adresses relatives se résolvent
+ * @returns {Array<{spec:string, url:string, sri:boolean, carte:?number, lien:?object, index:number, baseBrute:?string, mention:?string, dansTemplate:boolean, seulementStandard:boolean}>}
+ *   `carte` : le décalage de la carte dont la clé `integrity` porte une empreinte bien formée de cette adresse (undefined : aucune) ;
+ *   `lien` : le `<link rel="modulepreload">` qui a chargé le module sans elle (voir `lienQuiBriseLEmpreinte`) ;
  *   `index` est le décalage du `<script>` dans `contenu`, pour que l'appelant
  *   calcule fichier/ligne comme pour les autres motifs HTML ; `baseBrute` est
  *   le `href` brut de la `<base>` qui précède cette carte (les URL relatives
  *   `./`, `../` et `/` se résolvent contre elle, avec `urlDe`) ; `mention`
  *   dit ce que le constat doit préciser (gabarit inerte, standard seul).
  */
-export function extraireImportMaps(contenu) {
+export function extraireImportMaps(contenu, cheminPage = '') {
+  const cartes = cartesDeLaPage(contenu);
+  const protegees = adressesProtegees(cartes, cheminPage);
+  const liens = modulepreloadsDeLaPage(contenu, cheminPage);
   const entrees = [];
-  for (const s of lirePage(contenu).scripts) {
-    if (!s.carteImport) continue;                                 // une carte que Chromium applique : contenu en clair, fermée, ni `src`, ni `href`
-    let carte;
-    try { carte = JSON.parse(s.texte); } catch { continue; }      // JSON invalide : rien à affirmer
-    const integrites = carte && typeof carte.integrity === 'object' && carte.integrity ? carte.integrity : {};
+  for (const { carte, s } of cartes) {
     const parUrl = new Map();                                    // dédoublonne : plusieurs spécificateurs peuvent viser la même URL
     const ajouter = (table) => {
       if (!table || typeof table !== 'object') return;
@@ -215,8 +318,59 @@ export function extraireImportMaps(contenu) {
     ajouter(carte?.imports);
     for (const portee of Object.values(carte?.scopes ?? {})) ajouter(portee);
     for (const [url, spec] of parUrl) {
-      entrees.push({ spec, url, sri: integriteProtege(Object.prototype.hasOwnProperty.call(integrites, url) ? integrites[url] : undefined), index: s.debut, baseBrute: s.baseBrute, mention: s.mention, dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard });
+      const resolue = urlDeCarte(url, s.baseBrute, cheminPage);
+      const carteDeLEmpreinte = resolue === null ? undefined : protegees.get(resolue.href);
+      const lien = carteDeLEmpreinte === undefined ? undefined : lienQuiBriseLEmpreinte(liens.get(resolue.href), carteDeLEmpreinte);
+      // Une entrée ne se charge qu'après la carte qui la déclare : son empreinte compte si la carte qui la porte est celle-ci ou une carte antérieure, et si aucun lien `modulepreload` n'a chargé le module sans elle.
+      entrees.push({ spec, url, sri: carteDeLEmpreinte !== undefined && carteDeLEmpreinte <= s.debut && !lien, carte: carteDeLEmpreinte, lien, index: s.debut, baseBrute: s.baseBrute, mention: s.mention, dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard });
     }
   }
   return entrees;
+}
+
+/**
+ * Ce que le code d'une unité charge à une adresse `http:` ou `https:` : `import`
+ * et `export … from` statiques, `import()` à littéral. Rend les visiteurs à
+ * ajouter au parcours de l'AST de l'unité (`walk.simple`) ; `trouve` reçoit
+ * `{ noeud, canal, valeur, url }` pour chaque chargement : `valeur` est l'adresse
+ * telle qu'elle est écrite, `url` l'adresse résolue (`canal` : `import()
+ * distant`, `import statique` ou `export … from`). Une adresse relative se
+ * résout contre la base du document pour un script écrit dans la page (sous une
+ * `<base>` externe, elle mène chez un tiers), contre l'emplacement du fichier pour
+ * un fichier ; un nom nu n'est pas une adresse (seule une import map en fait
+ * une, lue ailleurs). Un `import` statique d'un script classique de la page est
+ * une erreur de syntaxe : rien n'y est chargé, rien n'est dit.
+ * Un seul lecteur pour C-EXFIL-01 (la destination) et E-DEP-01 (l'intégrité) :
+ * ce que l'un voit, l'autre le voit.
+ */
+export function visiteursDImports({ unite, fichier }, trouve) {
+  const importer = (noeud, source, canal) => {
+    if (canal !== 'import() distant' && unite.inline && !unite.module) return;
+    const valeur = chaineLitterale(source);
+    if (valeur === null) return;
+    const url = urlDeCarte(valeur, unite.inline ? unite.baseBrute : null, fichier.chemin);
+    if (url && /^https?:$/.test(url.protocol)) trouve({ noeud, canal, valeur, url });
+  };
+  return {
+    ImportExpression(n) { importer(n, n.source, 'import() distant'); },
+    ImportDeclaration(n) { importer(n, n.source, 'import statique'); },
+    ExportAllDeclaration(n) { importer(n, n.source, 'export … from'); },
+    ExportNamedDeclaration(n) { if (n.source) importer(n, n.source, 'export … from'); },
+  };
+}
+
+/**
+ * Les adresses que l'empreinte des import maps d'une page protège (voir
+ * `adressesProtegees`), avec le décalage de la carte qui les protège.
+ * Chromium applique l'empreinte au module qui se charge à cette adresse dans
+ * le document de la page, quel que soit le chemin (`<script type=module src>`,
+ * `import`, `export … from`, `import()`), à condition que le chargement
+ * commence après la lecture de la carte ; jamais dans un worker. L'appelant
+ * compare ce décalage à celui de la balise qui charge le module.
+ * @param {string} contenu la page
+ * @param {string} cheminPage son chemin dans le widget
+ * @returns {Map<string, number>} `href` d'URL absolue → décalage de la carte dans la page
+ */
+export function adressesProtegeesParEmpreinte(contenu, cheminPage) {
+  return adressesProtegees(cartesDeLaPage(contenu), cheminPage);
 }
