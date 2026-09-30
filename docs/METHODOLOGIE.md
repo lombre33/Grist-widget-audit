@@ -95,8 +95,10 @@ règle cherche deux choses, et ne les mélange pas.
   autre rôle (`service_role` compris), une charge sans rôle ou qui n'est pas du
   JSON, un rôle qui n'est pas au premier niveau, le dernier de deux rôles qui
   se contredisent, laissent le jeton critique et bloquant. L'émetteur (`iss`) et
-  le rôle sont dits dans la preuve, l'émetteur masqué comme toute valeur. Les
-  clés d'exemple de la documentation d'AWS ne disent rien.
+  le rôle sont dits en clair dans la preuve (l'émetteur ne porte aucun secret ;
+  le widget le choisit, il est donc borné à cent caractères et rendu bien
+  formé), le jeton seul reste masqué. Les clés d'exemple de la documentation
+  d'AWS ne disent rien.
 - **Un « nom = valeur »** : un littéral affecté à un nom dont le **dernier mot**
   est un secret (`apiKey`, `DB_PASSWORD`, `authToken`, `mot_de_passe`), car
   `tokenUrl` ou `passwordLabel` disent ce que la valeur décrit, non ce

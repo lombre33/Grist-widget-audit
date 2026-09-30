@@ -92,6 +92,14 @@ function chargeDeRoleAnonyme(jeton) {
   return charge?.role === 'anon' ? charge : null;
 }
 
+/**
+ * L'émetteur (`iss`) d'un jeton de rôle anonyme : un nom de projet ou une adresse, qui ne porte aucun secret et se dit en clair. C'est un texte que le
+ * widget choisit : il est borné (cent caractères, puis `…`), comme le nom d'une affectation, et rendu bien formé (une paire de substitution coupée en
+ * deux, ou écrite seule par un échappement `\ud83d`, devient U+FFFD : JSON, HTML et Markdown savent tous la montrer).
+ */
+const LONGUEUR_D_EMETTEUR = 100;
+const emetteurDit = (iss) => (iss.length > LONGUEUR_D_EMETTEUR ? `${iss.slice(0, LONGUEUR_D_EMETTEUR)}…` : iss).toWellFormed();
+
 function lireJwt(jeton) {
   const charge = chargeDeRoleAnonyme(jeton);
   if (!charge) return null;
@@ -101,8 +109,8 @@ function lireJwt(jeton) {
     constat: "Un jeton JWT dont la charge utile dit « role: anon » est présent. C'est la clé que des fournisseurs (Supabase) publient pour être embarquée dans une page : ce n'est pas un secret, et elle donne les droits du rôle anonyme de son projet.",
     impact: "Quiconque ouvre le widget lit la clé et peut l'employer depuis un autre site, avec les droits du rôle anonyme : sa seule protection est ce que le fournisseur accorde à ce rôle (politiques d'accès par ligne, API exposées, quotas), jamais son secret.",
     remediation: "Vérifier chez le fournisseur que le rôle anonyme ne peut lire ou écrire que ce que tout visiteur du widget peut lire ou écrire (par exemple, les politiques d'accès par ligne activées sur chaque table), et que son quota est plafonné.",
-    // L'émetteur est masqué comme toute valeur lue ; le rôle est ce qui décide, il se dit en clair.
-    preuve: { role: 'anon', ...(typeof charge.iss === 'string' && charge.iss !== '' ? { emetteur: masquer(charge.iss) } : {}) },
+    // Le rôle est ce qui décide, l'émetteur dit de quel projet vient la clé : tous deux en clair, le jeton seul reste masqué.
+    preuve: { role: 'anon', ...(typeof charge.iss === 'string' && charge.iss !== '' ? { emetteur: emetteurDit(charge.iss) } : {}) },
   };
 }
 

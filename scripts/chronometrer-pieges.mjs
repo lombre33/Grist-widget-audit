@@ -76,6 +76,13 @@ const CAS = [
   ['analyse : 5 000 imports sans liaison et 5 000 workers', 'analyse', () => ({ 'index.html': `${TETE}<script type="module">${'import "./a.js";\n'.repeat(5000)}${'new Worker("w.js");\n'.repeat(5000)}</script>` })],
   ['analyse : 3 Mio de <script> sur une ligne', 'analyse', () => ({ 'index.html': TETE + '<script>a</script>'.repeat(3 * MIO / 18) })],
 
+  // --- analyse complète : le repli par expressions régulières d'un code qu'acorn ne lit pas (la suite se termine par un point ou
+  //     une parenthèse qui ne ferme jamais). Deux tailles : un temps qui quadruple quand la taille double est quadratique.
+  ['analyse : 100 000 fois « a. » dans un fichier que l\'analyse ne lit pas (200 Kio)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': 'a.'.repeat(100000) })],
+  ['analyse : 200 000 fois « a. » dans un fichier que l\'analyse ne lit pas (400 Kio)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': 'a.'.repeat(200000) })],
+  ['analyse : 14 000 fois « importScripts( » sans parenthèse fermante (200 Kio)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': 'importScripts('.repeat(14000) })],
+  ['analyse : 28 000 fois « importScripts( » sans parenthèse fermante (400 Kio)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': 'importScripts('.repeat(28000) })],
+
   // --- analyse complète : CSS (lecteur, conversion en constats, extraits, numéros de ligne)
   ['analyse : .css, 40 000 url() externes sur une ligne', 'analyse', () => ({ 'index.html': `${TETE}<link rel=stylesheet href=a.css>`, 'a.css': N(40000, (i) => `.a${i}{background:url(https://e.example/${i}.png)}`) })],
   ['analyse : .css, 40 000 url() externes, une par ligne', 'analyse', () => ({ 'index.html': `${TETE}<link rel=stylesheet href=a.css>`, 'a.css': N(40000, (i) => `.a${i}{background:url(https://e.example/${i}.png)}\n`) })],

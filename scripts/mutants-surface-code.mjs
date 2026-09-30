@@ -25,7 +25,7 @@ const QA = 'src/regles/a-qualite.js';
 const QB = 'src/regles/b-lisibilite.js';
 const H = 'src/rapport/html.js';
 const M = 'src/rapport/markdown.js';
-const TESTS = ['tests/surface-code-charge.test.mjs', 'tests/surface-references.test.mjs'];
+const TESTS = ['tests/surface-code-charge.test.mjs', 'tests/surface-references.test.mjs', 'tests/inventaire-repli-workers.test.mjs'];
 
 // [fichier, chaîne d'origine (une seule occurrence), chaîne mutée, libellé]
 const MUTANTS = [];
@@ -120,7 +120,13 @@ MUTANTS.push(
   dansLigne(I, 'source.matchAll(/\\bimport\\s+["\']', 'module(m[1]);', 'void m;', 'illisible : import sans liaison n\'est plus suivi'),
   dansLigne(I, 'contenu.matchAll(new RegExp(', 'refs.push(duWorker(relatifAuDocument(m[1] ?? m[2])));', 'void m;', "illisible : new Worker('…') n'est plus suivi", 'URL'),
   dansLigne(I, String.raw`URL\\s*\\(`, 'refs.push(duWorker(relatifAuDocument(m[1] ?? m[2])));', 'void m;', "illisible : new Worker(new URL('…')) n'est plus suivi"),
-  dansLigne(I, 'for (const t of m[1].matchAll(', 'refs.push(duWorker(t[1]));', 'void t;', 'illisible : importScripts(…) n\'est plus suivi'),
+  dansLigne(I, 'for (const t of contenu.slice(entete.lastIndex, fin).matchAll(', 'refs.push(duWorker(t[1]));', 'void t;', 'illisible : importScripts(…) n\'est plus suivi'),
+  dansLigne(I, 'for (const t of contenu.slice(entete.lastIndex, fin).matchAll(', 'contenu.slice(entete.lastIndex, fin)', 'contenu.slice(entete.lastIndex)', 'illisible : les arguments d\'importScripts( vont jusqu\'à la fin du texte'),
+  dansLigne(I, 'const fin = contenu.indexOf(', "contenu.indexOf(')', entete.lastIndex)", "contenu.indexOf(')')", 'illisible : la parenthèse qui ferme importScripts( est cherchée depuis le début du texte'),
+  dansLigne(I, 'if (fin < 0) break;', 'if (fin < 0) break;', '', 'illisible : importScripts( sans parenthèse fermante lit quand même ses arguments'),
+  dansLigne(I, 'entete.lastIndex = fin + 1;', 'entete.lastIndex = fin + 1;', '', 'illisible : un importScripts( dans les arguments d\'un autre est lu deux fois'),
+  dansLigne(I, 'const entete = ', String.raw`\s*\(`, String.raw`\s*`, 'illisible : importScripts sans parenthèse est lu comme un appel'),
+  dansLigne(I, 'const entete = ', String.raw`/\bimportScripts`, String.raw`/importScripts`, 'illisible : monimportScripts( est lu comme importScripts('),
 );
 
 // --- l'exemption du code vendorisé et des dossiers exclus ne vaut que pour A et B -------------------------------------

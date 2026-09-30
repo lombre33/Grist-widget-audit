@@ -742,10 +742,16 @@ function referencesWorkerParRegex(contenu) {
   const refs = [];
   for (const m of contenu.matchAll(new RegExp(`\\bnew\\s+${ALIAS_GLOBAL}(?:Worker|SharedWorker)\\s*\\(\\s*(?:["']([^"']+)["']|\`([^\`$]+)\`)`, 'g'))) refs.push(duWorker(relatifAuDocument(m[1] ?? m[2])));
   for (const m of contenu.matchAll(new RegExp(`\\bnew\\s+${ALIAS_GLOBAL}(?:Worker|SharedWorker)\\s*\\(\\s*new\\s+${ALIAS_GLOBAL}URL\\s*\\(\\s*(?:["']([^"']+)["']|\`([^\`$]+)\`)\\s*[,)]`, 'g'))) refs.push(duWorker(relatifAuDocument(m[1] ?? m[2])));
-  for (const m of contenu.matchAll(/\bimportScripts\s*\(([^)]*)\)/g)) {
-    for (const t of m[1].matchAll(/["']([^"']+)["']/g)) refs.push(duWorker(t[1]));
+  // `importScripts(` puis tout jusqu'à la première `)`. `importScripts\s*\(([^)]*)\)` relit le reste du texte à chaque `importScripts(` quand aucune parenthèse ne ferme (quadratique) : l'en-tête se cherche seul, la parenthèse fermante par `indexOf`, et la recherche reprend après elle, comme le faisait `matchAll`.
+  const entete = /\bimportScripts\s*\(/g;
+  while (entete.exec(contenu) !== null) {
+    const fin = contenu.indexOf(')', entete.lastIndex);
+    if (fin < 0) break;                                            // plus aucune `)` : aucun des appels suivants ne se ferme non plus
+    for (const t of contenu.slice(entete.lastIndex, fin).matchAll(/["']([^"']+)["']/g)) refs.push(duWorker(t[1]));
+    entete.lastIndex = fin + 1;
   }
-  for (const m of contenu.matchAll(/(?:^|[^\w$])(?:\w+\.)*(?:serviceWorker\.register|\w*[Ww]orklet\.addModule)\s*\(\s*["']([^"']+)["']/g)) refs.push(duWorker(relatifAuDocument(m[1])));
+  // Sans le préfixe `(?:\w+\.)*` de l'ancienne forme : chaque point qui précède est déjà une frontière (`[^\w$]`), il ne changeait rien à ce qui est trouvé, et il relisait toute la chaîne `a.a.a.…` à chaque point (quadratique).
+  for (const m of contenu.matchAll(/(?:^|[^\w$])(?:serviceWorker\.register|\w*[Ww]orklet\.addModule)\s*\(\s*["']([^"']+)["']/g)) refs.push(duWorker(relatifAuDocument(m[1])));
   return refs;
 }
 

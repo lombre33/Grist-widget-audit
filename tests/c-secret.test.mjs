@@ -13,6 +13,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { extname } from 'node:path';
 import { auditer, page } from './aide-surface.mjs';
+import { noter } from '../src/moteur/notation.js';
+import { genererHtml } from '../src/rapport/html.js';
+import { genererMarkdown } from '../src/rapport/markdown.js';
+import { genererJson } from '../src/rapport/json.js';
 import {
   FORMATS, formatsDans, motsDuNom, nomEvoqueUnSecret, motsDeLaValeur, classesDe, entropieDe, estGeneree, jugerValeur,
   estFichierDeConfiguration, affectationsDeConfiguration, analyserSecrets, masquer,
@@ -199,19 +203,19 @@ const SIGNATURE_JWT = base64url('signature sans valeur, pour les essais');
 const jwtDeCharge = (charge) => `${ENTETE_JWT}.${base64url(typeof charge === 'string' ? charge : JSON.stringify(charge))}.${SIGNATURE_JWT}`;
 const EMETTEUR_LONG = 'https://abcdefghijklmnopqrst.supabase.co/auth/v1';
 
-test('un JWT dont la charge utile dit role anon est une clé publique par conception : une information, avec son rôle en clair et son émetteur masqué', async () => {
+test('un JWT dont la charge utile dit role anon est une clé publique par conception : une information, avec son rôle et son émetteur en clair, le jeton seul masqué', async () => {
   const cas = [
-    { charge: { iss: 'supabase', ref: 'abcdefghijklmnopqrst', role: 'anon', iat: 1700000000, exp: 2000000000 }, emetteur: '*** (8 caractères)' },
-    { charge: JSON.stringify({ iss: EMETTEUR_LONG, role: 'anon' }, null, 2), emetteur: masquer(EMETTEUR_LONG), enClair: EMETTEUR_LONG },
-    { charge: '{"iss" : "supabase-demo" , "role" : "anon"}', emetteur: masquer('supabase-demo'), enClair: 'supabase-demo' },
-    { charge: { iss: 'émetteur-de-démonstration', role: 'anon' }, emetteur: masquer('émetteur-de-démonstration'), enClair: 'émetteur-de-démonstration' },
+    { charge: { iss: 'supabase', ref: 'abcdefghijklmnopqrst', role: 'anon', iat: 1700000000, exp: 2000000000 }, emetteur: 'supabase' },
+    { charge: JSON.stringify({ iss: EMETTEUR_LONG, role: 'anon' }, null, 2), emetteur: EMETTEUR_LONG },
+    { charge: '{"iss" : "supabase-demo" , "role" : "anon"}', emetteur: 'supabase-demo' },
+    { charge: { iss: 'émetteur-de-démonstration', role: 'anon' }, emetteur: 'émetteur-de-démonstration' },
     { charge: '{"role":"\\u0061non"}' },
     { charge: ' \r\n\t{"role":"anon"}\r\n\t ' },
     { charge: { role: 'anon' } },
     { charge: { iss: 12345, role: 'anon' } },
     { charge: { iss: '', role: 'anon' } },
   ];
-  for (const { charge, emetteur, enClair } of cas) {
+  for (const { charge, emetteur } of cas) {
     const jeton = jwtDeCharge(charge);
     const dit = typeof charge === 'string' ? charge : JSON.stringify(charge);
     const a = await auditer({ 'app.js': `var cle = '${jeton}';\n` });
@@ -227,7 +231,40 @@ test('un JWT dont la charge utile dit role anon est une clé publique par concep
     assert.match(c.remediation, /politiques d'accès par ligne/);
     assert.deepEqual(c.preuve, { forme: 'fournisseur', fournisseur: 'jwt', publique: true, longueur: jeton.length, role: 'anon', ...(emetteur ? { emetteur } : {}) }, dit);
     assert.equal(c.extrait, masquer(jeton), dit);
-    sansFuite(a, enClair ? [jeton, enClair] : [jeton]);
+    sansFuite(a, [jeton]);
+  }
+});
+
+test('l\'émetteur d\'un JWT de rôle anonyme est un texte que le widget choisit : dit en clair, borné à cent caractères, rendu bien formé, et aucun rapport ne le rend tel quel', async () => {
+  const cent = 'é'.repeat(100);
+  const HOSTILE = '<img src=x onerror=alert(1)>"\'`|\n# titre\r\n| a | b |\u0000\u001b[31m</script><!--';
+  const cas = [
+    ['cent caractères : dit en entier', JSON.stringify({ iss: cent, role: 'anon' }), cent],
+    ['cent un : coupé à cent, puis « … »', JSON.stringify({ iss: `${cent}x`, role: 'anon' }), `${cent}…`],
+    ['douze mille : coupé à cent, le jeton reste un JWT', JSON.stringify({ iss: 'a'.repeat(12000), role: 'anon' }), `${'a'.repeat(100)}…`],
+    ['une paire de substitution à cheval sur la coupe : sa moitié devient U+FFFD', JSON.stringify({ iss: `${'a'.repeat(99)}😀b`, role: 'anon' }), `${'a'.repeat(99)}�…`],
+    ['une paire entière avant la coupe : gardée', JSON.stringify({ iss: `${'a'.repeat(98)}😀b`, role: 'anon' }), `${'a'.repeat(98)}😀…`],
+    ['une moitié de paire écrite seule par un échappement : U+FFFD', '{"iss":"x\\ud83dy","role":"anon"}', 'x�y'],
+    ['du balisage, des guillemets, des retours à la ligne et des caractères de contrôle : des données', JSON.stringify({ iss: HOSTILE, role: 'anon' }), HOSTILE],
+  ];
+  for (const [nom, charge, attendu] of cas) {
+    const jeton = jwtDeCharge(charge);
+    const a = await auditer({ 'app.js': `var cle = '${jeton}';\n` });
+    const [c, ...autres] = C_SECRET(a);
+    assert.equal(autres.length, 0, nom);
+    assert.equal(etat(c), 'info', nom);
+    assert.equal(c.preuve.emetteur, attendu, nom);
+    assert.ok(attendu.isWellFormed(), nom);
+    // Les quatre rapports : le JSON porte l'émetteur comme une donnée (lu en retour à l'identique) ; ni HTML ni Markdown ne rendent la preuve, et le balisage de l'émetteur n'y est jamais à nu.
+    const notation = noter(a.constats, new Set(['D']));
+    const rapport = { ctx: a.ctx, notation, meta: { nomDepot: 'w', version: '0' } };
+    const dansLeJson = JSON.parse(genererJson(rapport)).axes.C.constats.find((x) => x.regle === 'C-SECRET-01');
+    assert.equal(dansLeJson.preuve.emetteur, attendu, `${nom} : le JSON`);
+    for (const [format, sortie] of [['HTML', genererHtml(rapport)], ['Markdown', genererMarkdown(rapport)]]) {
+      assert.ok(!sortie.includes('<img src=x'), `${nom} : ${format} rend le balisage de l'émetteur tel quel`);
+      assert.ok(!sortie.includes('</script><!--'), `${nom} : ${format} rend la fin de script de l'émetteur telle quelle`);
+      assert.ok(!sortie.includes('\n# titre'), `${nom} : ${format} rend le titre de l'émetteur tel quel`);
+    }
   }
 });
 
