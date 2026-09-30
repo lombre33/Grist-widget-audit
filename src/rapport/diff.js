@@ -33,7 +33,11 @@ export function comparerRapports(ancien, nouveau) {
   for (const code of codesAxes) {
     const sa = ancien.axes?.[code]?.score ?? null;
     const sn = nouveau.axes?.[code]?.score ?? null;
-    deltaParAxe[code] = { avant: sa, apres: sn, delta: sa !== null && sn !== null ? sn - sa : null };
+    deltaParAxe[code] = {
+      avant: sa, apres: sn, delta: sa !== null && sn !== null ? sn - sa : null,
+      // Un 0 que le widget impose en empêchant la mesure n'est pas un 0 mesuré : le dire des deux côtés.
+      empecheAvant: Boolean(ancien.axes?.[code]?.empeche), empecheApres: Boolean(nouveau.axes?.[code]?.empeche),
+    };
   }
 
   return {
@@ -68,8 +72,12 @@ export function genererDiffMarkdown(diff, { ancienChemin, nouveauChemin } = {}) 
   l.push('\n## Score par axe\n');
   l.push('| Axe | Avant | Après | Δ |');
   l.push('|---|---|---|---|');
+  const marque = (note, empeche) => `${note ?? '—'}${empeche ? ' ⛔' : ''}`;
   for (const [code, d] of Object.entries(diff.deltaParAxe)) {
-    l.push(`| ${code} | ${d.avant ?? '—'} | ${d.apres ?? '—'} | ${d.delta === null ? '—' : `${signe(d.delta)}${d.delta}`} |`);
+    l.push(`| ${code} | ${marque(d.avant, d.empecheAvant)} | ${marque(d.apres, d.empecheApres)} | ${d.delta === null ? '—' : `${signe(d.delta)}${d.delta}`} |`);
+  }
+  if (Object.values(diff.deltaParAxe).some((d) => d.empecheAvant || d.empecheApres)) {
+    l.push('\n⛔ : le widget empêche de mesurer cet axe, qui est noté 0 ; ce 0 n\'est pas le résultat d\'une mesure.');
   }
 
   l.push(`\n## Constats corrigés (${diff.corriges.length})\n`);

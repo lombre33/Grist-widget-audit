@@ -32,13 +32,13 @@ const MUTANTS = [
   [L, 'if (v.length > w.length) retires.push(', 'if (v.length > w.length && w.length === 0) retires.push(', 'multiplicité : retiré seulement si absent'],
   [L, 'if (w.length > v.length) ajoutes.push(', 'if (w.length > v.length && v.length === 0) ajoutes.push(', 'multiplicité : ajouté seulement si absent'],
   [L, 'else if (v.length === w.length) {', 'else {', 'texte comparé même en nombre différent'],
-  [L, "const lire = (l) => l.map((c) => JSON.stringify(c[champ] ?? null)).sort().join('\\n');", "const lire = (l) => l.map((c) => JSON.stringify(c[champ] ?? null)).join('\\n');", 'texte : dépend de l\'ordre des occurrences'],
-  [L, "const lire = (l) => l.map((c) => JSON.stringify(c[champ] ?? null)).sort().join('\\n');", "const lire = (l) => l.map((c) => JSON.stringify(c[champ])).sort().join('\\n');", 'texte : absent ≠ null'],
-  [L, "const lire = (l) => l.map((c) => JSON.stringify(c[champ] ?? null)).sort().join('\\n');", 'const lire = (l) => JSON.stringify(l[0][champ] ?? null);', 'texte : première occurrence seulement'],
-  ...['constat', 'impact', 'remediation', 'extrait', 'confiance', 'mesurePartielle'].map((champ) => [
+  [L, "const lire = (l) => l.map((c) => JSON.stringify(valeurLue(c, champ))).sort().join('\\n');", "const lire = (l) => l.map((c) => JSON.stringify(valeurLue(c, champ))).join('\\n');", 'texte : dépend de l\'ordre des occurrences'],
+  [L, "const lire = (l) => l.map((c) => JSON.stringify(valeurLue(c, champ))).sort().join('\\n');", "const lire = (l) => l.map((c) => JSON.stringify(c[champ])).sort().join('\\n');", 'texte : absent ≠ null'],
+  [L, "const lire = (l) => l.map((c) => JSON.stringify(valeurLue(c, champ))).sort().join('\\n');", 'const lire = (l) => JSON.stringify(valeurLue(l[0], champ));', 'texte : première occurrence seulement'],
+  ...['constat', 'impact', 'remediation', 'extrait', 'confiance', 'mesurePartielle', 'axesEmpeches'].map((champ) => [
     L,
-    "export const CHAMPS_LUS = ['constat', 'impact', 'remediation', 'extrait', 'confiance', 'mesurePartielle'];",
-    `export const CHAMPS_LUS = [${['constat', 'impact', 'remediation', 'extrait', 'confiance', 'mesurePartielle'].filter((c) => c !== champ).map((c) => `'${c}'`).join(', ')}];`,
+    "export const CHAMPS_LUS = ['constat', 'impact', 'remediation', 'extrait', 'confiance', 'mesurePartielle', 'axesEmpeches'];",
+    `export const CHAMPS_LUS = [${['constat', 'impact', 'remediation', 'extrait', 'confiance', 'mesurePartielle', 'axesEmpeches'].filter((c) => c !== champ).map((c) => `'${c}'`).join(', ')}];`,
     `champs lus : sans ${champ}`,
   ]),
   [L, "identique: notesAvant === notesApres && !retires.length && !ajoutes.length && !textes.length,", "identique: notesAvant === notesApres && !retires.length && !ajoutes.length,", 'identique : textes ignorés'],
@@ -49,7 +49,7 @@ const MUTANTS = [
   [L, '${rapport.scoreGlobal}', '', 'notes : sans le score global'],
   [L, '${rapport.verdict} ', '', 'notes : sans le verdict'],
   [L, "a.score === null ? '—' : a.score", 'a.score', 'notes : axe non exécuté écrit null'],
-  [L, 'Object.entries(rapport.axes).map(([code, a]) => `${code}=${a.score === null ? \'—\' : a.score}`)', 'Object.entries(rapport.axes).slice(0, 5).map(([code, a]) => `${code}=${a.score === null ? \'—\' : a.score}`)', 'notes : le dernier axe ignoré'],
+  [L, 'const axes = Object.entries(rapport.axes)', 'Object.entries(rapport.axes)', 'Object.entries(rapport.axes).slice(0, 5)', 'notes : le dernier axe ignoré'],
 ];
 const { partie, restants } = lireArguments(process.argv.slice(2));
 const filtre = restants[0] ? new RegExp(restants[0]) : null;

@@ -40,7 +40,11 @@ export function ordonnancerCorrections(notation) {
       // de parcours départage, ce qui reste stable et déterministe.
       const pire = [...constatsRegle].sort((a, b) => SEVERITES[b.severite].rang - SEVERITES[a.severite].rang)[0];
       const scoreSansCetteRegle = noterAxe(Math.max(0, axe.penaliteBrute - d.penalite));
-      const gainAxe = scoreSansCetteRegle - axe.score;
+      // Un axe que le widget empêche de mesurer vaut 0 : retirer une règle de cet axe n'y change rien tant que la cause
+      // reste, et la cause, elle, rend à chaque axe qu'elle est seule à tenir à 0 ce qu'il vaut sur ce qui a pu être lu.
+      const retablis = axesRetablisPar(notation, d.regle);
+      let gainPondere = (axe.empeche ? 0 : scoreSansCetteRegle - axe.score) * axe.poids;
+      for (const x of retablis) gainPondere += noterAxe(Math.max(0, x.penaliteBrute - (x.code === axe.code ? d.penalite : 0))) * x.poids;
       items.push({
         regle: d.regle,
         axe: axe.code,
@@ -56,7 +60,8 @@ export function ordonnancerCorrections(notation) {
         // série. Qualifier explicitement évite l'ambiguïté sans changer le
         // titre lui-même.
         titre: (pire?.titre ?? d.regle) + (d.occurrences > 1 ? ' (pire cas)' : ''),
-        gainGlobalEstime: Math.round(((gainAxe * axe.poids) / poidsTotal) * 10) / 10,
+        gainGlobalEstime: Math.round((gainPondere / poidsTotal) * 10) / 10,
+        retabliMesure: retablis.map((x) => x.code),
         effortEstime: null, // pas encore de données : à charge du consommateur d'afficher « non estimé »
         hotes: [...new Set(constatsRegle.flatMap(hotesDe))],
         concerneAussi: [],
@@ -90,6 +95,14 @@ export function ordonnancerCorrections(notation) {
   );
 
   return items;
+}
+
+/**
+ * Les axes notés 0 parce que le widget en empêche la mesure, et qu'une correction de la règle `regle` rétablirait :
+ * ceux dont TOUTES les causes sont des constats de cette règle (un axe qu'une autre règle empêche aussi reste à 0).
+ */
+function axesRetablisPar(notation, regle) {
+  return Object.values(notation.parAxe).filter((x) => x.empeche && x.causes.every((c) => c.regle === regle));
 }
 
 /**

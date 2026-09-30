@@ -734,7 +734,7 @@ export async function auditDynamique(ctx, options = {}) {
       const requetesTierces = brut.requetes.length;
       const observe = `${requetesTierces} requête(s) vers un domaine tiers, ${brut.consoles.length} message(s) de console, ${brut.erreursPage.length} erreur(s) de page`;
       constats.push(constat({
-        regle: 'D-TIMEOUT-01', axe: 'D', severite: 'critique', bloquant: true, confiance: 'prouve', mesurePartielle: true,
+        regle: 'D-TIMEOUT-01', axe: 'D', severite: 'critique', bloquant: true, confiance: 'prouve', axesEmpeches: ['D', 'F'],
         titre: delaiDepasse === 'chargement'
           ? `Le widget n'a pas fini de charger dans le délai imparti (${secondes} s) : l'analyse dynamique n'a pas pu l'observer`
           : `Le scénario de test n'a pas terminé dans le délai imparti (${secondes} s) : l'analyse dynamique n'a pas pu le mener à bout`,

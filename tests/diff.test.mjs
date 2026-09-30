@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { comparerRapports } from '../src/rapport/diff.js';
+import { comparerRapports, genererDiffMarkdown } from '../src/rapport/diff.js';
 
 function rapport(scoreGlobal, verdict, constatsParAxe) {
   const axes = {};
@@ -41,4 +41,22 @@ test('deux occurrences de la même règle dans des fichiers différents ne se ma
   const diff = comparerRapports(ancien, nouveau);
   assert.equal(diff.persistants.length, 1);
   assert.deepEqual(diff.nouveaux.map((c) => c.fichier), ['b.js']);
+});
+
+test('un axe noté 0 parce que le widget empêche de le mesurer est marqué dans la comparaison, des deux côtés', () => {
+  const ancien = rapport(80, 'CONFORME', { D: [] });
+  const nouveau = rapport(40, 'NON CONFORME', { D: [] });
+  Object.assign(nouveau.axes.D, { score: 0, empeche: true, scoreMesure: 80 });
+  const diff = comparerRapports(ancien, nouveau);
+  assert.deepEqual(diff.deltaParAxe.D, { avant: 80, apres: 0, delta: -80, empecheAvant: false, empecheApres: true });
+  const md = genererDiffMarkdown(diff);
+  assert.match(md, /\| D \| 80 \| 0 ⛔ \| -80 \|/);
+  assert.match(md, /⛔ : le widget empêche de mesurer cet axe/);
+  assert.deepEqual(comparerRapports(nouveau, ancien).deltaParAxe.D.empecheAvant, true);
+  assert.match(genererDiffMarkdown(comparerRapports(nouveau, ancien)), /\| D \| 0 ⛔ \| 80 \| \+80 \|/);
+});
+
+test('sans axe empêché, la comparaison ne porte aucune marque ni légende', () => {
+  const md = genererDiffMarkdown(comparerRapports(rapport(80, 'CONFORME', { D: [] }), rapport(75, 'CONFORME', { D: [] })));
+  assert.doesNotMatch(md, /⛔/);
 });

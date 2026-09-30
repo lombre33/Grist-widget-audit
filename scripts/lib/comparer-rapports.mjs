@@ -15,10 +15,19 @@
  * `preuve` (une trace brute) ne sont jamais comparés.
  */
 
-export const CHAMPS_LUS = ['constat', 'impact', 'remediation', 'extrait', 'confiance', 'mesurePartielle'];
+export const CHAMPS_LUS = ['constat', 'impact', 'remediation', 'extrait', 'confiance', 'mesurePartielle', 'axesEmpeches'];
+
+// Un champ absent d'un rapport plus ancien vaut sa valeur par défaut : `axesEmpeches` (ajouté avec la mesure empêchée)
+// est `[]` pour tout constat qui n'empêche rien, qu'il soit écrit ou non.
+const DEFAUTS = { axesEmpeches: [] };
+const valeurLue = (c, champ) => c[champ] ?? (Object.hasOwn(DEFAUTS, champ) ? DEFAUTS[champ] : null);
 
 export function resumeNotes(rapport) {
-  const axes = Object.entries(rapport.axes).map(([code, a]) => `${code}=${a.score === null ? '—' : a.score}`).join(' ');
+  // Un axe noté 0 parce que le widget empêche de le mesurer se distingue d'un axe noté 0 par la mesure : `0⛔(65)` dit
+  // qu'il vaudrait 65 sur ce qui a pu être lu.
+  const axes = Object.entries(rapport.axes)
+    .map(([code, a]) => `${code}=${a.score === null ? '—' : a.score}${a.empeche ? `⛔(${a.scoreMesure})` : ''}`)
+    .join(' ');
   return `${rapport.verdict} ${rapport.scoreGlobal} (${rapport.bloquants.length} bloq.) ${axes}`;
 }
 
@@ -62,7 +71,7 @@ export function comparerRapports(avant, apres) {
     if (v.length > w.length) retires.push({ cle, n: v.length - w.length });
     else if (v.length === w.length) {
       const champs = CHAMPS_LUS.filter((champ) => {
-        const lire = (l) => l.map((c) => JSON.stringify(c[champ] ?? null)).sort().join('\n');
+        const lire = (l) => l.map((c) => JSON.stringify(valeurLue(c, champ))).sort().join('\n');
         return lire(v) !== lire(w);
       });
       if (champs.length) textes.push({ cle, champs });

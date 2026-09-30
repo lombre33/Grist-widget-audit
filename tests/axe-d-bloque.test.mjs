@@ -177,7 +177,7 @@ test("un refus du bac à sable (root) : la cause et les deux issues sont dans le
 const BOUCLE = '<!doctype html><html lang="fr"><head><title>t</title></head><body><script>for(;;){}</script></body></html>\n';
 const TEMOIN = '<!doctype html><html lang="fr"><head><title>t</title></head><body><script></script></body></html>\n';
 
-test("widget qui boucle au chargement : D-TIMEOUT-01 bloquant, axe D partiel, jamais mieux noté que le même widget sans la boucle", (t) => {
+test("widget qui boucle au chargement : D-TIMEOUT-01 bloquant, axes D et F notés 0, jamais mieux noté que le même widget sans la boucle", (t) => {
   const temoin = auditer(t, widgetHtml(t, TEMOIN));
   if (temoin.rapport.axesNonExecutes.includes('D')) return axeDNonExecute(t, temoin.rapport.axes.D.constats);
   const boucle = auditer(t, widgetHtml(t, BOUCLE));
@@ -187,12 +187,16 @@ test("widget qui boucle au chargement : D-TIMEOUT-01 bloquant, axe D partiel, ja
   assert.ok(c, 'D-TIMEOUT-01 doit être émis (il ne l\'était jamais : le délai de chargement tombait avant le délai global)');
   assert.equal(c.bloquant, true);
   assert.equal(c.severite, 'critique');
-  assert.equal(c.mesurePartielle, true);
+  assert.deepEqual(c.axesEmpeches, ['D', 'F'], "le widget empêche l'axe D et l'accessibilité rendue (F) : deux axes, ni plus ni moins");
+  assert.equal(c.mesurePartielle, false, "ce n'est ni l'environnement ni un choix : le widget lui-même empêche la mesure");
   assert.match(c.impact, /code illisible/, 'le constat doit dire pourquoi il est bloquant : empêcher de mesurer se juge comme du code illisible');
   assert.equal(c.preuve.phase, 'chargement', "c'est le délai de chargement qui tombe, avant le délai global");
   assert.equal(c.preuve.delaiMs, 5000, 'le délai de chargement se déduit de GWAUDIT_DELAI_AXE_D_MS (20 s − 15 s)');
   assert.deepEqual(boucle.rapport.axesNonExecutes, []);
-  assert.ok(boucle.rapport.axesPartiels.includes('D'));
+  assert.deepEqual(boucle.rapport.axesEmpeches, ['D', 'F']);
+  assert.deepEqual([boucle.rapport.axes.D.score, boucle.rapport.axes.D.empeche, boucle.rapport.axes.F.score, boucle.rapport.axes.F.empeche], [0, true, 0, true], 'D et F sont notés 0 : la mesure a été empêchée par le widget');
+  assert.equal(boucle.rapport.axes.D.causes[0].regle, 'D-TIMEOUT-01', "l'axe dit ce qui l'empêche");
+  assert.equal(boucle.rapport.axes.A.empeche, undefined, "les axes que la boucle n'empêche pas gardent leur score");
   assert.equal(constatsD(boucle.rapport, 'D-INDISPONIBLE').length, 0, "pas de « D-INDISPONIBLE » : la mesure a été tentée et empêchée par le widget");
 
   // L'invariant : empêcher la mesure ne rapporte rien.
@@ -202,7 +206,8 @@ test("widget qui boucle au chargement : D-TIMEOUT-01 bloquant, axe D partiel, ja
   // Une mesure qui n'a pas eu lieu ne s'écrit pas comme une absence de constat.
   assert.equal(constatsD(boucle.rapport, 'D-RESEAU-00').length, 0, "« aucune requête observée pendant le scénario joué » est faux : le scénario n'a pas été joué");
   assert.ok(boucle.rapport.axes.F.constats.some((x) => x.regle === 'D-RGAA-INDISPONIBLE'), "l'accessibilité rendue n'a pas été mesurée : le rapport doit le dire");
-  assert.ok(boucle.rapport.axesPartiels.includes('F'));
+  assert.match(boucle.html, /Mesure empêchée par le widget/, "la page HTML dit pourquoi l'axe vaut 0");
+  assert.match(boucle.md, /Mesure empêchée par le widget/, 'le Markdown aussi');
   assert.match(boucle.html, /D-TIMEOUT-01/);
   assert.match(boucle.md, /D-TIMEOUT-01/);
   assert.ok(boucle.duree < 90_000, `l'audit doit conclure de lui-même (${boucle.duree} ms)`);

@@ -16,6 +16,17 @@ Deux mécanismes de verdict, qui ne se compensent jamais entre eux :
   même à 95/100 sur tout le reste — c'est la logique d'un avis RSSI, pas
   d'une moyenne.
 
+Un cas se distingue d'un axe que l'utilisateur n'a pas lancé (noté « non
+exécuté », hors de la moyenne) et d'une mesure partielle (une vérification a
+échoué pour une raison d'environnement : l'axe garde sa note, le verdict ne
+peut pas être « conforme » sans réserve) : le widget **empêche lui-même la
+mesure** (il bloque le navigateur, un fichier de code ne peut pas être lu).
+Un widget qui empêche une mesure ne note jamais mieux que s'il la laissait
+se faire : l'axe concerné est noté 0, le rapport dit ce qu'il vaut sur ce
+qui a pu être lu et quel constat l'en empêche, et ce constat est toujours
+bloquant. Un 0 de cette sorte dit que la mesure n'a pas pu se faire, non que
+le code est mauvais.
+
 ## Modèle de menace retenu (axes C et D)
 
 Un widget Grist est une page web tierce chargée dans une iframe, à laquelle

@@ -98,10 +98,19 @@ const LONGUEUR_LUE_EXTRAIT = 4096;
  *   présenter comme complet. Ne pas confondre avec un axe non exécuté
  *   (`axesNonExecutes` dans `noter()`) : ici l'axe a bien tourné, une seule
  *   vérification en son sein a échoué.
+ * @param {string[]} [c.axesEmpeches] les axes que CE WIDGET empêche de mesurer
+ *   (une boucle qui occupe le navigateur jusqu'au délai, un fichier de code
+ *   qu'aucun lecteur ne lit) : `noter()` les note 0 et dit pourquoi. Ce n'est
+ *   pas `mesurePartielle`, qui dit qu'une vérification a échoué pour une
+ *   cause de l'environnement ou d'un choix de l'utilisateur (l'axe garde alors
+ *   son score) : un widget qui empêche une mesure ne note jamais mieux que
+ *   s'il l'avait laissée se faire, donc un constat qui la déclare empêchée est
+ *   toujours bloquant (`constat()` refuse le contraire).
  */
 export function constat(c) {
   if (!SEVERITES[c.severite]) throw new Error(`Sévérité inconnue : ${c.severite}`);
   if (!AXES[c.axe]) throw new Error(`Axe inconnu : ${c.axe}`);
+  const axesEmpeches = axesEmpechesDe(c);
   return {
     uid: `${c.regle}#${++compteur}`,
     regle: c.regle,
@@ -119,7 +128,23 @@ export function constat(c) {
     confiance: c.confiance ?? 'probable',
     preuve: preuveBornee(c.preuve),
     mesurePartielle: Boolean(c.mesurePartielle),
+    axesEmpeches,
   };
+}
+
+/**
+ * Les axes qu'un constat déclare empêchés, dédoublonnés et dans l'ordre des axes. Un code qui n'est pas
+ * un axe, ou un constat qui n'est pas bloquant, est une erreur de la règle qui le pose : elle se voit à
+ * la première exécution, jamais au rapport.
+ */
+function axesEmpechesDe(c) {
+  const demandes = c.axesEmpeches ?? [];
+  if (!Array.isArray(demandes)) throw new Error(`axesEmpeches doit être une liste de codes d'axe, reçu : ${JSON.stringify(demandes)}`);
+  for (const code of demandes) if (!AXES[code]) throw new Error(`Axe inconnu dans axesEmpeches : ${code}`);
+  if (demandes.length && !c.bloquant) {
+    throw new Error(`${c.regle} déclare des axes empêchés sans être bloquante : un widget qui empêche la mesure ne note jamais mieux que s'il la laissait se faire`);
+  }
+  return Object.keys(AXES).filter((code) => demandes.includes(code));
 }
 
 /** Tri de lecture : bloquants d'abord, puis sévérité, puis axe, puis fichier. */

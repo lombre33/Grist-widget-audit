@@ -111,7 +111,7 @@ function blocLectureVerdict() {
  * le score sans voir qu'il est incomplet.
  */
 function blocMotif(notation) {
-  const partiel = notation.axesNonExecutes.length > 0;
+  const partiel = notation.axesNonExecutes.length > 0 || (notation.axesEmpeches ?? []).length > 0;
   return `<p class="motif-verdict${partiel ? ' motif-partiel' : ''}">${echapper(notation.motif)}</p>`;
 }
 
@@ -145,11 +145,11 @@ function metre(axe) {
           <span class="metre-code">${axe.code}</span>
           <span class="metre-titre">${echapper(axe.titre)}</span>
         </div>
-        <div class="metre-piste" role="img" aria-label="${echapper(axe.titre)} : ${axe.nonExecute ? 'non exécuté' : `${axe.score} sur 100`}">
+        <div class="metre-piste" role="img" aria-label="${echapper(axe.titre)} : ${axe.nonExecute ? 'non exécuté' : axe.empeche ? 'noté 0 sur 100, mesure empêchée par le widget' : `${axe.score} sur 100`}">
           <div class="metre-remplissage" data-bande="${bande}" style="width:${largeur}%"></div>
         </div>
         <div class="metre-pied">
-          <span class="metre-valeur">${axe.nonExecute ? 'non exécuté' : `${axe.score}/100`}</span>
+          <span class="metre-valeur">${axe.nonExecute ? 'non exécuté' : axe.empeche ? '0/100 · mesure empêchée' : `${axe.score}/100`}</span>
           ${!axe.nonExecute ? `<span class="metre-chips">${chipsSeverite(axe.repartition)}</span>` : ''}
         </div>
       </a>`;
@@ -169,9 +169,19 @@ function sectionAxe(axe) {
         ${axe.nonExecute
           ? `<p class="axe-non-execute">Axe non exécuté lors de cet audit${constats.length ? ' — voici pourquoi.' : '.'}</p>`
           : `<p class="axe-score">Score <strong>${axe.score}/100</strong> — ${chipsSeverite(axe.repartition)}</p>`}
+        ${axe.empeche ? blocAxeEmpeche(axe) : ''}
       </div>
       ${constats.length ? `<div class="liste-constats">${grouperEtRendre(constats)}</div>` : ''}
     </section>`;
+}
+
+/**
+ * Un axe noté 0 parce que le widget empêche de le mesurer le dit sous son score, avec ce qu'il vaut sur ce qui a
+ * pu être lu et le constat qui l'empêche : un 0 se lit comme « mauvais » si rien n'en donne la raison.
+ */
+function blocAxeEmpeche(axe) {
+  const causes = axe.causes.map((c) => `<a href="#${c.uid}"><code>${echapper(c.regle)}</code> ${echapper(c.titre)}</a>`).join(', ');
+  return `<p class="axe-empeche">Mesure empêchée par le widget : cet axe est noté 0, il n'a pas pu être mesuré en entier. Sur ce qui a pu être lu, il vaut ${axe.scoreMesure}/100. Cause : ${causes}.</p>`;
 }
 
 /** Regroupe les occurrences d'une même règle au-delà d'un seuil pour ne pas noyer la page. */
@@ -409,6 +419,7 @@ a{color:inherit;}
 .axe-code{font-family:var(--font-mono); font-size:13px; background:var(--surface-2); border:1px solid var(--border); border-radius:6px; padding:1px 7px;}
 .axe-score{margin:0; font-size:13.5px; color:var(--text-2); display:flex; gap:8px; align-items:center;}
 .axe-non-execute{margin:0; font-size:13.5px; color:var(--text-muted); font-style:italic;}
+.axe-empeche{margin:8px 0 0; font-size:13.5px; color:var(--text-2); line-height:1.5;}
 .chip{font-family:var(--font-mono); font-variant-numeric:tabular-nums; font-size:11px; font-weight:600; border-radius:999px; padding:1px 7px; margin-left:3px;}
 .chip[data-sev="critique"]{background:var(--critique-bg); color:var(--critique);}
 .chip[data-sev="majeur"]{background:var(--serieuse-bg); color:var(--serieuse);}

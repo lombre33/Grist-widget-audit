@@ -151,3 +151,26 @@ test('un axe sans liste de constats (mesure non faite) ne casse pas la comparais
   delete avant.axes.D.constats;
   assert.equal(comparerRapports(avant, rapport()).identique, true);
 });
+
+test('axesEmpeches absent (rapport plus ancien) et [] sont le même constat ; une liste non vide est un écart de texte', () => {
+  const sans = constat({ regle: 'D-TIMEOUT-01' });
+  assert.equal(comparerRapports(rapport({ D: [sans] }), rapport({ D: [constat({ regle: 'D-TIMEOUT-01', axesEmpeches: [] })] })).identique, true);
+  const r = comparerRapports(rapport({ D: [sans] }), rapport({ D: [constat({ regle: 'D-TIMEOUT-01', axesEmpeches: ['D', 'F'] })] }));
+  assert.equal(r.identique, false);
+  assert.deepEqual([r.retires, r.ajoutes], [[], []]);
+  assert.deepEqual(r.textes.map((t) => t.champs), [['axesEmpeches']]);
+});
+
+test('un axe noté 0 par la mesure et un axe noté 0 parce que le widget en empêche la mesure ne sont pas la même note', () => {
+  const mesure = rapport();
+  mesure.axes.D.score = 0;
+  const empeche = rapport();
+  Object.assign(empeche.axes.D, { score: 0, empeche: true, scoreMesure: 65 });
+  assert.match(resumeNotes(empeche), /D=0⛔\(65\) /);
+  assert.doesNotMatch(resumeNotes(mesure), /⛔/);
+  assert.equal(comparerRapports(mesure, empeche).notesIdentiques, false);
+  assert.equal(comparerRapports(empeche, empeche).notesIdentiques, true);
+  const autreMesure = rapport();
+  Object.assign(autreMesure.axes.D, { score: 0, empeche: true, scoreMesure: 66 });
+  assert.equal(comparerRapports(empeche, autreMesure).notesIdentiques, false, 'ce que l\'axe vaut sur ce qui a pu être lu compte aussi');
+});

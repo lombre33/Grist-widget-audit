@@ -18,7 +18,7 @@ const M = 'src/rapport/markdown.js';
 const B = 'bin/gwaudit.js';
 const TESTS = ['tests/axe-d-bloque.test.mjs'];
 
-const TIMEOUT = "regle: 'D-TIMEOUT-01', axe: 'D', severite: 'critique', bloquant: true, confiance: 'prouve', mesurePartielle: true,";
+const TIMEOUT = "regle: 'D-TIMEOUT-01', axe: 'D', severite: 'critique', bloquant: true, confiance: 'prouve', axesEmpeches: ['D', 'F'],";
 
 // [fichier, chaîne d'origine (une seule occurrence), chaîne mutée, libellé]
 const MUTANTS = [
@@ -32,7 +32,10 @@ const MUTANTS = [
   [D, "else if (e?.name === 'TimeoutError') { delaiDepasse = 'chargement'; causeDelai = resumerCauseErreur(e, 200); }\n", '', 'blocage au chargement : le TimeoutError de goto retombe dans le filet générique'],
   [D, TIMEOUT, TIMEOUT.replace("severite: 'critique', bloquant: true", "severite: 'majeur'"), 'D-TIMEOUT-01 : majeur, non bloquant'],
   [D, TIMEOUT, TIMEOUT.replace('bloquant: true', 'bloquant: false'), 'D-TIMEOUT-01 : critique mais non bloquant'],
-  [D, TIMEOUT, TIMEOUT.replace(' mesurePartielle: true,', ''), 'D-TIMEOUT-01 : axe D pas partiel'],
+  [D, TIMEOUT, TIMEOUT.replace(" axesEmpeches: ['D', 'F'],", ''), 'D-TIMEOUT-01 : aucun axe empêché'],
+  [D, TIMEOUT, TIMEOUT.replace("['D', 'F']", "['D']"), 'D-TIMEOUT-01 : F pas empêché'],
+  [D, TIMEOUT, TIMEOUT.replace("['D', 'F']", "['F']"), 'D-TIMEOUT-01 : D pas empêché'],
+  [D, TIMEOUT, TIMEOUT.replace("['D', 'F']", "['D', 'F', 'C']"), 'D-TIMEOUT-01 : C empêché à tort'],
   [D, "Un widget qui empêche de mesurer ce qu'il fait se juge comme du code illisible : on ne peut pas le déclarer conforme. ", '', 'D-TIMEOUT-01 : la raison du caractère bloquant n\'est plus dite'],
   [D, 'const DELAI_CHARGEMENT_MS = Math.max(1_000, DELAI_GLOBAL_AXE_D_MS - 15_000);', 'const DELAI_CHARGEMENT_MS = 30_000;', 'délai de chargement : fixe au lieu de dérivé du délai global'],
   [D, 'timeout: DELAI_CHARGEMENT_MS });', 'timeout: 30000 });', 'goto : délai en dur'],

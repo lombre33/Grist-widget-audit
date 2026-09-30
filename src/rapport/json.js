@@ -7,6 +7,8 @@ export function genererJson({ ctx, notation, meta }) {
     // distinguables ici même quand le score arrondi ne les distingue plus,
     // utile pour comparer deux widgets ou recalibrer sans tout remesurer.
     axes[code] = { titre: a.titre, score: a.score, penaliteBrute: a.penaliteBrute ?? null, nonExecute: a.nonExecute, repartition: a.repartition, constats: a.constats };
+    // Un axe que le widget empêche de mesurer : noté 0, avec ce qu'il vaut sur ce qui a pu être lu et ses causes.
+    if (a.empeche) Object.assign(axes[code], { empeche: true, scoreMesure: a.scoreMesure, causes: a.causes });
   }
   return JSON.stringify({
     outil: 'gwaudit', version: meta.version, genereLe: new Date().toISOString(),
@@ -20,6 +22,7 @@ export function genererJson({ ctx, notation, meta }) {
     bloquants: notation.bloquants.map((c) => c.uid),
     axesNonExecutes: notation.axesNonExecutes,
     axesPartiels: notation.axesPartiels,
+    axesEmpeches: notation.axesEmpeches,
     axes,
     // Par où commencer : liste déjà triée (bloquant, puis gain réel estimé sur
     // le score global, la sévérité départageant), une entrée par règle

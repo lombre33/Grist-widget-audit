@@ -69,6 +69,17 @@ function penaliteRegle(occurrences) {
 export function noter(constats, axesNonExecutes = new Set()) {
   const parAxe = {};
 
+  // Les axes que le widget empêche de mesurer (`axesEmpeches` d'un constat) : notés 0, avec ce qu'ils valent
+  // sur ce qui a pu être lu (`scoreMesure`) et les constats qui les empêchent (`causes`). Un axe que l'utilisateur
+  // n'a pas lancé (`axesNonExecutes`) reste hors du calcul : ce n'est pas le widget qui l'a empêché.
+  const empeches = new Map();
+  for (const c of constats) {
+    for (const code of c.axesEmpeches ?? []) {
+      if (axesNonExecutes.has(code)) continue;
+      (empeches.get(code) ?? empeches.set(code, []).get(code)).push(c);
+    }
+  }
+
   for (const code of Object.keys(AXES)) {
     const liste = constats.filter((c) => c.axe === code);
     if (axesNonExecutes.has(code)) {
@@ -105,6 +116,15 @@ export function noter(constats, axesNonExecutes = new Set()) {
       repartition: compter(liste),
       detailPenalites: detail,
     };
+    if (empeches.has(code)) {
+      parAxe[code] = {
+        ...parAxe[code],
+        scoreMesure: parAxe[code].score,
+        score: 0,
+        empeche: true,
+        causes: empeches.get(code).map(causeDe),
+      };
+    }
   }
 
   const notes = Object.values(parAxe).filter((a) => a.score !== null);
@@ -162,6 +182,16 @@ export function noter(constats, axesNonExecutes = new Set()) {
     motif = `⚠️ Audit partiel — couverture incomplète : ${detail}. Score calculé sans ce qui manque, à ne pas comparer à un audit complet. ${motif}`;
   }
 
+  // Un axe que le widget empêche de mesurer est noté 0, jamais « partiel » : le dire dans le motif, avant le reste,
+  // avec sa cause. Un 0 qui ne dit pas qu'il vient d'une mesure impossible se lirait comme un code très mauvais.
+  if (empeches.size) {
+    const plusieurs = empeches.size > 1;
+    const detail = [...empeches]
+      .map(([code, causes]) => `${code} (${AXES[code].titre}) — ${causes[0].titre}${causes.length > 1 ? ` (et ${causes.length - 1} autre${causes.length > 2 ? 's' : ''})` : ''}`)
+      .join(' ; ');
+    motif = `⛔ Mesure empêchée par le widget : ${detail}. Un 0 dit ici que ${plusieurs ? 'ces axes n\'ont' : 'cet axe n\'a'} pas pu être mesuré${plusieurs ? 's' : ''}, non que le code est mauvais : ce que ${plusieurs ? 'chacun vaut' : 'l\'axe vaut'} sur ce qui a pu être lu est dit dans ${plusieurs ? 'chaque axe' : 'l\'axe'}, et la cause est elle-même un point bloquant. ${motif}`;
+  }
+
   const resultat = {
     global,
     verdict,
@@ -171,6 +201,7 @@ export function noter(constats, axesNonExecutes = new Set()) {
     repartition: compter(constats),
     axesNonExecutes: [...axesNonExecutes],
     axesPartiels: [...axesPartiels.keys()],
+    axesEmpeches: Object.keys(AXES).filter((code) => empeches.has(code)),
   };
   // La roadmap se calcule sur la notation déjà figée : par où commencer,
   // jamais un nouveau calcul de score (voir src/moteur/priorisation.js).
@@ -178,6 +209,11 @@ export function noter(constats, axesNonExecutes = new Set()) {
   // (JSON, interface…) sans dupliquer le calcul ni imposer une mise en forme.
   resultat.roadmap = ordonnancerCorrections(resultat);
   return resultat;
+}
+
+/** Ce que le rapport garde d'un constat qui empêche une mesure : de quoi le retrouver et le dire. */
+function causeDe(c) {
+  return { uid: c.uid, regle: c.regle, axe: c.axe, titre: c.titre, fichier: c.fichier, ligne: c.ligne };
 }
 
 function compter(liste) {

@@ -87,6 +87,11 @@ export function genererMarkdown({ ctx, notation, meta }) {
     } else {
       l.push(`Score : **${axe.score}/100** — ${axe.repartition.critique} critique(s), ${axe.repartition.majeur} majeur(s), ${axe.repartition.mineur} mineur(s), ${axe.repartition.info} information(s).`);
       l.push('');
+      if (axe.empeche) {
+        // Un 0 se lit comme « mauvais » si rien n'en donne la raison.
+        l.push(`> ⛔ Mesure empêchée par le widget : cet axe est noté 0, il n'a pas pu être mesuré en entier. Sur ce qui a pu être lu, il vaut ${axe.scoreMesure}/100. Cause : ${axe.causes.map((c) => `[${c.regle}] ${c.titre}`).join(' ; ')}.`);
+        l.push('');
+      }
       if (!constats.length) { l.push('_Aucun constat sur cet axe._'); l.push(''); continue; }
     }
 
