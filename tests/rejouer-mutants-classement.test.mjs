@@ -151,9 +151,9 @@ test('classerLancement : une sortie absente (null) se lit comme vide', () => {
 // La lecture des arguments ------------------------------------------------------------------------------------------
 
 test('lireArguments : --part=i/n est lu, les autres arguments sont rendus tels quels et dans l\'ordre', () => {
-  assert.deepEqual(lireArguments(['a', '--part=2/3', 'b c']), { partie: { i: 2, n: 3 }, restants: ['a', 'b c'] });
-  assert.deepEqual(lireArguments([]), { partie: null, restants: [] });
-  assert.deepEqual(lireArguments(['--part=1/1']), { partie: { i: 1, n: 1 }, restants: [] });
+  assert.deepEqual(lireArguments(['a', '--part=2/3', 'b c']), { partie: { i: 2, n: 3 }, valider: false, restants: ['a', 'b c'] });
+  assert.deepEqual(lireArguments([]), { partie: null, valider: false, restants: [] });
+  assert.deepEqual(lireArguments(['--part=1/1']), { partie: { i: 1, n: 1 }, valider: false, restants: [] });
   assert.deepEqual(lireArguments(['--part=12/34']).partie, { i: 12, n: 34 }, 'plusieurs chiffres');
 });
 

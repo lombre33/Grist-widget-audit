@@ -31,9 +31,7 @@
  *
  * Usage : node scripts/mutants-e-dep-imports.mjs [expression régulière sur le libellé] [--part=i/n]
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import { lireArguments, rejouerMutants, RACINE } from './lib/rejouer-mutants.mjs';
+import { lireArguments, rejouerMutants, dansLigne } from './lib/rejouer-mutants.mjs';
 
 const J = 'src/moteur/analyse-js.js';
 const P = 'src/moteur/page-html.js';
@@ -42,20 +40,6 @@ const E = 'src/regles/e-dependances.js';
 const S = 'src/regles/c-securite.js';
 const I = 'src/contexte/inventaire.js';
 const TESTS = ['tests/e-dep-imports.test.mjs', 'tests/e-dep-imports-contextes.test.mjs', 'tests/e-dep-imports-ordre.test.mjs'];
-
-const lire = (fichier) => fs.readFileSync(path.join(RACINE, fichier), 'utf8');
-/** La ligne entière du fichier qui contient `motif`, si une seule le contient (sinon le script s'arrête : un mutant ne se pose pas au hasard). */
-function ligne(fichier, motif, sans = null) {
-  const trouvees = lire(fichier).split('\n').filter((l) => l.includes(motif) && !(sans && l.includes(sans)));
-  if (trouvees.length !== 1) throw new Error(`${fichier} : « ${motif} »${sans ? ` sans « ${sans} »` : ''} se trouve sur ${trouvees.length} lignes, il en faut une`);
-  return trouvees[0];
-}
-/** Un mutant qui remplace, dans la ligne unique contenant `motif` (et pas `sans`), `de` par `par`. */
-function dansLigne(fichier, motif, de, par, libelle, sans = null) {
-  const l = ligne(fichier, motif, sans);
-  if (!l.includes(de)) throw new Error(`${fichier} : « ${de} » ne figure pas dans la ligne de « ${motif} »`);
-  return [fichier, l, l.replace(de, par), libelle];
-}
 
 // [fichier, chaîne d'origine (une seule occurrence), chaîne mutée, libellé]
 const MUTANTS = [];

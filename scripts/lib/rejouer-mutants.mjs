@@ -26,6 +26,19 @@
  * processus de sa suite restent alors : le lot suivant les retire au départ
  * (`balayerCopiesAbandonnees`), une copie dont le lot tourne encore n'est pas
  * touchée.
+ *
+ * Un mutant écrit par `dansLigne` (la ligne du fichier qui porte un motif) dont
+ * le motif ne désigne plus une ligne unique est refusé avec sa raison, comme
+ * une chaîne d'origine absente : le lot ne meurt plus d'une exception au
+ * chargement (code 1, un seul motif dit à la fois), il dit tous ses motifs
+ * périmés d'un coup (code 2).
+ *
+ * `--valider` (ou `valider: true`) : ne fait que la vérification d'avance
+ * (chaînes d'origine uniques, code muté qui compile, fichiers de test
+ * présents) et rend 0 ou 2, sans lancer aucune suite, sans exiger Chromium et
+ * sans toucher aux copies d'autres lots. Un essai commité
+ * (`tests/lots-de-mutants.test.mjs`) la lance sur chaque lot : un lot devenu
+ * muet fait passer la suite au rouge, au lieu de se taire.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -137,11 +150,41 @@ export function balayerCopiesAbandonnees(tmp = os.tmpdir()) {
 }
 
 /**
+ * La « chaîne d'origine » d'un mutant dont le motif ne désigne plus une ligne unique : elle ne
+ * se retrouve dans aucun fichier, et le moteur refuse le lot en disant sa `raison` (qui nomme le
+ * motif et le fichier), avec les autres motifs périmés du même lot.
+ */
+export class MotifRefuse {
+  constructor(raison) { this.raison = raison; }
+}
+
+/**
+ * Un mutant posé sur la ligne du fichier qui contient `motif` (et pas `sans`), si une seule la
+ * contient : `de` y est remplacé par `par`. La ligne se lit dans `racine` (le dépôt du lot par
+ * défaut) ; un mutant écrit ainsi suit le code qui change de place ou de forme, tant que la ligne
+ * reste la seule à porter son motif. Sinon (aucune ligne, plusieurs, `de` absent de la ligne, fichier
+ * absent) le mutant est refusé par le moteur avec la raison (`MotifRefuse`) : rien n'est levé ici.
+ * @returns {[string, string | MotifRefuse, string, string]} `[fichier, chaîne d'origine, chaîne mutée, libellé]`
+ */
+export function dansLigne(fichier, motif, de, par, libelle, sans = null, racine = RACINE) {
+  const refus = (raison) => [fichier, new MotifRefuse(`${fichier} : ${raison}`), '', libelle];
+  let contenu;
+  try { contenu = fs.readFileSync(path.join(racine, fichier), 'utf8'); } catch { return refus(`le fichier n'existe pas, « ${motif} » n'y est pas cherché`); }
+  const trouvees = contenu.split('\n').filter((l) => l.includes(motif) && !(sans && l.includes(sans)));
+  if (trouvees.length !== 1) return refus(`« ${motif} »${sans ? ` sans « ${sans} »` : ''} se trouve sur ${trouvees.length} lignes, il en faut une`);
+  const [l] = trouvees;
+  if (!l.includes(de)) return refus(`« ${de} » ne figure pas dans la ligne de « ${motif} »`);
+  return [fichier, l, l.replace(de, () => par), libelle];
+}
+
+/**
  * @param {{
  *   mutants: Array<{ libelle: string, fichier: string, ancien: string, nouveau: string }>,
  *   groupes: Array<{ nom: string, fichiers: string[] }>,
  *   exigerChromium?: boolean,
  *   partie?: ?{ i: number, n: number },
+ *   valider?: boolean,
+ *   argv?: string[],
  *   dossiers?: string[],
  *   delaiMs?: number,
  *   racine?: string,
@@ -153,15 +196,18 @@ export function balayerCopiesAbandonnees(tmp = os.tmpdir()) {
  *   ne pas attendre dix minutes par mutant.
  *   `partie` : ne rejouer que le i-ième des n paquets (1 à n), pour lancer n processus à la fois ; chacun a sa copie, et
  *   vérifie quand même tous les mutants avant de commencer.
+ *   `valider` : ne faire que la vérification d'avance et le dire (aucune suite lancée, Chromium non exigé, rien retiré chez les autres lots) ; `--valider` de `argv` par défaut.
+ *   `argv` : la ligne de commande du lot (`process.argv.slice(2)` par défaut), où le moteur lit `--valider`.
  *   `racine` : le projet à copier (le dépôt par défaut) ; `sortie` et `erreur` : où vont les lignes (la console par défaut) ;
  *   `rapporter` : reçoit le bilan chiffré à la fin (les essais du moteur lui-même le lisent).
  * @returns {number} le code de sortie : 0 tous tués (par un test ou un délai), 1 un mutant survit ou plante, 2 le lot n'a pas pu commencer
  */
 export function rejouerMutants({
-  mutants, groupes, exigerChromium = true, partie = null, dossiers = DOSSIERS_COPIES, delaiMs = DELAI_MS,
+  mutants, groupes, exigerChromium = true, partie = null, valider, argv = process.argv.slice(2), dossiers = DOSSIERS_COPIES, delaiMs = DELAI_MS,
   racine = RACINE, sortie = console.log, erreur = console.error, rapporter = null,
 }) {
-  if (exigerChromium && !process.env.GWAUDIT_CHROMIUM_PATH) {
+  const verifierSeulement = valider ?? argv.includes('--valider');
+  if (exigerChromium && !verifierSeulement && !process.env.GWAUDIT_CHROMIUM_PATH) {
     erreur('GWAUDIT_CHROMIUM_PATH est requis : le différentiel Chromium fait partie de la preuve, un test sauté ne tuerait rien.');
     return 2;
   }
@@ -170,9 +216,11 @@ export function rejouerMutants({
     return 2;
   }
 
-  // Un lot tué avant celui-ci (kill, coupure) a pu laisser sa copie et des processus : ils partent d'abord. Le lot lui-même ne pose aucun gestionnaire de signal : tout son travail est synchrone, un gestionnaire ne s'exécuterait qu'à la fin et `kill` n'arrêterait plus rien.
-  const abandonnees = balayerCopiesAbandonnees();
-  if (abandonnees.length) erreur(`${abandonnees.length} copie(s) laissée(s) par un lot interrompu retirée(s), avec leurs processus : ${abandonnees.join(', ')}`);
+  // Un lot tué avant celui-ci (kill, coupure) a pu laisser sa copie et des processus : ils partent d'abord (la vérification seule n'y touche pas : elle ne fait que lire). Le lot lui-même ne pose aucun gestionnaire de signal : tout son travail est synchrone, un gestionnaire ne s'exécuterait qu'à la fin et `kill` n'arrêterait plus rien.
+  if (!verifierSeulement) {
+    const abandonnees = balayerCopiesAbandonnees();
+    if (abandonnees.length) erreur(`${abandonnees.length} copie(s) laissée(s) par un lot interrompu retirée(s), avec leurs processus : ${abandonnees.join(', ')}`);
+  }
 
   // Le chemin réel : `/proc/<pid>/cwd` le rend ainsi, et `tuerProcessusDe` le compare tel quel (un TMPDIR qui passe par un lien symbolique ne fausse rien). Le pid du lot est dans le nom : c'est ce qui dit qu'une copie est abandonnée.
   const copie = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), `gwaudit-mutants-${process.pid}-`)));
@@ -200,6 +248,8 @@ export function rejouerMutants({
     // Un fichier de test qui n'existe pas serait ignoré sans un mot par `node --test` (Node 22 le prend pour un motif qui ne trouve rien) : la suite serait plus petite que celle qu'on croit.
     for (const g of groupes) for (const f of g.fichiers) if (!fs.existsSync(path.join(copie, f))) problemes.push(`groupe « ${g.nom} » : le fichier de test ${f} n'existe pas (le lanceur l'ignorerait sans rien dire)`);
     for (const [numero, m] of mutants.entries()) {
+      // Un motif qui ne désigne plus une ligne unique (`dansLigne`) : le mutant est refusé avec sa raison, il ne s'est pas posé.
+      if (m.ancien instanceof MotifRefuse) { problemes.push(`mutant ${numero + 1} (${m.libelle}) : ${m.ancien.raison}`); continue; }
       const chemin = path.join(copie, m.fichier);
       if (!fs.existsSync(chemin)) { problemes.push(`mutant ${numero + 1} (${m.libelle}) : ${m.fichier} n'existe pas`); continue; }
       const original = fs.readFileSync(chemin, 'utf8');
@@ -219,6 +269,11 @@ export function rejouerMutants({
       erreur(`${problemes.length} mutant(s) à corriger avant de rien conclure (le code a changé ou le mutant est mal écrit) :`);
       for (const p of problemes) erreur(` - ${p}`);
       return 2;
+    }
+
+    if (verifierSeulement) {
+      sortie(`Vérification d'avance : ${mutants.length} mutants (chaîne d'origine unique, code muté qui compile), ${groupes.flatMap((g) => g.fichiers).length} fichier(s) de test présent(s), aucun problème ; aucune suite lancée.`);
+      return 0;
     }
 
     const base = lancer(groupes.flatMap((g) => g.fichiers));
@@ -277,16 +332,18 @@ export function rejouerMutants({
   }
 }
 
-/** `--part=i/n` dans les arguments (1 ≤ i ≤ n) ; les autres arguments sont rendus tels quels. */
+/** `--part=i/n` (1 ≤ i ≤ n) et `--valider` dans les arguments ; les autres arguments sont rendus tels quels et dans l'ordre (`--valider` n'en fait pas partie : il ne doit jamais devenir un filtre de libellés). */
 export function lireArguments(argv) {
   let partie = null;
+  let valider = false;
   const restants = [];
   for (const a of argv) {
+    if (a === '--valider') { valider = true; continue; }
     const m = /^--part=(\d+)\/(\d+)$/.exec(a);
     if (!m) { restants.push(a); continue; }
     const [i, n] = [Number(m[1]), Number(m[2])];
     if (i < 1 || i > n) throw new Error(`--part=${i}/${n} : i doit être entre 1 et n`);
     partie = { i, n };
   }
-  return { partie, restants };
+  return { partie, valider, restants };
 }

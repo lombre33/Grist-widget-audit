@@ -10,26 +10,10 @@
  *
  * Usage : node scripts/mutants-liens-raisons.mjs [expression régulière sur le libellé] [--part=i/n]
  */
-import fs from 'node:fs';
-import path from 'node:path';
-import { lireArguments, rejouerMutants, RACINE } from './lib/rejouer-mutants.mjs';
+import { lireArguments, rejouerMutants, dansLigne } from './lib/rejouer-mutants.mjs';
 
 const S = 'src/regles/c-securite.js';
 const TESTS = ['tests/liens-raisons.test.mjs'];
-
-const lire = (fichier) => fs.readFileSync(path.join(RACINE, fichier), 'utf8');
-/** La ligne entière du fichier qui contient `motif`, si une seule le contient. */
-function ligne(fichier, motif) {
-  const trouvees = lire(fichier).split('\n').filter((l) => l.includes(motif));
-  if (trouvees.length !== 1) throw new Error(`${fichier} : « ${motif} » se trouve sur ${trouvees.length} lignes, il en faut une`);
-  return trouvees[0];
-}
-/** Un mutant qui remplace, dans la ligne unique contenant `motif`, `de` par `par`. */
-function dansLigne(fichier, motif, de, par, libelle) {
-  const l = ligne(fichier, motif);
-  if (!l.includes(de)) throw new Error(`${fichier} : « ${de} » ne figure pas dans la ligne de « ${motif} »`);
-  return [fichier, l, l.replace(de, par), libelle];
-}
 
 const RAISON = 'const raisonDeLien = ';
 const AFF = 'const RAISON_LIEN_AFFICHAGE = ';

@@ -3,7 +3,7 @@
  * Rejoue les mutants du moteur de mutants lui-même (`scripts/lib/rejouer-mutants.mjs`) :
  * chaque décision du moteur (ce qui est un délai, un plantage, un test nommé ;
  * ce qui est tué, retiré, refusé avant le premier essai) est gardée par un test
- * des quatre fichiers `tests/rejouer-mutants-*.test.mjs`. Aucun navigateur n'est
+ * des cinq fichiers `tests/rejouer-mutants-*.test.mjs`. Aucun navigateur n'est
  * requis.
  *
  * Deux mutants sont volontairement absents parce qu'ils ne changent rien
@@ -29,7 +29,7 @@
 import { lireArguments, rejouerMutants } from './lib/rejouer-mutants.mjs';
 
 const E = 'scripts/lib/rejouer-mutants.mjs';
-const TESTS = ['classement', 'processus', 'issues', 'preparation'].map((n) => `tests/rejouer-mutants-${n}.test.mjs`);
+const TESTS = ['classement', 'processus', 'issues', 'preparation', 'valider'].map((n) => `tests/rejouer-mutants-${n}.test.mjs`);
 
 // [chaîne d'origine (une seule occurrence), chaîne mutée, libellé]
 const MUTANTS = [
@@ -110,9 +110,11 @@ const MUTANTS = [
   ['erreur = console.error,', 'erreur = console.log,', 'options : les erreurs vont sur la sortie standard'],
 
   // --- ce qu'il exige avant de commencer
-  ['if (exigerChromium && !process.env.GWAUDIT_CHROMIUM_PATH) {', 'if (false) {', 'Chromium : jamais exigé'],
-  ['if (exigerChromium && !process.env.GWAUDIT_CHROMIUM_PATH) {', 'if (exigerChromium && process.env.GWAUDIT_CHROMIUM_PATH) {', 'Chromium : exigé quand il est présent, pas quand il manque'],
-  ['if (exigerChromium && !process.env.GWAUDIT_CHROMIUM_PATH) {', 'if (!process.env.GWAUDIT_CHROMIUM_PATH) {', 'Chromium : exigé même quand le lot dit ne pas en avoir besoin'],
+  ['if (exigerChromium && !verifierSeulement && !process.env.GWAUDIT_CHROMIUM_PATH) {', 'if (false) {', 'Chromium : jamais exigé'],
+  ['if (exigerChromium && !verifierSeulement && !process.env.GWAUDIT_CHROMIUM_PATH) {', 'if (exigerChromium && !verifierSeulement && process.env.GWAUDIT_CHROMIUM_PATH) {', 'Chromium : exigé quand il est présent, pas quand il manque'],
+  ['if (exigerChromium && !verifierSeulement && !process.env.GWAUDIT_CHROMIUM_PATH) {', 'if (!verifierSeulement && !process.env.GWAUDIT_CHROMIUM_PATH) {', 'Chromium : exigé même quand le lot dit ne pas en avoir besoin'],
+  ['if (exigerChromium && !verifierSeulement && !process.env.GWAUDIT_CHROMIUM_PATH) {', 'if (exigerChromium && !process.env.GWAUDIT_CHROMIUM_PATH) {', "Chromium : exigé aussi pour la vérification d'avance, qui ne lance rien"],
+  ['if (exigerChromium && !verifierSeulement && !process.env.GWAUDIT_CHROMIUM_PATH) {', 'if (exigerChromium && verifierSeulement && !process.env.GWAUDIT_CHROMIUM_PATH) {', "Chromium : exigé seulement pour la vérification d'avance"],
   ["un test sauté ne tuerait rien.');\n    return 2;", "un test sauté ne tuerait rien.');\n    return 1;", 'Chromium manquant : code 1 au lieu de 2'],
   ['if (!mutants.length) {', 'if (false) {', 'aucun mutant : le lot se lance quand même'],
   ["erreur('Aucun mutant retenu : rien à rejouer.');\n    return 2;", "erreur('Aucun mutant retenu : rien à rejouer.');\n    return 1;", 'aucun mutant : code 1 au lieu de 2'],
@@ -217,6 +219,43 @@ const MUTANTS = [
   ['/^--part=(\\d+)\\/(\\d+)$/', '/^--part=(\\d+)\\/(\\d)$/', 'arguments : n d\'un seul chiffre'],
   ['if (!m) { restants.push(a); continue; }', 'if (!m) { continue; }', 'arguments : les autres arguments perdus'],
   ['partie = { i, n };', 'partie = { i: n, n: i };', 'arguments : i et n intervertis'],
+
+  // --- la vérification d'avance (--valider)
+  ["const verifierSeulement = valider ?? argv.includes('--valider');", "const verifierSeulement = argv.includes('--valider');", "valider : l'option explicite est ignorée"],
+  ["const verifierSeulement = valider ?? argv.includes('--valider');", "const verifierSeulement = valider || argv.includes('--valider');", "valider : la ligne de commande l'emporte sur l'option explicite"],
+  ["const verifierSeulement = valider ?? argv.includes('--valider');", 'const verifierSeulement = valider ?? false;', 'valider : la ligne de commande est ignorée'],
+  ["const verifierSeulement = valider ?? argv.includes('--valider');", "const verifierSeulement = valider ?? argv.includes('--valid');", 'valider : --valid pris pour --valider'],
+  ['argv = process.argv.slice(2),', 'argv = [],', "valider : la ligne de commande du processus n'est pas lue par défaut"],
+  ['argv = process.argv.slice(2),', 'argv = process.argv.slice(3),', 'valider : le premier argument de la ligne de commande est sauté'],
+  ['  if (!verifierSeulement) {', '  if (true) {', "valider : les copies des autres lots sont retirées aussi"],
+  ['  if (!verifierSeulement) {', '  if (verifierSeulement) {', "valider : seule la vérification retire les copies des autres lots"],
+  ['    if (verifierSeulement) {', '    if (false) {', "valider : la suite est lancée quand même"],
+  ['aucune suite lancée.`);\n      return 0;', 'aucune suite lancée.`);\n      return 1;', "valider : code 1 quand tout est en ordre"],
+  ['aucune suite lancée.`);\n      return 0;', 'aucune suite lancée.`);', "valider : la suite est lancée après le message"],
+  ['${mutants.length} mutants (chaîne', '${mutants.length + 1} mutants (chaîne', "valider : le compte des mutants est faux"],
+  ['${groupes.flatMap((g) => g.fichiers).length} fichier(s)', '${groupes.length} fichier(s)', "valider : le compte des fichiers de test est celui des groupes"],
+
+  // --- un motif périmé est refusé avec sa raison
+  ['if (m.ancien instanceof MotifRefuse) {', 'if (false) {', "motif refusé : traité comme une chaîne d'origine ordinaire (le lot lève au lieu de le dire)"],
+  [': ${m.ancien.raison}`); continue; }', ': ${m.libelle}`); continue; }', "motif refusé : la raison n'est pas dite"],
+  [': ${m.ancien.raison}`); continue; }', ': ${m.ancien.raison}`); }', 'motif refusé : le mutant refusé est examiné comme les autres'],
+  ["l.includes(motif) && !(sans && l.includes(sans))", "l.includes(motif)", 'dansLigne : `sans` est ignoré'],
+  ["l.includes(motif) && !(sans && l.includes(sans))", "l.includes(motif) && !(sans && !l.includes(sans))", 'dansLigne : `sans` écarte les lignes qui ne le portent pas'],
+  ['if (trouvees.length !== 1) return', 'if (trouvees.length === 0) return', 'dansLigne : plusieurs lignes acceptées, la première est prise'],
+  ['if (trouvees.length !== 1) return', 'if (trouvees.length > 1) return', 'dansLigne : aucune ligne acceptée, le mutant lève plus loin'],
+  ['if (!l.includes(de)) return refus(', 'if (false) return refus(', 'dansLigne : un `de` absent de la ligne donne un mutant qui ne change rien'],
+  ['return [fichier, l, l.replace(de, () => par), libelle];', 'return [fichier, l, l.replace(de, par), libelle];', 'dansLigne : la chaîne mutée passe par les motifs de remplacement (« $& »)'],
+  ["catch { return refus(`le fichier n'existe pas, « ${motif} » n'y est pas cherché`); }", "catch { throw new Error('absent'); }", "dansLigne : un fichier absent lève au lieu d'être refusé"],
+  ["new MotifRefuse(`${fichier} : ${raison}`), '', libelle]", 'new MotifRefuse(raison), \'\', libelle]', 'dansLigne : la raison ne nomme pas le fichier'],
+  ["new MotifRefuse(`${fichier} : ${raison}`), '', libelle]", "new MotifRefuse(`${fichier} : ${raison}`), 'x', libelle]", 'dansLigne : un refus porte une chaîne mutée'],
+  ["new MotifRefuse(`${fichier} : ${raison}`), '', libelle]", "`${fichier} : ${raison}`, '', libelle]", "dansLigne : un refus est une chaîne ordinaire, le moteur ne le reconnaît plus"],
+  ['ne figure pas dans la ligne de « ${motif} »', 'ne figure pas dans la ligne de « ${de} »', 'dansLigne : la raison nomme la mauvaise chaîne quand `de` manque'],
+
+  // --- les arguments : --valider
+  ["if (a === '--valider') { valider = true; continue; }", "if (a === '--valider') { valider = true; }", '--valider : gardé parmi les filtres de libellés'],
+  ["if (a === '--valider') { valider = true; continue; }", "if (a === '--valider') { valider = false; continue; }", '--valider : jamais lu'],
+  ["if (a === '--valider') { valider = true; continue; }", "if (a.startsWith('--valid')) { valider = true; continue; }", '--valider : --valid… pris pour --valider'],
+  ['return { partie, valider, restants };', 'return { partie, restants };', '--valider : non rendu par lireArguments'],
 
   // --- kill : rien ne retient le lot
   ['export const RACINE = path.resolve(', "process.on('SIGTERM', () => {});\nexport const RACINE = path.resolve(", 'un gestionnaire de SIGTERM qui ne fait rien : kill n\'arrête plus le lot'],
