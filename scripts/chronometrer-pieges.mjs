@@ -214,7 +214,7 @@ const CAS = [
     'index.html': `${TETE}${N(50000, () => '<link rel=modulepreload href="https://e.example/m.js">\n')}<script type="importmap">${JSON.stringify({ imports: { m: 'https://e.example/m.js' }, integrity: { 'https://e.example/m.js': `sha384-${'A'.repeat(64)}` } })}</script><script type="module">import "m";</script>`,
   })],
   ['analyse : 15 000 <link rel=modulepreload> vers des adresses distinctes, 15 000 entrées d\'import map', 'analyse', () => {
-    // La page reste sous le plafond de 4 Mio par fichier : au-delà elle ne serait pas lue et le cas ne mesurerait rien.
+    // La page reste sous le plafond par fichier de l'outil : au-delà elle ne serait pas lue et le cas ne mesurerait rien.
     const imports = {};
     const integrity = {};
     for (let i = 0; i < 15000; i++) { imports[`m${i}`] = `https://e.example/m${i}.js`; integrity[`https://e.example/m${i}.js`] = `sha384-${'A'.repeat(64)}`; }

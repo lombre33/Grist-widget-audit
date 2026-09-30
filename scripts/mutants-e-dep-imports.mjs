@@ -226,7 +226,7 @@ MUTANTS.push(
 
 // --- le graphe du document -----------------------------------------------------------------------------------------
 MUTANTS.push(
-  dansLigne(I, 'const { surface, mentions, partiel, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments } = calculerSurface(', ', { maxResolutions, maxPasDocuments })', ', { maxResolutions })', 'budget : le plafond des arêtes de document demandé n\'est pas transmis à la fermeture'),
+  dansLigne(I, 'documentsEpuises } = calculerSurface(', ', { maxResolutions, maxPasDocuments })', ', { maxResolutions })', 'budget : le plafond des arêtes de document demandé n\'est pas transmis à la fermeture'),
   dansLigne(I, 'export function calculerSurface(', 'maxPasDocuments = MAX_PAS_DOCUMENTS', 'maxPasDocuments = 0', 'budget : la fermeture n\'a par défaut aucune arête de document'),
   dansLigne(I, 'export function construireContexte(racine, {', 'maxPasDocuments = MAX_PAS_DOCUMENTS', 'maxPasDocuments = 0', 'budget : un contexte n\'a par défaut aucune arête de document'),
   dansLigne(I, 'const budgetDocuments = { restant: maxPasDocuments };', 'restant: maxPasDocuments', 'restant: 0', 'budget : le budget des arêtes de document est vide au départ'),
@@ -234,7 +234,7 @@ MUTANTS.push(
   dansLigne(I, 'const depenserPasDocuments = (pas) => (budgetDocuments.restant -= pas) >= 0;', '>= 0', '> 0', 'budget : un pas qui épuise juste le budget est refusé'),
   dansLigne(I, 'const depenserPasDocuments = (pas) => (budgetDocuments.restant -= pas) >= 0;', 'restant -= pas', 'restant -= 0', 'budget : une page évaluée ne consomme pas le budget'),
   dansLigne(I, 'const depenserPasDocuments = (pas) => (budgetDocuments.restant -= pas) >= 0;', '>= 0', '>= -Infinity', 'budget : un pas est toujours accordé'),
-  dansLigne(I, 'return { surface, mentions, partiel: budget.epuise, surfaceDuDocument,', 'pasDocuments, depenserPasDocuments }', 'pasDocuments }', 'budget : le budget des pages évaluées n\'est pas rendu par la surface'),
+  dansLigne(I, 'return { surface, mentions, partiel: budget.epuise, surfaceDuDocument,', 'pasDocuments, depenserPasDocuments, nonLusParCode', 'pasDocuments, nonLusParCode', 'budget : le budget des pages évaluées n\'est pas rendu par la surface'),
   dansLigne(I, 'return { racine, fichiers, entrees, surface, surfaceDuDocument,', 'pasDocuments, depenserPasDocuments, paquet', 'pasDocuments, paquet', 'budget : le contexte n\'offre pas le budget des pages évaluées'),
   dansLigne(I, 'if (!racine || racine.binaire) return positions;', '!racine || ', '', 'document : une page absente casse la lecture'),
   dansLigne(I, 'if ((budgetDocuments.restant -= aretes(page).length + 1) < 0) return null;', '< 0', '<= 0', 'budget : une page qui épuise juste le budget est refusée'),
@@ -260,11 +260,11 @@ MUTANTS.push(
   dansLigne(I, 'const debutDeChargement = (page, chemin) =>', '?? null', '?? 0', 'document : un fichier hors du document a une position (le début de la page)'),
   dansLigne(I, 'const debutDeChargement = (page, chemin) =>', 'positionsDuDocument(page)?.get', 'positionsDuDocument(page).get', 'document : un budget épuisé casse la lecture de la position'),
   dansLigne(I, 'for (const ch of s.chargements) if (ch.execute) local(ch.valeur, s.baseBrute,', 'position: s.debut', 'position: 0', 'arête : une balise qui charge un fichier n\'a pas son décalage'),
-  dansLigne(I, 'const reserves = { dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard, position: s.debut };', 'position: s.debut', 'position: 0', 'arête : un fichier qu\'un script écrit dans la page charge n\'a pas le décalage de ce script'),
-  dansLigne(I, 'const reserves = { dansTemplate: e.dansTemplate, seulementStandard: e.seulementStandard, position: e.index };', 'position: e.index', 'position: 0', 'arête : un fichier qu\'une entrée d\'import map désigne n\'a pas le décalage de la carte'),
+  dansLigne(I, 'const reserves = { dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard, position: s.debut', 'position: s.debut', 'position: 0', 'arête : un fichier qu\'un script écrit dans la page charge n\'a pas le décalage de ce script'),
+  dansLigne(I, 'const reserves = { dansTemplate: e.dansTemplate, seulementStandard: e.seulementStandard, position: e.index', 'position: e.index', 'position: 0', 'arête : un fichier qu\'une entrée d\'import map désigne n\'a pas le décalage de la carte'),
   dansLigne(I, 'const propres = ref.worker ?', 'ref.worker ? { ...reserves, worker: true } : reserves', 'reserves', 'arête : un worker créé dans la page n\'est pas dit worker'),
-  dansLigne(I, 'if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard, worker, position });', 'gabarit, standard, worker, position', 'gabarit, standard, position', 'arête : le fait qu\'un fichier soit chargé par un worker est perdu'),
-  dansLigne(I, 'if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard, worker, position });', 'gabarit, standard, worker, position', 'gabarit, standard, worker', 'arête : la position de la balise est perdue'),
+  dansLigne(I, 'if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard, worker, position', 'gabarit, standard, worker, position', 'gabarit, standard, position', 'arête : le fait qu\'un fichier soit chargé par un worker est perdu'),
+  dansLigne(I, 'if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard, worker, position', 'gabarit, standard, worker, position', 'gabarit, standard, worker', 'arête : la position de la balise est perdue'),
 );
 
 const { partie, restants } = lireArguments(process.argv.slice(2));

@@ -163,6 +163,38 @@ RGAA statiques, poids de la surface exécutée (écoconception), et
 conventions du guide de contribution (nom de dépôt, `SECURITY.md`,
 cohérence d'un éventuel `manifest.json`).
 
+## Ce que l'outil n'a pas lu
+
+Un audit qui ne dit pas ce qu'il n'a pas vu se lit comme un audit qui n'a rien
+trouvé. L'outil lit chaque fichier de texte du dépôt dans des plafonds (nombre
+de fichiers, texte lu en tout, taille d'un fichier, entrées listées dans les
+dossiers exclus, résolutions d'adresses de worker, arêtes de document,
+imbrication de code littéral), et aucun ne se passe sous silence :
+
+- un **plafond atteint** est un constat critique et bloquant (C-SURFACE-01 ;
+  C-XSS-03 pour l'imbrication de code littéral, C-EXFIL-03 pour les feuilles
+  `data:` imbriquées) qui empêche les axes que ce qui n'a pas été lu aurait
+  nourris (`axesEmpeches`) : un widget qui s'arrange pour que l'outil ne le lise
+  pas ne note jamais mieux que s'il s'était laissé lire ;
+- un **fichier de code non lu** qu'une page atteint (trop gros, plafond cumulé
+  atteint, lecture refusée, extension de binaire chargée comme du code) est un
+  constat critique et bloquant par fichier (C-SURFACE-02). Il empêche B, C, E
+  et F, qui lisent tout le code exécuté ; A aussi, sauf pour un dossier exclu ou
+  une bibliothèque tierce, que A ne juge pas ;
+- un **fichier non lu qu'aucune page n'atteint comme du code** (des données, du
+  code que la surface de chargement n'atteint pas) est une information qui le
+  nomme : le navigateur ne l'exécute pas, le risque est celui d'une fuite que
+  les règles qui lisent tout le texte du dépôt n'ont pas pu voir. **Limite
+  connue** : une adresse entièrement calculée (`import(x)`) ne désigne aucun
+  dossier que l'inventaire sache nommer, donc un fichier de code non lu que
+  seule une telle adresse atteindrait reste dit comme information. L'`import()`
+  calculé est, lui, déjà dit par une règle de l'axe C.
+
+Les plafonds ne sont pas fixés au jugé : `scripts/mesurer-marges-plafonds.mjs
+<dépôt>…` dit ce que chacun coûte à des dépôts donnés et la marge qui reste
+(aucune cible honnête ne doit y buter). Celui d'un fichier tient compte de ce que
+lire un fichier coûte, en temps et en mémoire, proportionnellement à sa taille.
+
 ## Ce que cet outil ne fait pas
 
 - **Il ne remplace pas une revue de code humaine.** Le guide de

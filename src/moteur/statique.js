@@ -8,6 +8,7 @@ import { reglesB } from '../regles/b-lisibilite.js';
 import { reglesC } from '../regles/c-securite.js';
 import { reglesE } from '../regles/e-dependances.js';
 import { reglesF } from '../regles/f-conformite.js';
+import { analyserSurface } from '../regles/c-surface.js';
 import { mentionsParLigne } from './analyse-js.js';
 
 // Règles dont l'emplacement est une balise de la page et non du code : elles disent elles-mêmes ce que la page a de particulier (gabarit, standard seul).
@@ -39,10 +40,13 @@ export async function analyseStatique(ctx, options = {}) {
   for (const regle of [...reglesA, ...reglesC, ...reglesB, ...reglesF]) {
     constats.push(...regle(ctx));
   }
+  // Ce que l'outil n'a pas pu lire se dit en dernier, avec les axes qu'il empêche de mesurer : le budget des arêtes de document
+  // ne se sait épuisé qu'une fois les graphes de document demandés (par les règles de C, puis celles de E).
   for (const regle of reglesE) {
     const r = await regle(ctx, options);
     constats.push(...(r ?? []));
   }
+  constats.push(...analyserSurface(ctx));
   ajouterMentions(ctx, constats);
   return constats;
 }

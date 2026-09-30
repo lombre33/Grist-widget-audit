@@ -369,11 +369,12 @@ function chargementsDeFeuille(f, feuille, entrees, position) {
 
 function constatBorne(f, e) {
   return constat({
-    regle: 'C-EXFIL-03', axe: 'C', severite: 'info', confiance: 'certain', mesurePartielle: true,
+    regle: 'C-EXFIL-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain',
     titre: 'Feuilles de style `data:` imbriquées : lecture arrêtée',
+    axesEmpeches: ['B', 'C', 'F'],
     fichier: f.chemin, ligne: e.ligne, extrait: e.balise,
     constat: `La lecture des feuilles de style \`data:\` imbriquées s'est arrêtée à sa borne de ${e.raison === 'profondeur' ? `profondeur (${LIMITES_CSS.profondeur} niveaux)` : `volume (${LIMITES_CSS.octets} octets)`} : ce qui se trouve au-delà n'a pas été audité.`,
-    impact: "Un `@import` peut enchaîner des feuilles `data:` sans limite, chacune pouvant en charger une depuis un hôte externe. Le navigateur les suit toutes.",
+    impact: "Un `@import` peut enchaîner des feuilles `data:` sans limite, chacune pouvant en charger une depuis un hôte externe. Le navigateur les suit toutes : ce qui n'a pas été lu peut contacter n'importe quel hôte.",
     remediation: "Remplacer ces feuilles `data:` par un fichier CSS du dépôt, lu en une fois.",
     referentiels: [REF_ANSSI],
   });
@@ -499,7 +500,7 @@ function debuteParSchema(noeud, ...schemas) {
   return schemas.some((s) => new RegExp(`^${s}:`, 'i').test(t));
 }
 
-const MAX_PROFONDEUR_CODE_IMBRIQUE = 5;
+export const MAX_PROFONDEUR_CODE_IMBRIQUE = 5;
 
 /**
  * Noms liés par un motif de paramètre ou de déclaration, récursivement
@@ -1169,12 +1170,15 @@ function traiterSiteConstruction(ctx, { fichierOrigine, ligneAppel, colonneAppel
   }
 
   if (profondeur >= MAX_PROFONDEUR_CODE_IMBRIQUE) {
+    // Le code au-delà de la profondeur n'est pas lu : un widget qui s'arrange pour que l'outil n'y arrive pas ne note pas mieux que
+    // s'il s'était laissé lire. Le code imbriqué est du code que la page exécute : C (injection), E (chargements distants), F (hôtes
+    // contactés) et B (leur documentation, B-DOC-03 et B-DOC-04) ne l'ont pas vu ; A ne juge pas un code littéral imbriqué (`vendorise`).
     return { constats: [constat({
-      regle: 'C-XSS-03', axe: 'C', severite: 'majeur', bloquant: false, confiance: 'a_verifier',
-      titre: 'Imbrication de code littéral trop profonde pour être auditée',
+      regle: 'C-XSS-03', axe: 'C', severite: 'critique', bloquant: true, confiance: 'certain', titre: 'Imbrication de code littéral trop profonde pour être auditée',
+      axesEmpeches: ['B', 'C', 'E', 'F'],
       fichier: fichierOrigine, ligne: ligneAppel,
-      constat: `Ce code contient une chaîne exécutable elle-même imbriquée au-delà de ${MAX_PROFONDEUR_CODE_IMBRIQUE} niveaux.`,
-      impact: "Aucune raison légitime à ce niveau d'imbrication ; peut viser à épuiser l'analyse automatique plutôt qu'à échapper à une détection précise.",
+      constat: `Ce code contient une chaîne exécutable elle-même imbriquée au-delà de ${MAX_PROFONDEUR_CODE_IMBRIQUE} niveaux : l'outil n'a pas lu ce qui se trouve au-delà.`,
+      impact: "Aucune raison légitime à ce niveau d'imbrication ; vise à épuiser l'analyse automatique ou à cacher du code au-delà de ce qu'elle lit. Ce qui n'a pas été lu s'exécute pourtant dans le navigateur de chaque agent.",
       remediation: 'Supprimer cette construction en cascade.',
       referentiels: ['CWE-95'],
     })] };

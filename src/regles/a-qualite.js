@@ -23,6 +23,14 @@ const SEUILS = {
   ligneLongue: 160,
 };
 
+/**
+ * Une carte de sources (`.map`) est générée par l'empaqueteur et embarque le texte des sources, celles des bibliothèques tierces
+ * comprises : le contributeur ne l'a pas écrite, et ce qu'elle contient (marqueurs de travail inachevé, adresses de bibliothèques
+ * qui parlent d'un navigateur) ne dit rien de son travail ni de ses tests. Les règles qui cherchent ces signes dans le texte de
+ * tout le dépôt (A-DEV-03, A-TEST-02) la laissent donc de côté.
+ */
+const estCarteDeSources = (f) => f.ext === '.map';
+
 /** Taille des fichiers du code exécuté. */
 export function analyserTailleFichiers(ctx) {
   const constats = [];
@@ -201,7 +209,7 @@ export function analyserTracesDev(ctx) {
   });
 
   for (const f of ctx.fichiers) {
-    if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu) continue;
+    if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || estCarteDeSources(f)) continue;
     for (const m of f.contenu.matchAll(MARQUEUR_INACHEVE)) {
       marqueurs.push({ fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), type: m[1] ?? m[2] });
     }
@@ -314,7 +322,7 @@ export function analyserTests(ctx) {
     CHEMIN_TEST_UNITAIRE.test(f.chemin) || /\.(test|spec)\.(m?js|ts|jsx|tsx)$/i.test(f.chemin));
   const e2e = ctx.fichiers.filter((f) =>
     /(playwright|cypress|puppeteer|e2e|integration|browser)/i.test(f.chemin) ||
-    (f.contenu && CONTENU_TEST_E2E.test(f.contenu)));
+    (f.contenu && !estCarteDeSources(f) && CONTENU_TEST_E2E.test(f.contenu)));
 
   if (!testsUnitaires.length) {
     constats.push(constat({

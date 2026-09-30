@@ -43,18 +43,25 @@ const BINAIRES = new Set(['.png', '.jpg', '.jpeg', '.gif', '.webp', '.ico', '.pd
  */
 const MAX_FICHIERS = 20_000;
 const MAX_OCTETS_LUS_CUMULES = 200 * 1024 * 1024;
+/**
+ * Taille au-delà de laquelle un fichier de texte n'est pas lu : il est alors dit non lu (`nonLu`), jamais passé sous silence. Elle se
+ * fixe à la mesure, non au jugé : lire un fichier coûte du temps et de la mémoire proportionnels à sa taille, et aucun paquet d'une cible
+ * honnête ne doit buter sur elle. `scripts/mesurer-marges-plafonds.mjs` donne, pour des dépôts donnés, ce que chaque plafond leur coûte et
+ * la marge qui reste.
+ */
+const MAX_OCTETS_FICHIER = 16 * 1024 * 1024;
 
 /** Extensions considérées comme du code exécuté côté navigateur. */
 const CODE_WEB = new Set(['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.html', '.htm', '.css']);
 
 /**
  * @param {string} racine chemin absolu du dépôt audité
- * @param {{ maxEntreesListees?: number, maxResolutions?: number }} [plafonds] `maxEntreesListees` : les entrées de dossier que la lecture d'un préfixe d'import map peut parcourir (`MAX_ENTREES_LISTEES` par défaut) ; `maxResolutions` : les résolutions d'adresse de worker sous une page d'entrée que la fermeture peut faire (`MAX_RESOLUTIONS`). Seuls les essais les changent.
- * @returns {{racine:string, fichiers:Array, entrees:Array, surface:Set<string>, paquet:object|null, manifestes:Array}}
+ * @param {{ maxEntreesListees?: number, maxResolutions?: number, maxPasDocuments?: number, maxFichiers?: number, maxOctetsCumules?: number, maxOctetsFichier?: number }} [plafonds] `maxEntreesListees` : les entrées de dossier que la lecture d'un préfixe d'import map peut parcourir (`MAX_ENTREES_LISTEES` par défaut) ; `maxResolutions` : les résolutions d'adresse de worker sous une page d'entrée que la fermeture peut faire (`MAX_RESOLUTIONS`) ; `maxPasDocuments` : les arêtes de document (`MAX_PAS_DOCUMENTS`) ; `maxFichiers` : les fichiers inventoriés (`MAX_FICHIERS`) ; `maxOctetsCumules` : les octets de texte lus en tout (`MAX_OCTETS_LUS_CUMULES`) ; `maxOctetsFichier` : la taille au-delà de laquelle un fichier n'est pas lu (`MAX_OCTETS_FICHIER`). Seuls les essais les changent.
+ * @returns {{racine:string, fichiers:Array, entrees:Array, surface:Set<string>, paquet:object|null, manifestes:Array, tronque:?object, nonLus:Array<{chemin:string, taille:number, cause:'taille'|'cumul'|'lecture'|'extension', code:boolean, commeCode:boolean, atteint:boolean, dossierExclu:boolean}>, plafonds:{octets:number, octetsFichier:number}}} `tronque` : ce qui a tronqué l'inventaire (null si rien), relu à chaque lecture parce que le budget des arêtes de document ne s'épuise qu'une fois les règles lancées ; `nonLus` : les fichiers que l'outil n'a pas lus, avec la cause (`code` : du code, ou chargé comme du code ; `commeCode` : une page le charge comme du code ; `atteint` : une page le charge, d'une façon ou d'une autre) ; `plafonds` : le plafond d'octets lus en tout et celui d'un fichier, que les constats des fichiers non lus disent.
  */
-export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LISTEES, maxResolutions = MAX_RESOLUTIONS, maxPasDocuments = MAX_PAS_DOCUMENTS } = {}) {
+export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LISTEES, maxResolutions = MAX_RESOLUTIONS, maxPasDocuments = MAX_PAS_DOCUMENTS, maxFichiers = MAX_FICHIERS, maxOctetsCumules = MAX_OCTETS_LUS_CUMULES, maxOctetsFichier = MAX_OCTETS_FICHIER } = {}) {
   const fichiers = [];
-  const etat = { octetsLus: 0, tronqueFichiers: false, tronqueOctets: false, tronqueListage: false, exclus: [] };
+  const etat = { octetsLus: 0, tronqueFichiers: false, tronqueOctets: false, tronqueListage: false, exclus: [], maxFichiers, maxOctetsCumules, maxOctetsFichier };
   parcourir(racine, racine, fichiers, etat);
 
   const paquet = lireJson(path.join(racine, 'package.json'));
@@ -66,7 +73,7 @@ export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LIS
   const parChemin = new Map(fichiers.map((f) => [f.chemin, f]));
   const trouver = (chemin) => parChemin.get(chemin) ?? ouvrirHorsInventaire(racine, chemin, fichiers, parChemin, etat);
   const entrees = trouverPointsDEntree(fichiers, manifestes, trouver);
-  const { surface, mentions, partiel, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments } = calculerSurface(entrees, trouver, nouveauListeur(racine, fichiers, etat, maxEntreesListees), { maxResolutions, maxPasDocuments });
+  const { surface, mentions, partiel, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments, nonLusParCode, nonLusAtteints, documentsEpuises } = calculerSurface(entrees, trouver, nouveauListeur(racine, fichiers, etat, maxEntreesListees), { maxResolutions, maxPasDocuments });
 
   for (const f of fichiers) {
     f.executee = surface.has(f.chemin);
@@ -74,9 +81,21 @@ export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LIS
     f.vendorise = estVendorise(f);
   }
 
-  const tronque = (etat.tronqueFichiers || etat.tronqueOctets || etat.tronqueListage || partiel)
-    ? { fichiers: etat.tronqueFichiers, octets: etat.tronqueOctets, listage: etat.tronqueListage, surface: partiel, maxFichiers: MAX_FICHIERS, maxOctets: MAX_OCTETS_LUS_CUMULES, maxEntreesListees, maxResolutions }
+  // Ce qui a tronqué l'inventaire, relu à chaque demande : le budget des résolutions d'adresse et celui des arêtes de document
+  // peuvent s'épuiser après la construction (une règle qui évalue une page), et le rapport doit alors le dire.
+  const calculerTronque = () => (etat.tronqueFichiers || etat.tronqueOctets || etat.tronqueListage || partiel || documentsEpuises())
+    ? { fichiers: etat.tronqueFichiers, octets: etat.tronqueOctets, listage: etat.tronqueListage, surface: partiel, documents: documentsEpuises(), maxFichiers, maxOctets: maxOctetsCumules, maxEntreesListees, maxResolutions, maxPasDocuments }
     : null;
+
+  // Les fichiers que l'outil n'a pas lus, avec la cause : un fichier trop gros, le plafond cumulé atteint, une lecture qui a
+  // échoué, ou une extension de binaire qu'un chargement de code désigne. Dits par C-SURFACE-02, jamais passés sous silence.
+  const nonLus = [];
+  for (const f of fichiers) {
+    const commeCode = nonLusParCode.has(f.chemin);
+    const atteint = nonLusAtteints.has(f.chemin);
+    if (f.nonLu) nonLus.push({ chemin: f.chemin, taille: f.taille, cause: f.nonLu.cause, code: f.code || commeCode, commeCode, atteint, dossierExclu: Boolean(f.dossierExclu) });
+    else if (commeCode) nonLus.push({ chemin: f.chemin, taille: f.taille, cause: 'extension', code: true, commeCode, atteint, dossierExclu: Boolean(f.dossierExclu) });
+  }
 
   // Figé ICI, avant qu'aucune règle ne tourne : `preparerCodeExecuteEnChaine`
   // (axe C) ajoute ensuite à `fichiers` un fichier synthétique par contenu
@@ -87,7 +106,8 @@ export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LIS
   // non du code dans une chaîne.
   const fichiersReels = fichiers.length;
 
-  return { racine, fichiers, entrees, surface, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments, paquet, manifestes, tronque, fichiersReels };
+  const plafonds = { octets: maxOctetsCumules, octetsFichier: maxOctetsFichier };
+  return { racine, fichiers, entrees, surface, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments, paquet, manifestes, get tronque() { return calculerTronque(); }, fichiersReels, nonLus, plafonds };
 }
 
 function parcourir(racine, dossier, acc, etat) {
@@ -105,7 +125,7 @@ function parcourir(racine, dossier, acc, etat) {
     if (e.isSymbolicLink()) continue;
     if (e.isDirectory()) { parcourir(racine, abs, acc, etat); continue; }
     if (!e.isFile()) continue;
-    if (acc.length >= MAX_FICHIERS) { etat.tronqueFichiers = true; return; }
+    if (acc.length >= (etat.maxFichiers ?? MAX_FICHIERS)) { etat.tronqueFichiers = true; return; }
     const f = fiche(racine, abs, etat);
     if (f) acc.push(f);
   }
@@ -122,11 +142,19 @@ function fiche(racine, abs, etat) {
   const rel = path.relative(racine, abs).split(path.sep).join('/');
   const ext = path.extname(abs).toLowerCase();
   let taille = 0;
-  try { taille = fs.statSync(abs).size; } catch { return null; }
-  const binaire = BINAIRES.has(ext) || taille > 4 * 1024 * 1024;
+  try { taille = fs.statSync(abs).size; } catch {
+    // Un fichier dont la taille ne se lit pas n'est ni lu ni tu : la fiche le dit non lu (`lecture`), sa taille est inconnue (0). Un binaire que rien ne lit n'a rien à dire.
+    if (BINAIRES.has(ext)) return null;
+    return { chemin: rel, ext, taille: 0, binaire: true, code: CODE_WEB.has(ext), executee: false, nonLu: { cause: 'lecture' } };
+  }
+  const maxFichier = etat.maxOctetsFichier ?? MAX_OCTETS_FICHIER;
+  const binaire = BINAIRES.has(ext) || taille > maxFichier;
   const f = { chemin: rel, ext, taille, binaire, code: CODE_WEB.has(ext), executee: false };
+  // Un fichier que l'outil ne lit pas alors que rien ne dit qu'il n'est pas du texte (une extension de binaire le dit) : `nonLu`
+  // en donne la cause, et le rapport le nomme (C-SURFACE-02). `binaire` reste vrai pour le reste de l'outil : aucune règle ne le lit.
+  if (taille > maxFichier && !BINAIRES.has(ext)) f.nonLu = { cause: 'taille' };
   if (!binaire) {
-    if (etat.octetsLus + taille > MAX_OCTETS_LUS_CUMULES) {
+    if (etat.octetsLus + taille > (etat.maxOctetsCumules ?? MAX_OCTETS_LUS_CUMULES)) {
       // Plafond cumulé atteint : on garde l'entrée (taille, extension) pour
       // l'inventaire et les axes qui n'ont pas besoin du contenu, mais on
       // n'en lit pas le texte en mémoire — au même titre qu'un fichier
@@ -134,6 +162,7 @@ function fiche(racine, abs, etat) {
       etat.tronqueOctets = true;
       f.binaire = true;
       f.contenuTronque = true;
+      f.nonLu = { cause: 'cumul' };
     } else {
       try {
         f.contenu = fs.readFileSync(abs, 'utf8');
@@ -144,7 +173,7 @@ function fiche(racine, abs, etat) {
           const t = l.trim();
           return t && !/^(\/\/|\/\*|\*|#|<!--)/.test(t);
         }).length;
-      } catch { f.binaire = true; }
+      } catch { f.binaire = true; f.nonLu = { cause: 'lecture' }; }
     }
   }
   return f;
@@ -166,7 +195,6 @@ export function ouvrirHorsInventaire(racine, rel, fichiers, parChemin, etat) {
   const segments = rel.split('/');
   if (!segments.some((s) => EXCLUS.has(s)) || segments.includes('.git')) return null;
   if (segments.some((s) => s === '' || s === '.' || s === '..')) return null;
-  if (fichiers.length >= MAX_FICHIERS) { etat.tronqueFichiers = true; return null; }
   let abs = racine;
   let statut;
   try {
@@ -177,6 +205,9 @@ export function ouvrirHorsInventaire(racine, rel, fichiers, parChemin, etat) {
     }
   } catch { return null; }
   if (!statut.isFile()) return null;
+  // Le plafond ne se dit atteint que pour un fichier qui existe et qu'il empêche d'ouvrir : l'inventaire pleine tête cherche aussi des
+  // candidats qui n'existent pas (`x.js.mjs`), et n'en est pas tronqué.
+  if (fichiers.length >= (etat.maxFichiers ?? MAX_FICHIERS)) { etat.tronqueFichiers = true; return null; }
   const f = fiche(racine, abs, etat);
   if (!f) return null;
   f.dossierExclu = true;
@@ -205,10 +236,20 @@ const MAX_RESOLUTIONS = 2_000_000;
  */
 const MAX_PAS_DOCUMENTS = 2_000_000;
 
+/** Les plafonds par défaut de l'inventaire, tels que l'outil les applique : les essais et la mesure des marges les lisent ici plutôt que de les recopier. */
+export const PLAFONDS = Object.freeze({
+  fichiers: MAX_FICHIERS,
+  octets: MAX_OCTETS_LUS_CUMULES,
+  octetsFichier: MAX_OCTETS_FICHIER,
+  entreesListees: MAX_ENTREES_LISTEES,
+  resolutions: MAX_RESOLUTIONS,
+  pasDocuments: MAX_PAS_DOCUMENTS,
+});
+
 /**
  * Ce qui a tronqué l'inventaire, une phrase par plafond atteint : le rapport
  * (Markdown, ligne de commande) les dit tels quels.
- * @param {{fichiers:boolean, octets:boolean, listage:boolean, surface:boolean, maxFichiers:number, maxOctets:number, maxEntreesListees:number, maxResolutions:number}} tronque
+ * @param {{fichiers:boolean, octets:boolean, listage:boolean, surface:boolean, documents?:boolean, maxFichiers:number, maxOctets:number, maxEntreesListees:number, maxResolutions:number, maxPasDocuments?:number}} tronque
  * @returns {string[]}
  */
 export function raisonsDeTroncature(tronque) {
@@ -217,6 +258,7 @@ export function raisonsDeTroncature(tronque) {
   if (tronque.octets) raisons.push(`plus de ${Math.round(tronque.maxOctets / 1024 / 1024)} Mio de contenu lu`);
   if (tronque.listage) raisons.push(`plus de ${tronque.maxEntreesListees} entrées lues dans les dossiers exclus pour suivre une adresse d'import map ou un import() à début fixe`);
   if (tronque.surface) raisons.push(`plus de ${tronque.maxResolutions} résolutions d'adresses de worker sous les pages d'entrée : la surface n'est pas complète`);
+  if (tronque.documents) raisons.push(`plus de ${tronque.maxPasDocuments} pas d'analyse de document : l'ordre de chargement n'est pas établi pour toutes les pages`);
   return raisons;
 }
 
@@ -435,12 +477,13 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
       const standard = objet && Boolean(ref.seulementStandard);
       const worker = objet && Boolean(ref.worker);
       const position = objet ? ref.position : undefined;
+      const commeCode = objet && Boolean(ref.commeCode);            // un chargement de code (script, import, worker, carte d'import), non un `<link>` ni une URL de feuille de style
       if (objet && ref.dossier !== undefined) liste.push({ dossier: ref.dossier, gabarit, standard, worker, position });
       else if (objet && ref.dossierRelatif !== undefined) for (const dossier of dossiersDepuis(rel, ref.dossierRelatif)) liste.push({ dossier, gabarit, standard, worker, position });
       else {
         for (const cible of ciblesDe(ref, rel)) {
           for (const candidat of [cible, `${cible}.js`, `${cible}.mjs`, path.posix.join(cible, 'index.js')]) {
-            if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard, worker, position });
+            if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard, worker, position, commeCode });
           }
         }
       }
@@ -449,28 +492,42 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
     return liste;
   };
   /** Fichiers atteints depuis `departs` (les entrées par défaut), sans emprunter les arêtes qui portent la réserve `evite` (`gabarit`, `standard`). Chaque chemin entre une fois dans la file et chaque dossier se lit une fois : la fermeture est linéaire en arêtes, quel que soit le nombre de fois qu'un même fichier ou un même dossier est nommé. */
-  const atteints = (evite, departs = entrees) => {
+  const atteints = (evite, departs = entrees, nonLus = null) => {
     const vus = new Set();
     const dossiersVus = new Set();
     const file = [...departs];
     const mis = new Set(file);
-    const mettre = (chemin) => { if (!mis.has(chemin)) { mis.add(chemin); file.push(chemin); } };
+    const code = new Set(file);                                  // atteints par un chargement de code : un point d'entrée est chargé comme une page
+    const mettre = (chemin, commeCode) => {
+      if (commeCode) code.add(chemin);
+      if (!mis.has(chemin)) { mis.add(chemin); file.push(chemin); }
+    };
+    const binaires = [];                                         // ce que la file atteint et que l'outil ne lit pas
     for (let i = 0; i < file.length; i++) {
       const rel = file[i];
       const f = trouver(rel);
-      if (!f || f.binaire) continue;
+      if (!f) continue;
+      if (f.binaire) { if (nonLus) binaires.push(rel); continue; }
       vus.add(rel);
       for (const arete of aretes(rel)) {
         if (evite && arete[evite]) continue;
-        if (arete.dossier === undefined) { mettre(arete.cible); continue; }
+        if (arete.dossier === undefined) { mettre(arete.cible, arete.commeCode); continue; }
         if (dossiersVus.has(arete.dossier)) continue;            // un dossier ne se relit pas : ses modules sont déjà dans la file
         dossiersVus.add(arete.dossier);
-        for (const chemin of lister(arete.dossier)) mettre(chemin);
+        for (const chemin of lister(arete.dossier)) mettre(chemin, true);
       }
+    }
+    // Un fichier que l'outil ne lit pas (une extension de binaire, un fichier trop gros) et qu'une page atteint : `atteints` les
+    // nomme tous, `parCode` ceux qu'un chargement de code désigne (le navigateur les charge comme du code, personne ne les a lus).
+    // Relevé une fois la file vidée : un fichier peut être atteint par un chargement de code après avoir été écarté une première fois.
+    for (const rel of binaires) {
+      nonLus.atteints.add(rel);
+      if (code.has(rel)) nonLus.parCode.add(rel);
     }
     return vus;
   };
-  const surface = atteints(null);
+  const relevesNonLus = { atteints: new Set(), parCode: new Set() };
+  const surface = atteints(null, entrees, relevesNonLus);
   const sansGabarit = atteints('gabarit');
   const sansStandard = atteints('standard');
   // Ce que le document d'une page charge dans son propre contexte, pour une règle qui doit savoir de quelle import map un module dépend : ni ce que ses workers exécutent (Chromium 141 n'applique jamais l'import map de la page, ni la clé `integrity`, à un worker), ni ce que charge une autre page HTML. À la demande, une fois par page, dans un budget d'arêtes commun ; null quand il est épuisé (l'appelant compte alors la page comme chargeur, il ne blanchit rien).
@@ -538,7 +595,7 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
   const pasDocuments = () => maxPasDocuments - budgetDocuments.restant;
   // Un pas de plus que l'analyse de document veut faire (une page évaluée pour un chargement) : faux quand il n'en reste plus, et le budget reste épuisé.
   const depenserPasDocuments = (pas) => (budgetDocuments.restant -= pas) >= 0;
-  return { surface, mentions, partiel: budget.epuise, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments };
+  return { surface, mentions, partiel: budget.epuise, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments, nonLusParCode: relevesNonLus.parCode, nonLusAtteints: relevesNonLus.atteints, documentsEpuises: () => budgetDocuments.restant < 0 };
 }
 
 const ALIAS_GLOBAL = '(?:(?:window|self|globalThis)\\.)?';
@@ -729,10 +786,10 @@ function referencesSortantes(f) {
     };
     // `position` : le décalage, dans la page, de la balise qui mène au fichier (voir `debutDeChargement`).
     for (const s of scripts) {
-      for (const ch of s.chargements) if (ch.execute) local(ch.valeur, s.baseBrute, { dansTemplate: s.dansTemplate, seulementStandard: ch.seulementStandard, position: s.debut });
+      for (const ch of s.chargements) if (ch.execute) local(ch.valeur, s.baseBrute, { dansTemplate: s.dansTemplate, seulementStandard: ch.seulementStandard, position: s.debut, commeCode: true });
       if (s.unite) {
         // Un worker écrit en commentaire ou en gabarit n'y figure pas ; dans la page, tout se résout contre la base du document.
-        const reserves = { dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard, position: s.debut };
+        const reserves = { dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard, position: s.debut, commeCode: true };
         for (const ref of referencesDeCode(s.texte)) {
           const propres = ref.worker ? { ...reserves, worker: true } : reserves;      // ce qu'un worker exécute est dit à la fermeture (`surfaceDesWorkers`)
           if (typeof ref === 'string') local(ref, s.baseBrute, reserves);
@@ -746,7 +803,7 @@ function referencesSortantes(f) {
     for (const e of extraireImportMaps(c, f.chemin)) {
       const chemin = cheminLocal(urlDeCarte(e.url, e.baseBrute, f.chemin));
       if (chemin === null) continue;
-      const reserves = { dansTemplate: e.dansTemplate, seulementStandard: e.seulementStandard, position: e.index };   // la carte se lit avant tout import par un nom : ce qu'elle désigne ne se charge pas avant elle
+      const reserves = { dansTemplate: e.dansTemplate, seulementStandard: e.seulementStandard, position: e.index, commeCode: true };   // la carte se lit avant tout import par un nom : ce qu'elle désigne ne se charge pas avant elle
       // Une adresse qui finit par `/` est un préfixe (`"lib/": "./libs/"` : `import 'lib/x.js'` charge `libs/x.js`) : tout module du dossier peut être chargé.
       refs.push(chemin === '' || chemin.endsWith('/') ? { dossier: chemin, ...reserves } : { chemin, ...reserves });
     }
@@ -755,7 +812,8 @@ function referencesSortantes(f) {
     for (const feuille of feuilles) for (const url of urlsDeFeuille(lireFeuille(feuille, budget))) local(url, feuille.baseBrute, { dansTemplate: feuille.modele });
   }
   if (f.ext === '.css') refs.push(...urlsDeFeuille(lireFeuille({ sorte: 'style', applique: true, precharge: false, modele: false, texte: c, mimeLibre: true, baseBrute: null })));
-  if (['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'].includes(f.ext)) refs.push(...referencesDeCode(c));
+  // Ce que le code d'un fichier charge (import, import(), worker, importScripts) est du code : le chargement le marque `commeCode`.
+  if (['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'].includes(f.ext)) refs.push(...referencesDeCode(c).map((ref) => (typeof ref === 'string' ? { relatif: ref, commeCode: true } : { ...ref, commeCode: true })));
   return refs;
 }
 
@@ -784,10 +842,17 @@ const SIGNATURE_BUNDLEUR = /\b(__defProp|__getOwnPropNames|__getOwnPropDesc|__ge
  */
 export function estVendorise(f) {
   if (f.binaire || !f.contenu || !['.js', '.mjs'].includes(f.ext)) return false;
-  return /(^|\/)(vendor|libs?|third[-_]party|node_modules|assets\/js\/lib)\//i.test(f.chemin) ||
-    /\.min\.js$/.test(f.chemin) ||
+  return cheminVendorise(f.chemin) ||
     ((f.locSignificatives ?? 0) > 300 && (f.taille / Math.max(1, f.lignes.length)) > 200) ||
     ((f.locSignificatives ?? 0) > 300 && SIGNATURE_BUNDLEUR.test(f.contenu.slice(0, 5000)));
+}
+
+/**
+ * La part de `estVendorise` que le chemin seul dit : un dossier de bibliothèques tierces ou un suffixe `.min.js`. Un fichier
+ * que l'outil n'a pas lu n'a que son chemin pour dire s'il est à exempter des axes A et B (C-SURFACE-02).
+ */
+export function cheminVendorise(chemin) {
+  return /(^|\/)(vendor|libs?|third[-_]party|node_modules|assets\/js\/lib)\//i.test(chemin) || /\.min\.js$/.test(chemin);
 }
 
 function lireJson(abs) {

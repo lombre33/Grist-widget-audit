@@ -100,7 +100,7 @@ MUTANTS.push(
   dansLigne(I, 'const estAdresseDeModule = ', 'urlDeCarte(valeur, null, \'\') !== null', 'true', 'module : toute chaîne est une adresse'),
   dansLigne(I, "cibles.add(path.posix.normalize(chemin.startsWith('/')", "chemin.startsWith('/') ? chemin.slice(1) : path.posix.join(path.posix.dirname(rel), chemin)", 'path.posix.join(path.posix.dirname(rel), chemin)', 'module : « / » part du dossier du fichier'),
   dansLigne(I, "cibles.add(path.posix.normalize(chemin.startsWith('/')", 'chemin.slice(1)', 'chemin', 'module : « / » garde sa barre de tête'),
-  dansLigne(I, "return /(^|\\/)(vendor|libs?|third[-_]party|node_modules|assets\\/js\\/lib)\\//i.test(f.chemin) ||", 'node_modules|', '', 'vendorisé : node_modules n\'est plus du code tiers recopié'),
+  dansLigne(I, "return /(^|\\/)(vendor|libs?|third[-_]party|node_modules|assets\\/js\\/lib)\\//i.test(chemin)", 'node_modules|', '', 'vendorisé : node_modules n\'est plus du code tiers recopié'),
 );
 
 // --- les workers, lus dans l'AST puis, si le code ne se parse pas, par expressions régulières -------------------------
@@ -127,7 +127,7 @@ MUTANTS.push(
 MUTANTS.push(
   dansLigne(J, 'if (ignorerVendorise && (f.vendorise || f.dossierExclu)) continue;', ' || f.dossierExclu', '', 'A/B : les fonctions et noms d\'un dossier exclu sont jugés'),
   dansLigne(QA, '.filter((f) => f.executee && !f.vendorise && !f.dossierExclu', ' && !f.dossierExclu', '', 'A-TAILLE-01 : un fichier de dist/ est jugé'),
-  dansLigne(QA, 'if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu) continue;', ' || f.dossierExclu', '', 'A-DEV-03 : les marqueurs d\'un fichier de dist/ sont comptés'),
+  dansLigne(QA, 'if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || estCarteDeSources(f)) continue;', ' || f.dossierExclu', '', 'A-DEV-03 : les marqueurs d\'un fichier de dist/ sont comptés'),
   dansLigne(QA, "if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || !['.js', '.mjs'].includes(f.ext)) continue;", ' || f.dossierExclu', '', 'A-DUP-01 : les blocs d\'un fichier de dist/ sont comparés'),
   [QB, "    if (!f.executee || f.vendorise || f.dossierExclu || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;\n    if ((f.locSignificatives ?? 0) < 200) continue;", "    if (!f.executee || f.vendorise || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;\n    if ((f.locSignificatives ?? 0) < 200) continue;", 'B-COM-01 : un fichier de dist/ est jugé'],
   dansLigne(QB, "if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || !['.js', '.mjs', '.html'].includes(f.ext)) continue;", ' || f.dossierExclu', '', 'B-IA-01 : les marqueurs d\'un fichier de dist/ sont comptés'),
@@ -206,7 +206,7 @@ MUTANTS.push(
   dansLigne(I, 'const MODULE_JS = ', '$/i', '$/', 'listeur : la casse compte (D.JS n\'est plus un module)'),
   dansLigne(I, 'const MODULE_JS = ', '\\.(?:', '(?:', 'listeur : un nom sans point (js) est un module'),
   dansLigne(I, 'const MAX_ENTREES_LISTEES = ', '100_000', '0', 'listeur : aucune entrée ne peut être lue par défaut'),
-  dansLigne(I, 'const { surface, mentions, partiel, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments } = calculerSurface(', 'nouveauListeur(racine, fichiers, etat, maxEntreesListees)', 'nouveauListeur(racine, fichiers, etat)', 'listeur : le budget demandé n\'est pas transmis'),
+  dansLigne(I, 'documentsEpuises } = calculerSurface(', 'nouveauListeur(racine, fichiers, etat, maxEntreesListees)', 'nouveauListeur(racine, fichiers, etat)', 'listeur : le budget demandé n\'est pas transmis'),
   dansLigne(I, "if (e.isDirectory() && e.name !== '.git') etat.exclus.push(", "e.name !== '.git'", 'true', 'listeur : .git est noté comme dossier exclu'),
   dansLigne(I, "if (e.isDirectory() && e.name !== '.git') etat.exclus.push(", "etat.exclus.push(path.relative(racine, abs).split(path.sep).join('/'))", 'void 0', 'listeur : aucun dossier exclu n\'est noté'),
   dansLigne(I, 'const chemins = fichiers.filter(', '!f.dossierExclu && ', '', 'listeur : un fichier de dossier exclu déjà ouvert est rendu deux fois'),
@@ -249,13 +249,13 @@ MUTANTS.push(
 
 // --- la fermeture : un fichier, un dossier ne se lisent qu'une fois --------------------------------------------------
 MUTANTS.push(
-  dansLigne(I, 'const mettre = (chemin) => { if (!mis.has(chemin))', '!mis.has(chemin)', 'true', 'fermeture : un fichier déjà dans la file y est remis'),
-  dansLigne(I, 'const mettre = (chemin) => { if (!mis.has(chemin))', 'mis.add(chemin); ', '', 'fermeture : un fichier mis dans la file n\'est pas noté'),
+  dansLigne(I, 'if (!mis.has(chemin)) { mis.add(chemin)', '!mis.has(chemin)', 'true', 'fermeture : un fichier déjà dans la file y est remis'),
+  dansLigne(I, 'if (!mis.has(chemin)) { mis.add(chemin)', 'mis.add(chemin); ', '', 'fermeture : un fichier mis dans la file n\'est pas noté'),
   dansLigne(I, 'const mis = new Set(file);', 'new Set(file)', 'new Set()', 'fermeture : un point d\'entrée cité par un fichier est remis dans la file'),
   dansLigne(I, 'if (dossiersVus.has(arete.dossier)) continue;', 'dossiersVus.has(arete.dossier)', 'false', 'fermeture : un dossier nommé plusieurs fois est relu'),
   dansLigne(I, 'dossiersVus.add(arete.dossier);', 'dossiersVus.add(arete.dossier);', 'void 0;', 'fermeture : un dossier lu n\'est pas noté'),
-  dansLigne(I, 'for (const chemin of lister(arete.dossier)) mettre(chemin);', 'mettre(chemin)', 'void chemin', 'fermeture : les modules d\'un dossier ne sont pas suivis'),
-  dansLigne(I, 'if (arete.dossier === undefined) { mettre(arete.cible); continue; }', 'mettre(arete.cible);', 'void 0;', 'fermeture : un fichier désigné n\'est pas suivi'),
+  dansLigne(I, 'for (const chemin of lister(arete.dossier)) mettre(chemin', 'mettre(chemin, true)', 'void chemin', 'fermeture : les modules d\'un dossier ne sont pas suivis'),
+  dansLigne(I, 'if (arete.dossier === undefined) { mettre(arete.cible', 'mettre(arete.cible, arete.commeCode);', 'void 0;', 'fermeture : un fichier désigné n\'est pas suivi'),
 );
 
 // --- ce qui s'adresse au document : les contextes de page et la résolution --------------------------------------------
@@ -335,17 +335,17 @@ MUTANTS.push(
 MUTANTS.push(
   dansLigne(I, 'export function construireContexte(', 'maxResolutions = MAX_RESOLUTIONS', 'maxResolutions = 0', 'budget : aucune résolution par défaut'),
   dansLigne(I, 'const MAX_RESOLUTIONS = ', '2_000_000', '0', 'budget : le plafond de résolutions est nul'),
-  dansLigne(I, 'const { surface, mentions, partiel, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments } = calculerSurface(', ', { maxResolutions, maxPasDocuments })', ', { maxPasDocuments })', 'budget : le plafond demandé n\'est pas transmis à la fermeture'),
+  dansLigne(I, 'documentsEpuises } = calculerSurface(', ', { maxResolutions, maxPasDocuments })', ', { maxPasDocuments })', 'budget : le plafond demandé n\'est pas transmis à la fermeture'),
   dansLigne(I, 'export function calculerSurface(', 'maxResolutions = MAX_RESOLUTIONS', 'maxResolutions = 0', 'budget : la fermeture n\'a par défaut aucune résolution'),
   dansLigne(I, 'const budget = { restant: maxResolutions, epuise: false };', 'epuise: false', 'epuise: true', 'budget : la fermeture démarre épuisée'),
-  dansLigne(I, 'return { surface, mentions, partiel: budget.epuise, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments };', 'budget.epuise', 'false', 'budget : la fermeture ne dit pas qu\'elle est partielle'),
+  dansLigne(I, 'return { surface, mentions, partiel: budget.epuise, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments,', 'budget.epuise', 'false', 'budget : la fermeture ne dit pas qu\'elle est partielle'),
   dansLigne(I, 'export function resolveurDeDocument(', 'restant: Infinity', 'restant: 0', 'budget : le résolveur seul n\'a aucune résolution'),
   dansLigne(I, 'if (--budget.restant < 0)', '--budget.restant < 0', '--budget.restant <= 0', 'budget : une résolution de moins que le plafond'),
   dansLigne(I, 'if (--budget.restant < 0)', '--budget.restant < 0', '--budget.restant < -1', 'budget : une résolution de plus que le plafond'),
   dansLigne(I, 'if (--budget.restant < 0)', 'budget.epuise = true;', 'void 0;', 'budget : l\'épuisement ne se dit pas'),
   dansLigne(I, 'if (--budget.restant < 0)', ' break;', '', 'budget : la résolution continue au-delà du plafond'),
-  dansLigne(I, 'const tronque = (etat.tronqueFichiers', '|| partiel)', ')', 'tronque : la surface partielle ne tronque rien'),
-  dansLigne(I, 'const tronque = (etat.tronqueFichiers', '|| etat.tronqueListage', '', 'tronque : la lecture coupée des dossiers exclus ne tronque rien'),
+  dansLigne(I, 'const calculerTronque = () => (etat.tronqueFichiers', '|| partiel ||', '||', 'tronque : la surface partielle ne tronque rien'),
+  dansLigne(I, 'const calculerTronque = () => (etat.tronqueFichiers', '|| etat.tronqueListage', '', 'tronque : la lecture coupée des dossiers exclus ne tronque rien'),
   dansLigne(I, 'listage: etat.tronqueListage', 'listage: etat.tronqueListage', 'listage: false', 'tronque : le listage coupé ne se dit pas'),
   dansLigne(I, 'listage: etat.tronqueListage', 'surface: partiel', 'surface: false', 'tronque : la surface partielle ne se dit pas'),
   dansLigne(I, 'listage: etat.tronqueListage', 'maxEntreesListees, maxResolutions', 'maxResolutions', 'tronque : le plafond de lecture n\'est pas dit'),

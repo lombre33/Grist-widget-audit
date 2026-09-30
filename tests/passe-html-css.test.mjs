@@ -348,12 +348,20 @@ test('feuilles data: imbriquées : la borne de volume est dite aussi', () => {
   assert.equal(b?.raison, 'volume');
 });
 
-test('la borne atteinte devient un constat C-EXFIL-03 d\'information, mesure partielle (jamais un silence)', () => {
-  const cs = exfil(`<style>${chaineData(20)}</style>`).filter((c) => /imbriquées/.test(c.titre));
-  assert.equal(cs.length, 1);
-  assert.equal(cs[0].severite, 'info');
-  assert.equal(cs[0].mesurePartielle, true);
-  assert.ok(!cs[0].bloquant);
+test('la borne atteinte devient un constat C-EXFIL-03 critique et bloquant qui empêche B, C et F : la feuille non lue peut contacter n\'importe quel hôte, et un widget qui empêche la lecture ne note pas mieux', () => {
+  for (const raison of [chaineData(20), chaineData(33)]) {
+    const cs = exfil(`<style>${raison}</style>`).filter((c) => /imbriquées/.test(c.titre));
+    assert.equal(cs.length, 1);
+    assert.equal(cs[0].severite, 'critique');
+    assert.equal(cs[0].bloquant, true);
+    assert.equal(cs[0].confiance, 'certain');
+    assert.deepEqual(cs[0].axesEmpeches, ['B', 'C', 'F']);
+    assert.equal(cs[0].mesurePartielle, false, 'ce n\'est plus une réserve sur la mesure : la mesure est empêchée');
+  }
+  const [profondeur] = exfil(`<style>${chaineData(20)}</style>`).filter((c) => /imbriquées/.test(c.titre));
+  const [volume] = exfil(`<style>${chaineData(33)}</style>`).filter((c) => /imbriquées/.test(c.titre));
+  assert.match(profondeur.constat, /borne de profondeur \(16 niveaux\)/);
+  assert.match(volume.constat, /borne de volume \(1048576 octets\)/);
 });
 
 // ---------------------------------------------------------------------------
