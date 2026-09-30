@@ -89,8 +89,14 @@ règle cherche deux choses, et ne les mélange pas.
   les empreintes ressemblent à des clés, n'est pas lu. C'est un critique
   bloquant, même sous un nom sans rapport. Un format que son fournisseur
   publie pour être public (clé Google, clé publique Stripe, jeton public
-  Mapbox) est une information : il n'y a rien à révoquer. Les clés d'exemple de
-  la documentation d'AWS ne disent rien.
+  Mapbox, clé anonyme d'un fournisseur de base de données comme Supabase) est
+  une information : il n'y a rien à révoquer. Un JWT n'est la clé anonyme que si
+  sa charge utile, décodée, est un objet JSON dont `role` vaut `anon` : tout
+  autre rôle (`service_role` compris), une charge sans rôle ou qui n'est pas du
+  JSON, un rôle qui n'est pas au premier niveau, le dernier de deux rôles qui
+  se contredisent, laissent le jeton critique et bloquant. L'émetteur (`iss`) et
+  le rôle sont dits dans la preuve, l'émetteur masqué comme toute valeur. Les
+  clés d'exemple de la documentation d'AWS ne disent rien.
 - **Un « nom = valeur »** : un littéral affecté à un nom dont le **dernier mot**
   est un secret (`apiKey`, `DB_PASSWORD`, `authToken`, `mot_de_passe`), car
   `tokenUrl` ou `passwordLabel` disent ce que la valeur décrit, non ce
@@ -116,7 +122,9 @@ TypeScript ou un code illisible n'est lu que par les formats de fournisseur
 (et, quand une page l'exécute, dit illisible par C-SURFACE-03) ; un format de
 fournisseur absent de la liste (clés Stripe secrètes, Anthropic, jetons Slack
 d'application…) n'est reconnu que s'il est affecté, dans un fichier JavaScript
-ou de configuration, à un nom qui évoque un secret.
+ou de configuration, à un nom qui évoque un secret ; un JWT collé à un caractère
+de base64 URL n'est pas reconnu (le prix de ne chercher une suite qu'à son
+début).
 
 **Le coût est borné par construction**, parce qu'en V2 un algorithme quadratique
 est un déni de service : le nom se juge sur ses derniers caractères et la valeur

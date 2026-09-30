@@ -85,6 +85,7 @@ test('chaque format de fournisseur est un critique bloquant qui dit son fichier 
     assert.equal(c.fichier, 'app.js');
     assert.equal(c.ligne, 2, `${id} : la ligne`);
     assert.equal(c.titre, `Secret potentiel versionné dans le dépôt (${libelle})`);
+    assert.equal(c.constat, `Une valeur au format reconnu « ${libelle} » est présente dans un fichier versionné.`, `${id} : le constat nomme le format sans article à accorder`);
     assert.equal(c.extrait, id === 'pem' ? '-----BEGIN RSA PRIVATE KEY----- (corps non reproduit)' : masquer(valeur), `${id} : l'extrait est masqué`);
     assert.deepEqual(c.preuve, { forme: 'fournisseur', fournisseur: id, publique: false, longueur: id === 'pem' ? '-----BEGIN RSA PRIVATE KEY-----'.length : valeur.length }, `${id} : la valeur reconnue d'une clé PEM est son en-tête`);
     assert.deepEqual(c.referentiels, ["ANSSI — Guide d'hygiène informatique", 'CWE-798', 'OWASP Top 10 A07:2021']);
@@ -117,6 +118,7 @@ test('une clé publique par conception (Google, Stripe, Mapbox) est une informat
     assert.equal(etat(c), 'info', id);
     assert.equal(c.confiance, 'certain');
     assert.equal(c.titre, `Clé publique par conception dans le code (${libelle})`);
+    assert.ok(c.constat.startsWith(`Une valeur au format reconnu « ${libelle} » est présente. `), `${id} : le constat nomme le format sans article à accorder`);
     assert.match(c.constat, /ce n'est pas un secret/);
     assert.match(c.remediation, /restreinte aux domaines du widget/);
     assert.deepEqual(c.preuve, { forme: 'fournisseur', fournisseur: id, publique: true, longueur: valeur.length });
@@ -186,6 +188,108 @@ test('un jeton à deux segments n\'est pas un JWT ; un jeton d\'un fournisseur d
   const mapbox = PUBLIQUES[2].valeur;
   const a = await auditer({ 'deux.js': `var t = '${deux}';\n`, 'court.js': `var t = '${court}';\n`, 'carte.js': `var t = '${mapbox}';\n` });
   assert.deepEqual(C_SECRET(a).map((c) => `${c.fichier} ${etat(c)}`), ['carte.js info']);
+});
+
+// --- Le JWT de rôle anonyme : une clé publique par conception -------------------------------------------------------------
+
+const base64url = (texte) => Buffer.from(texte).toString('base64url');
+const ENTETE_JWT = base64url('{"alg":"HS256","typ":"JWT"}');
+const SIGNATURE_JWT = base64url('signature sans valeur, pour les essais');
+/** Un JWT dont la charge utile est `charge` (un objet, ou un texte pris tel quel) : l'en-tête est celui de tous, la signature n'ouvre rien. */
+const jwtDeCharge = (charge) => `${ENTETE_JWT}.${base64url(typeof charge === 'string' ? charge : JSON.stringify(charge))}.${SIGNATURE_JWT}`;
+const EMETTEUR_LONG = 'https://abcdefghijklmnopqrst.supabase.co/auth/v1';
+
+test('un JWT dont la charge utile dit role anon est une clé publique par conception : une information, avec son rôle en clair et son émetteur masqué', async () => {
+  const cas = [
+    { charge: { iss: 'supabase', ref: 'abcdefghijklmnopqrst', role: 'anon', iat: 1700000000, exp: 2000000000 }, emetteur: '*** (8 caractères)' },
+    { charge: JSON.stringify({ iss: EMETTEUR_LONG, role: 'anon' }, null, 2), emetteur: masquer(EMETTEUR_LONG), enClair: EMETTEUR_LONG },
+    { charge: '{"iss" : "supabase-demo" , "role" : "anon"}', emetteur: masquer('supabase-demo'), enClair: 'supabase-demo' },
+    { charge: { iss: 'émetteur-de-démonstration', role: 'anon' }, emetteur: masquer('émetteur-de-démonstration'), enClair: 'émetteur-de-démonstration' },
+    { charge: '{"role":"\\u0061non"}' },
+    { charge: ' \r\n\t{"role":"anon"}\r\n\t ' },
+    { charge: { role: 'anon' } },
+    { charge: { iss: 12345, role: 'anon' } },
+    { charge: { iss: '', role: 'anon' } },
+  ];
+  for (const { charge, emetteur, enClair } of cas) {
+    const jeton = jwtDeCharge(charge);
+    const dit = typeof charge === 'string' ? charge : JSON.stringify(charge);
+    const a = await auditer({ 'app.js': `var cle = '${jeton}';\n` });
+    const cs = C_SECRET(a);
+    assert.equal(cs.length, 1, `${dit} : un constat, non ${cs.length}`);
+    const [c] = cs;
+    assert.equal(etat(c), 'info', dit);
+    assert.equal(c.confiance, 'certain');
+    assert.equal(c.titre, 'Clé publique par conception dans le code (jeton JWT de rôle anonyme)');
+    assert.match(c.constat, /« role: anon »/);
+    assert.match(c.constat, /ce n'est pas un secret/);
+    assert.match(c.impact, /rôle anonyme/);
+    assert.match(c.remediation, /politiques d'accès par ligne/);
+    assert.deepEqual(c.preuve, { forme: 'fournisseur', fournisseur: 'jwt', publique: true, longueur: jeton.length, role: 'anon', ...(emetteur ? { emetteur } : {}) }, dit);
+    assert.equal(c.extrait, masquer(jeton), dit);
+    sansFuite(a, enClair ? [jeton, enClair] : [jeton]);
+  }
+});
+
+test('tout autre JWT reste un secret : un autre rôle (service_role compris), un rôle qui n\'est pas au premier niveau ou qui est dit deux fois, une charge qui n\'est pas un objet JSON', async () => {
+  const cas = {
+    'service_role': { iss: 'supabase', role: 'service_role' },
+    'authenticated': { role: 'authenticated' },
+    'la casse compte': { role: 'ANON' },
+    'un autre mot': { role: 'anonymous' },
+    'un rôle qui n\'est pas un texte': { role: ['anon'] },
+    'le rôle d\'une revendication': { claims: { role: 'anon' } },
+    'sans rôle': { iss: 'supabase', ref: 'abcdefghijklmnopqrst' },
+    'deux rôles, le dernier décide': '{"role":"anon","role":"service_role"}',
+    'un JSON tronqué': '{"role":"anon"',
+    'une virgule en trop': '{"role":"anon",}',
+    'du texte après l\'objet': '{"role":"anon"}x',
+    'du texte avant l\'objet': 'x{"role":"anon"}',
+    'une marque d\'ordre des octets : JSON.parse ne la passe pas': '\uFEFF{"role":"anon"}',
+    'une espace insécable qui suit : JSON.parse ne la passe pas': '{"role":"anon"}\u00a0',
+    'un tableau': '[{"role":"anon"}]',
+    'null': 'null       ',
+    'un texte': 'role anon',
+    'du binaire': '\u0000'.repeat(12),
+  };
+  for (const [nom, charge] of Object.entries(cas)) {
+    const jeton = jwtDeCharge(charge);
+    const a = await auditer({ 'app.js': `var cle = '${jeton}';\n` });
+    const cs = C_SECRET(a);
+    assert.equal(cs.length, 1, `${nom} : un constat, non ${cs.length}`);
+    const [c] = cs;
+    assert.equal(etat(c), 'critique bloquant', nom);
+    assert.equal(c.titre, 'Secret potentiel versionné dans le dépôt (jeton JWT)', nom);
+    assert.deepEqual(c.preuve, { forme: 'fournisseur', fournisseur: 'jwt', publique: false, longueur: jeton.length }, nom);
+    sansFuite(a, [jeton]);
+  }
+});
+
+test('un JWT de rôle anonyme sous un nom qui évoque un secret reste une information, un JWT de service un seul constat critique : le format décide avant l\'allure', async () => {
+  const anon = jwtDeCharge({ iss: 'supabase', role: 'anon' });
+  const service = jwtDeCharge({ iss: 'supabase', role: 'service_role' });
+  const a = await auditer({ 'app.js': `var apiKey = '${anon}';\nvar serviceToken = '${service}';\n`, '.env': `API_KEY=${anon}\nSERVICE_TOKEN=${service}\n` });
+  assert.deepEqual(C_SECRET(a).map((c) => `${c.fichier}:${c.ligne} ${etat(c)}`).sort(), ['.env:1 info', '.env:2 critique bloquant', 'app.js:1 info', 'app.js:2 critique bloquant']);
+  sansFuite(a, [anon, service]);
+});
+
+test('le rôle d\'un JWT se lit dans tout texte, carte de sources et README compris, comme le format', async () => {
+  const anon = jwtDeCharge({ role: 'anon' });
+  const service = jwtDeCharge({ role: 'service_role' });
+  const a = await auditer({ 'README.md': `Clé de démonstration : ${anon}\n`, 'app.js.map': `{"version":3,"sourcesContent":["var k = '${service}'"]}` });
+  assert.deepEqual(C_SECRET(a).map((c) => `${c.fichier} ${etat(c)}`).sort(), ['README.md info', 'app.js.map critique bloquant']);
+});
+
+test('formatsDans juge chaque JWT pour lui-même, dans l\'ordre du texte ; des milliers de charges qui ne sont pas du JSON sont des secrets, sans erreur', () => {
+  const anon = jwtDeCharge({ role: 'anon' });
+  const service = jwtDeCharge({ role: 'service_role' });
+  const trouves = formatsDans(`${service} ${anon} ${service}`);
+  assert.deepEqual(trouves.map((t) => (t.lu ? `public ${t.lu.preuve.role}` : 'secret')), ['secret', 'public anon', 'secret']);
+  const tronque = jwtDeCharge('{"role":"anon"');
+  const tous = formatsDans(Array.from({ length: 3000 }, () => tronque).join(' '));
+  assert.equal(tous.length, 3000);
+  assert.ok(tous.every((t) => !t.lu));
+  assert.equal(formatsDans(jwtDeCharge({ role: 'anon' })).filter((t) => t.format.id === 'jwt' && t.lu).length, 1);
 });
 
 test('un secret d\'un littéral que le code exécute (eval, Function) n\'est compté qu\'une fois : à son fichier d\'origine quand il y est en clair', async () => {

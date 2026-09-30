@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Rejoue les mutants de C-SECRET-01 (`src/regles/c-secrets.js`, essais : `tests/c-secret.test.mjs`) : un mutant par choix de la règle.
- * Chaque format de fournisseur (motif, bornes, exemple publié, clé publique, validation), chaque mot qui fait d'un nom celui d'un
+ * Chaque format de fournisseur (motif, bornes, exemple publié, clé publique, validation, charge utile d'un JWT), chaque mot qui fait d'un nom celui d'un
  * secret, chaque raison de juger une valeur générée, de remplacement, une phrase ou « à vérifier » et chaque seuil qui les sépare,
  * chaque forme d'affectation lue dans l'arbre ou dans un fichier de configuration, chaque borne de lecture, le masque, l'ordre des
  * constats. Chaque mutant pose, sur la ligne qui porte le choix, le défaut plausible : un des essais doit alors échouer (méthode :
@@ -13,6 +13,13 @@
  *   - `.slice(-LONGUEUR_DE_NOM)` de `nomEvoqueUnSecret` retiré : le mot qui décide est le dernier, il tient dans les quatre-vingts derniers
  *     caractères ; sans elle, un identifiant de plusieurs Mio est découpé en autant de mots (la mémoire) ;
  *   - `+ 1` de `entropieDe` remplacé par `+ 2` : tous les comptes doublent, les rapports k/n de l'entropie ne changent pas.
+ *   - dans `chargeDeRoleAnonyme`, la tranche du deuxième segment qui garde un point de plus (`indexOf('.') + 1` sans son `+ 1`, `lastIndexOf('.')`
+ *     avec un `+ 1`) et `'base64url'` remplacé par `'base64'` : le décodeur de Node ignore le point et lit les deux alphabets, le décodage est le même.
+ *   - dans `chargeDeRoleAnonyme`, `charge?.role` remplacé par `charge.role` : après la condition qui suit, la charge lue est l'objet d'un texte `{…}` valide, jamais
+ *     `null` (JSON `null` ne passe plus par `JSON.parse`) ; le `?.` est gardé pour que la condition ne soit qu'une optimisation, sans laquelle le résultat serait le même ;
+ *   - dans `chargeDeRoleAnonyme`, la condition `if (nu[0] !== '{' || nu[nu.length - 1] !== '}') return null;` retirée ou affaiblie (`&&`) : elle n'est que la
+ *     condition nécessaire d'un objet JSON, qui évite l'exception de `JSON.parse` (le temps) ; le résultat est le même pour toute charge. La durcir, en revanche, change
+ *     les résultats : ce sont les mutants qui suivent.
  * Chronométrés à part, sur des entrées piégées de 16 Mio, au message du commit.
  *
  * Deux groupes d'essais : `tests/c-secret-bornes.test.mjs` est lancé le premier. La borne de 4 096 caractères de la lecture d'une
@@ -153,6 +160,30 @@ const MUTANTS = [
   dans('if (format.exemple?.(m[0])', '=== false', '!== false', 'formats : seule une valeur qui passe la validation est écartée'),
   dans('return trouves.sort(', 'a.index - b.index', 'b.index - a.index', 'formats : les valeurs ne sortent plus dans l\'ordre du texte'),
   dans('return trouves.sort(', 'return trouves.sort((a, b) => a.index - b.index);', 'return trouves;', 'formats : les valeurs sortent format par format, non dans l\'ordre du texte'),
+
+  // Le JWT de rôle anonyme : la charge utile se lit, seul « role » égal à « anon » est public ---------------------------------------------
+  dans("id: 'jwt',", ', lire: lireJwt', '', 'JWT : la charge utile n\'est pas lue, tout jeton est un secret'),
+  dans('trouves.push({ format, valeur: m[0], index: m.index, lu:', 'format.lire?.(m[0]) ?? null', 'null', 'formats : ce que la valeur dit d\'elle-même n\'est pas lu'),
+  dans('if (!charge) return null;', 'if (!charge) return null;', '', 'JWT : un jeton qui ne dit pas « anon » fait échouer la lecture'),
+  dans('    publique: true,', 'true', 'false', 'JWT de rôle anonyme : ce que dit la lecture n\'est pas une clé publique'),
+  dans("preuve: { role: 'anon', ", "role: 'anon', ", '', 'JWT de rôle anonyme : la preuve ne dit pas le rôle'),
+  dans("typeof charge.iss === 'string' && charge.iss !== ''", "typeof charge.iss === 'string' && charge.iss !== ''", 'charge.iss !== undefined', 'JWT de rôle anonyme : un émetteur qui n\'est pas un texte est dit'),
+  dans("typeof charge.iss === 'string' && charge.iss !== ''", " && charge.iss !== ''", '', 'JWT de rôle anonyme : un émetteur vide est dit'),
+  dans("typeof charge.iss === 'string' && charge.iss !== ''", "typeof charge.iss === 'string' && ", '', 'JWT de rôle anonyme : l\'absence d\'émetteur est dite comme un émetteur'),
+  dans('emetteur: masquer(charge.iss)', 'masquer(charge.iss)', 'charge.iss', 'JWT de rôle anonyme : l\'émetteur est dit en clair'),
+  dans("const texte = Buffer.from(jeton.slice(", "jeton.indexOf('.') + 1", '0', 'JWT : la charge utile est lue avec l\'en-tête'),
+  dans("const texte = Buffer.from(jeton.slice(", "jeton.lastIndexOf('.')", 'jeton.length', 'JWT : la charge utile est lue avec la signature'),
+  dans("const texte = Buffer.from(jeton.slice(", "'base64url'", "'hex'", 'JWT : la charge utile n\'est pas décodée comme de la base64 URL'),
+  dans("const texte = Buffer.from(jeton.slice(", "'utf8'", "'latin1'", 'JWT : la charge utile est lue octet par octet, non en UTF-8'),
+  dans('try { charge = JSON.parse(texte); }', 'if (e instanceof SyntaxError) return null; ', '', 'JWT : une charge qui n\'est pas du JSON fait échouer la lecture'),
+  dans("return charge?.role === 'anon' ? charge : null;", "charge?.role === 'anon'", 'charge?.role !== undefined', 'JWT : tout rôle est public'),
+  dans("return charge?.role === 'anon' ? charge : null;", "charge?.role === 'anon'", "String(charge?.role).toLowerCase() === 'anon'", 'JWT : la casse du rôle ne compte pas'),
+  dans("return charge?.role === 'anon' ? charge : null;", "charge?.role === 'anon'", "charge?.role?.startsWith('anon')", 'JWT : un rôle qui commence par anon est public'),
+  dans("return charge?.role === 'anon' ? charge : null;", '? charge : null', '? true : null', 'JWT : la lecture ne rend pas la charge'),
+  dans('const nu = texte.trim();', 'texte.trim()', 'texte', 'JWT : une charge entourée de blancs n\'est pas un objet'),
+  dans("if (nu[0] !== '{' ||", "nu[0] !== '{'", "nu[0] !== '['", 'JWT : une charge qui commence par { n\'est pas un objet'),
+  dans("if (nu[0] !== '{' ||", "nu[nu.length - 1] !== '}'", "nu[nu.length - 1] !== ']'", 'JWT : une charge qui finit par } n\'est pas un objet'),
+  dans('try { charge = JSON.parse(texte); }', 'JSON.parse(texte)', 'JSON.parse(nu)', 'JWT : la charge est lue sans ce qui l\'entoure (marque d\'ordre des octets, espace insécable)'),
 
   // Le nom : ce qui fait d'un nom celui d'un secret ---------------------------------------------------------------------------------
   brut("function morceauxDe(texte, chiffres) {\n  const morceaux = [];\n  let debut = -1;\n  for (let i = 0; i <= texte.length; i++) {", "function morceauxDe(texte, chiffres) {\n  const morceaux = [];\n  let debut = -1;\n  for (let i = 0; i < texte.length; i++) {", 'morceaux d\'un texte : le dernier morceau n\'est jamais fermé'),
@@ -353,8 +384,15 @@ const MUTANTS = [
   dans('const base = { regle: \'C-SECRET-01\', axe: \'C\', fichier: f.chemin, ligne: numeroLigne', 'format.extrait ? format.extrait(valeur) : masquer(valeur)', 'masquer(valeur)', 'constat de format : l\'extrait propre au format est ignoré'),
   dans('const base = { regle: \'C-SECRET-01\', axe: \'C\', fichier: f.chemin, ligne: numeroLigne', 'format.extrait ? format.extrait(valeur) : masquer(valeur)', 'valeur', 'constat de format : l\'extrait redit la valeur'),
   dans('const base = { regle: \'C-SECRET-01\', axe: \'C\', fichier: f.chemin, ligne: numeroLigne', "referentiels: ['CWE-798']", 'referentiels: []', 'constat de format : aucun référentiel n\'est cité pour une clé publique'),
-  dans('if (format.publique) {', 'format.publique', '!format.publique', 'constat de format : une clé publique est dite un secret, un secret une clé publique'),
-  dans('if (format.publique) {', 'format.publique', 'false', 'constat de format : une clé publique est dite un secret'),
+  dans('if (format.publique || lu?.publique) {', 'format.publique', '!format.publique', 'constat de format : une clé publique est dite un secret, un secret une clé publique'),
+  dans('if (format.publique || lu?.publique) {', 'format.publique', 'false', 'constat de format : une clé publique est dite un secret'),
+  dans('if (format.publique || lu?.publique) {', ' || lu?.publique', '', 'constat de format : un JWT de rôle anonyme est dit un secret'),
+  dans('if (format.publique || lu?.publique) {', '||', '&&', 'constat de format : une clé n\'est publique que si son format et sa valeur le disent, sinon c\'est un secret'),
+  dans('const libelle = lu?.libelle ?? format.libelle;', 'lu?.libelle ?? ', '', 'constat de format : le titre d\'un JWT de rôle anonyme ne dit pas son rôle'),
+  dans('constat: lu?.constat ?? ', 'lu?.constat ?? ', '', 'constat de format : le constat d\'un JWT de rôle anonyme est celui d\'une clé publique de fournisseur'),
+  dans('impact: lu?.impact ?? ', 'lu?.impact ?? ', '', 'constat de format : l\'impact d\'un JWT de rôle anonyme est celui d\'une clé publique de fournisseur'),
+  dans('remediation: lu?.remediation ?? ', 'lu?.remediation ?? ', '', 'constat de format : la remédiation d\'un JWT de rôle anonyme est celle d\'une clé publique de fournisseur'),
+  dans('preuve: { forme: \'fournisseur\', fournisseur: format.id, publique: true', ', ...lu?.preuve', '', 'preuve de format : le rôle et l\'émetteur d\'un JWT de rôle anonyme ne sont pas dits'),
   dans("...base, severite: 'info', confiance: 'certain',", "'info'", "'mineur'", 'constat de format : une clé publique est un constat mineur'),
   dans("...base, severite: 'info', confiance: 'certain',", "'certain'", "'probable'", 'constat de format : une clé publique est probable'),
   dans('preuve: { forme: \'fournisseur\', fournisseur: format.id, publique: true', 'publique: true', 'publique: false', 'preuve de format : une clé publique est dite non publique'),

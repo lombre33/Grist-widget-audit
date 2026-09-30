@@ -6,8 +6,8 @@
  *
  *  1. Un FORMAT DE FOURNISSEUR (clé d'accès AWS, jeton GitHub, clé privée…) dans le texte de n'importe quel fichier, carte
  *     de sources et README compris : le format est la preuve (critique, bloquant). Une clé que son fournisseur publie pour
- *     être embarquée dans une page (Google, Stripe, Mapbox) est une information, non un secret : un widget s'exécute chez
- *     le client. La clé d'exemple de la documentation d'AWS n'est rien.
+ *     être embarquée dans une page (Google, Stripe, Mapbox, un JWT dont la charge utile dit `"role":"anon"`) est une
+ *     information, non un secret : un widget s'exécute chez le client. La clé d'exemple de la documentation d'AWS n'est rien.
  *  2. « NOM = VALEUR » : un nom qui évoque un secret (`apiKey`, `password`…) qui reçoit un littéral. Lu dans l'arbre d'un
  *     fichier JS (déclaration, propriété, affectation : le texte d'un message qui cite `token: 'ma-cle'` n'est pas une
  *     affectation), et ligne à ligne dans les fichiers de configuration (`.env`, `.json`, `.yml`, `.ini`…). Jamais dans
@@ -41,6 +41,8 @@ const DEBUT_DE_SUITE = '(?<![A-Za-z0-9_-])';
  * page, protégée par une restriction côté fournisseur et non par son secret. `exemple` : une valeur du format que la
  * documentation du fournisseur publie, qui n'ouvre rien. `valide` : ce que le motif ne dit pas et que le format garantit
  * (une clé tirée au hasard n'est pas un mot). `extrait` : ce qu'on montre de la valeur, quand la masquer ne dit rien.
+ * `lire` : ce que la valeur dit d'elle-même et que son motif ne dit pas (`null` : rien, le format vaut ce qu'il vaut) ; c'est
+ * par là qu'un JWT de rôle anonyme devient une clé publique par conception.
  */
 export const FORMATS = [
   { id: 'aws', libelle: "clé d'accès AWS", re: /\bAKIA[0-9A-Z]{16}\b/g, exemple: (t) => /EXAMPLE$/.test(t) },
@@ -52,22 +54,56 @@ export const FORMATS = [
   { id: 'slack', libelle: 'jeton Slack', re: /\bxox[baprs]-[A-Za-z0-9-]{10,512}\b/g },
   // L'en-tête seul n'est pas une clé : une bibliothèque qui lit des clés PEM le cite. Le corps (une suite de base64 que l'en-tête annonce, d'au plus 120 caractères de séparation : retours à la ligne, échappés ou non, guillemets, concaténation) est la preuve.
   { id: 'pem', libelle: 'clé privée', extrait: (t) => `${t} (corps non reproduit)`, re: /-----BEGIN (?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP) )?PRIVATE KEY(?: BLOCK)?-----(?=[\s\S]{0,120}?[A-Za-z0-9+/]{40})/g },
-  { id: 'jwt', libelle: 'jeton JWT', re: new RegExp(`${DEBUT_DE_SUITE}eyJ[A-Za-z0-9_-]{10,16384}\\.[A-Za-z0-9_-]{10,16384}\\.[A-Za-z0-9_-]{10,16384}\\b`, 'g') },
+  { id: 'jwt', libelle: 'jeton JWT', re: new RegExp(`${DEBUT_DE_SUITE}eyJ[A-Za-z0-9_-]{10,16384}\\.[A-Za-z0-9_-]{10,16384}\\.[A-Za-z0-9_-]{10,16384}\\b`, 'g'), lire: lireJwt },
   { id: 'google', libelle: "clé d'API Google", re: /\bAIza[0-9A-Za-z_-]{35}\b/g, publique: true },
   { id: 'stripe', libelle: 'clé publique Stripe', re: /\bpk_(?:live|test)_[A-Za-z0-9]{16,512}\b/g, publique: true },
   { id: 'mapbox', libelle: 'jeton public Mapbox', re: /\bpk\.eyJ[A-Za-z0-9_-]{10,16384}\.[A-Za-z0-9_-]{10,16384}\b/g, publique: true },
 ];
 
-/** Les valeurs d'un texte qui ont le format d'un fournisseur : `{ format, valeur, index }`, dans l'ordre du texte. */
+/** Les valeurs d'un texte qui ont le format d'un fournisseur : `{ format, valeur, index, lu }`, dans l'ordre du texte. `lu` : ce que la valeur dit d'elle-même quand son format sait la lire (`null` sinon). */
 export function formatsDans(texte) {
   const trouves = [];
   for (const format of FORMATS) {
     for (const m of texte.matchAll(format.re)) {
       if (format.exemple?.(m[0]) || format.valide?.(m[0]) === false) continue;
-      trouves.push({ format, valeur: m[0], index: m.index });
+      trouves.push({ format, valeur: m[0], index: m.index, lu: format.lire?.(m[0]) ?? null });
     }
   }
   return trouves.sort((a, b) => a.index - b.index);
+}
+
+/**
+ * La charge utile d'un JWT (son deuxième segment, décodé comme du JSON), quand elle dit `role` égal à `anon`. La clé que des fournisseurs
+ * (Supabase) publient pour être embarquée dans une page est un JWT de rôle anonyme : elle ne donne que les droits que tout visiteur a déjà.
+ * Tout autre jeton (un autre rôle, `service_role` compris, un rôle qui n'est pas au premier niveau, une charge sans rôle, qui n'est pas du JSON
+ * ou qui n'est pas un objet) ne dit rien de lui-même : il reste un secret. Un fichier peut porter des centaines de milliers de jetons : le
+ * décodage ne lève jamais (Buffer ignore ce qui n'est pas de la base64 URL), et seul un texte qui a la forme d'un objet sans en être un
+ * coûte une exception de `JSON.parse`, une par jeton au plus, donc linéaire dans la taille du fichier.
+ */
+function chargeDeRoleAnonyme(jeton) {
+  // Les trois segments n'ont pas de point : le deuxième est entre les deux points du jeton.
+  const texte = Buffer.from(jeton.slice(jeton.indexOf('.') + 1, jeton.lastIndexOf('.')), 'base64url').toString('utf8');
+  // Un objet JSON commence par `{` et finit par `}` : ce qui n'a pas cette forme ne dit aucun rôle, sans payer l'exception de `JSON.parse` (mesurée : presque trois secondes pour seize Mio de charges qui n'en sont pas). Ce n'est que la condition nécessaire : c'est `texte`, non sa version rognée, que `JSON.parse` lit.
+  const nu = texte.trim();
+  if (nu[0] !== '{' || nu[nu.length - 1] !== '}') return null;
+  let charge;
+  // Ce qui n'est pas du JSON est un jeton qui n'a rien dit : un secret. Toute autre erreur est celle de l'outil, et se dit.
+  try { charge = JSON.parse(texte); } catch (e) { if (e instanceof SyntaxError) return null; throw e; }
+  return charge?.role === 'anon' ? charge : null;
+}
+
+function lireJwt(jeton) {
+  const charge = chargeDeRoleAnonyme(jeton);
+  if (!charge) return null;
+  return {
+    publique: true,
+    libelle: 'jeton JWT de rôle anonyme',
+    constat: "Un jeton JWT dont la charge utile dit « role: anon » est présent. C'est la clé que des fournisseurs (Supabase) publient pour être embarquée dans une page : ce n'est pas un secret, et elle donne les droits du rôle anonyme de son projet.",
+    impact: "Quiconque ouvre le widget lit la clé et peut l'employer depuis un autre site, avec les droits du rôle anonyme : sa seule protection est ce que le fournisseur accorde à ce rôle (politiques d'accès par ligne, API exposées, quotas), jamais son secret.",
+    remediation: "Vérifier chez le fournisseur que le rôle anonyme ne peut lire ou écrire que ce que tout visiteur du widget peut lire ou écrire (par exemple, les politiques d'accès par ligne activées sur chaque table), et que son quota est plafonné.",
+    // L'émetteur est masqué comme toute valeur lue ; le rôle est ce qui décide, il se dit en clair.
+    preuve: { role: 'anon', ...(typeof charge.iss === 'string' && charge.iss !== '' ? { emetteur: masquer(charge.iss) } : {}) },
+  };
 }
 
 /* ------------------------------------------------------------------------------------------------------------------ */
@@ -267,22 +303,24 @@ const IMPACT = "Un secret dans un dépôt public est compromis dès sa publicati
 const REMEDIATION = "Révoquer immédiatement le secret côté fournisseur, puis le retirer de l'historique. Un widget est du code exécuté côté client : il ne peut pas détenir de secret. Toute opération nécessitant un secret doit passer par un service tiers, hors du widget.";
 const REFERENTIELS = ["ANSSI — Guide d'hygiène informatique", 'CWE-798', 'OWASP Top 10 A07:2021'];
 
-function constatDeFormat(f, index, { format, valeur }) {
+function constatDeFormat(f, index, { format, valeur, lu }) {
   const base = { regle: 'C-SECRET-01', axe: 'C', fichier: f.chemin, ligne: numeroLigne(f.contenu, index), extrait: format.extrait ? format.extrait(valeur) : masquer(valeur), referentiels: ['CWE-798'] };
-  if (format.publique) {
+  if (format.publique || lu?.publique) {
+    // `lu` : ce que la valeur dit d'elle-même (un JWT de rôle anonyme) a ses mots et ses mesures ; sinon ceux du fournisseur.
+    const libelle = lu?.libelle ?? format.libelle;
     return constat({
       ...base, severite: 'info', confiance: 'certain',
-      titre: `Clé publique par conception dans le code (${format.libelle})`,
-      constat: `Une valeur au format d'une ${format.libelle} est présente. Son fournisseur la publie pour être embarquée dans une page : ce n'est pas un secret, et elle donne accès au quota et aux droits de son compte.`,
-      impact: "Quiconque ouvre le widget lit la clé et peut l'employer depuis un autre site : sa seule protection est la restriction que le fournisseur lui applique (domaines autorisés, API permises, plafond de facturation), jamais son secret.",
-      remediation: "Vérifier chez le fournisseur que la clé est restreinte aux domaines du widget et aux seules API qu'il appelle, et que son quota est plafonné.",
-      preuve: { forme: 'fournisseur', fournisseur: format.id, publique: true, longueur: valeur.length },
+      titre: `Clé publique par conception dans le code (${libelle})`,
+      constat: lu?.constat ?? `Une valeur au format reconnu « ${libelle} » est présente. Son fournisseur la publie pour être embarquée dans une page : ce n'est pas un secret, et elle donne accès au quota et aux droits de son compte.`,
+      impact: lu?.impact ?? "Quiconque ouvre le widget lit la clé et peut l'employer depuis un autre site : sa seule protection est la restriction que le fournisseur lui applique (domaines autorisés, API permises, plafond de facturation), jamais son secret.",
+      remediation: lu?.remediation ?? "Vérifier chez le fournisseur que la clé est restreinte aux domaines du widget et aux seules API qu'il appelle, et que son quota est plafonné.",
+      preuve: { forme: 'fournisseur', fournisseur: format.id, publique: true, longueur: valeur.length, ...lu?.preuve },
     });
   }
   return constat({
     ...base, severite: 'critique', bloquant: true, confiance: 'probable', referentiels: REFERENTIELS,
     titre: `Secret potentiel versionné dans le dépôt (${format.libelle})`,
-    constat: `Une valeur correspondant au format d'un ${format.libelle} est présente dans un fichier versionné.`,
+    constat: `Une valeur au format reconnu « ${format.libelle} » est présente dans un fichier versionné.`,
     impact: IMPACT, remediation: REMEDIATION,
     preuve: { forme: 'fournisseur', fournisseur: format.id, publique: false, longueur: valeur.length },
   });
