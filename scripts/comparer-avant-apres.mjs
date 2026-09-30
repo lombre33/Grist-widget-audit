@@ -58,8 +58,8 @@ for (const cible of positionals) {
 const sortie = values.sortie ? path.resolve(values.sortie) : fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-comparer-'));
 fs.mkdirSync(sortie, { recursive: true });
 const nettoyer = () => { if (!values.sortie) fs.rmSync(sortie, { recursive: true, force: true }); };
-// Une interruption ne laisse pas de dossier temporaire ; le signal n'est vu qu'entre deux audits.
-for (const [signal, code] of [['SIGINT', 130], ['SIGTERM', 143]]) process.on(signal, () => { nettoyer(); process.exit(code); });
+// Aucun gestionnaire de signal : tout le travail est synchrone (`execFileSync`), un gestionnaire ne s'exécuterait qu'à la fin et `kill` n'arrêterait plus rien.
+// Un script tué laisse son dossier temporaire (`gwaudit-comparer-*`) ; `--sortie` donne un dossier qu'on garde et qu'on retire soi-même.
 
 function auditer(racine, cible, dossier) {
   fs.rmSync(dossier, { recursive: true, force: true });
