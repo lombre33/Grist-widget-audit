@@ -586,6 +586,20 @@ test('C : un module écrit dans la page porte ses réserves (gabarit, standard s
   assert.doesNotMatch(direct.de('C-EXFIL-01', 'm.js')[0]?.constat ?? '', /Précision/);
 });
 
+test('C : un fichier qu\'un nom désigne par une clé de préfixe de la carte d\'import (extension qui n\'est pas du JavaScript) porte les réserves de la carte et du script qui l\'importent', async () => {
+  const STANDARD = /Précision : Chromium ne l'exécute pas, un navigateur qui suit le standard HTML si/;
+  const carte = '<script type="importmap">{"imports":{"lib/":"./libs/"}}</script>';
+  const importe = '<script type="module">import "lib/x.txt";</script>';
+  const constatSur = async (corps) => (await auditer({ 'index.html': page(corps), 'libs/x.txt': EXFIL })).de('C-EXFIL-01', 'libs/x.txt')[0]?.constat ?? '';
+  assert.match(await constatSur(`${carte}<template>${importe}</template>`), PRECISION_GABARIT, 'le script qui importe est dans un gabarit');
+  assert.match(await constatSur(`${carte}${importe.replace('type="module"', 'type=" module "')}`), STANDARD, 'le script qui importe ne s\'exécute que sous le standard');
+  assert.match(await constatSur(`<template>${carte}</template>${importe}`), PRECISION_GABARIT, 'la carte est dans un gabarit');
+  assert.match(await constatSur(`${carte.replace('type="importmap"', 'type=" importmap "')}${importe}`), STANDARD, 'la carte ne s\'applique que sous le standard');
+  const direct = await constatSur(`${carte}${importe}`);
+  assert.notEqual(direct, '', 'le fichier est lu comme du code : il a son constat');
+  assert.doesNotMatch(direct, /Précision/, 'la carte et le script s\'appliquent tout de suite : aucune réserve');
+});
+
 test('C : dansTete est faux dans un <template>, même placé dans <head> : une CSP de gabarit n\'agit jamais', () => {
   const { balises } = lirePage('<!doctype html><html><head><title>t</title><template><meta http-equiv="Content-Security-Policy" content="default-src \'self\'"></template></head><body></body></html>');
   assert.equal(balises.length, 1);

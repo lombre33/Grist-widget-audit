@@ -455,7 +455,7 @@ test('trop d\'arêtes de document : critique bloquant, dit après que l\'axe E a
   assert.equal(c.preuve.plafond, 'documents');
   assert.equal(etat(c), 'critique bloquant');
   assert.deepEqual(c.axesEmpeches, TOUS);
-  assert.equal(c.titre, 'Plus de 4 pas d\'analyse de document : l\'ordre de chargement n\'est pas établi pour toutes les pages');
+  assert.equal(c.titre, 'Plus de 4 pas d\'analyse de document : ni l\'ordre de chargement ni les noms que le code importe ne sont établis pour toutes les pages');
   assert.equal(epuise.ctx.tronque.documents, true);
   const juste = await auditer(fichiers, { plafonds: { maxPasDocuments: 6 } });
   assert.deepEqual(PLAFOND(juste), []);
@@ -494,7 +494,7 @@ test('chaque plafond dit sa propre valeur, en clair : fichiers, Mio lus, entrée
   assert.equal(titre('octets'), 'Plus de 200 Mio de contenu lu : l\'inventaire s\'est arrêté');
   assert.equal(titre('listage'), 'Plus de 100 000 entrées lues dans les dossiers exclus : des modules n\'ont pas été cherchés');
   assert.equal(titre('surface'), 'Plus de 2 000 000 résolutions d\'adresses de worker : la surface exécutée n\'est pas complète');
-  assert.equal(titre('documents'), 'Plus de 2 000 000 pas d\'analyse de document : l\'ordre de chargement n\'est pas établi pour toutes les pages');
+  assert.equal(titre('documents'), 'Plus de 2 000 000 pas d\'analyse de document : ni l\'ordre de chargement ni les noms que le code importe ne sont établis pour toutes les pages');
   const constat = (drapeau, valeurs = {}) => sansFichier({ ...TRONQUE, [drapeau]: true, ...valeurs })[0].constat;
   assert.match(constat('fichiers', { maxFichiers: 1234 }), /plus de 1 234 fichiers, le plafond/);
   assert.match(constat('octets', { maxOctets: 7 * 1024 * 1024 }), /a lu 7 Mio de fichiers texte, son plafond/);
@@ -504,7 +504,7 @@ test('chaque plafond dit sa propre valeur, en clair : fichiers, Mio lus, entrée
 });
 
 test('troncature : la raison du budget d\'arêtes de document est dite avec son plafond, pour le rapport Markdown et la ligne de commande', () => {
-  assert.deepEqual(raisonsDeTroncature({ ...TRONQUE, documents: true, maxPasDocuments: 7, maxResolutions: 8 }), ['plus de 7 pas d\'analyse de document : l\'ordre de chargement n\'est pas établi pour toutes les pages']);
+  assert.deepEqual(raisonsDeTroncature({ ...TRONQUE, documents: true, maxPasDocuments: 7, maxResolutions: 8 }), ['plus de 7 pas d\'analyse de document : ni l\'ordre de chargement ni les noms que le code importe ne sont établis pour toutes les pages']);
   assert.deepEqual(raisonsDeTroncature(TRONQUE), []);
   assert.deepEqual(raisonsDeTroncature({ ...TRONQUE, surface: true, documents: true }).length, 2);
 });

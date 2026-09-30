@@ -1562,7 +1562,8 @@ export function preparerCodeExecuteEnChaine(ctx) {
   while (frontiere.length && profondeur <= MAX_PROFONDEUR_CODE_IMBRIQUE) {
     const nouveaux = [];
     for (const f of frontiere) {
-      pourChaqueUniteJs({ fichiers: [f] }, {}, ({ ast, ligneDe, walk: walkAcorn, unite }) => {
+      // Un fichier à la fois (la frontière grandit pendant le parcours), mais l'illisible se relève dans le contexte de l'audit.
+      pourChaqueUniteJs({ fichiers: [f] }, { releverDans: ctx }, ({ ast, ligneDe, walk: walkAcorn, unite }) => {
         if (!ast) return;
         const avant = ctx.fichiers.length;
         // Le premier niveau d'un module n'est pas partagé avec les autres

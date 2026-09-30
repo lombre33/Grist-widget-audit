@@ -71,12 +71,12 @@ const MUTANTS = [
   dansLigne(I, 'const plafonds = { octets: maxOctetsCumules', 'octets: maxOctetsCumules', 'octets: MAX_OCTETS_LUS_CUMULES', 'plafonds : le plafond cumulé dit n\'est pas celui qui s\'applique'),
 
   // --- ce qui se charge comme du code (et non comme une image, une police ou une feuille de style)
-  dansLigne(I, "const commeCode = objet && Boolean(ref.commeCode);", 'Boolean(ref.commeCode)', 'true', 'code chargé : tout lien est un chargement de code'),
-  dansLigne(I, "const commeCode = objet && Boolean(ref.commeCode);", 'Boolean(ref.commeCode)', 'false', 'code chargé : aucun lien n\'est un chargement de code'),
+  dansLigne(I, "const commeCodeArete = objet && Boolean(ref.commeCode);", 'Boolean(ref.commeCode)', 'true', 'code chargé : tout lien est un chargement de code'),
+  dansLigne(I, "const commeCodeArete = objet && Boolean(ref.commeCode);", 'Boolean(ref.commeCode)', 'false', 'code chargé : aucun lien n\'est un chargement de code'),
   dansLigne(I, 'if (trouver(candidat)) liste.push(', 'position, commeCode', 'position', 'code chargé : l\'arête ne dit pas qu\'elle charge du code'),
   dansLigne(I, 'const code = new Set(file);', 'new Set(file)', 'new Set()', 'code chargé : une page d\'entrée n\'est pas chargée comme une page'),
   dansLigne(I, 'if (commeCode) code.add(chemin);', 'if (commeCode) ', '', 'code chargé : tout fichier atteint est chargé comme du code'),
-  dansLigne(I, 'mettre(arete.cible, arete.commeCode)', 'arete.commeCode', 'false', 'code chargé : la balise script ne charge pas du code'),
+  dansLigne(I, 'mettre(arete.cible, arete.commeCode, arete.commeCode ?', "mettre(arete.cible, arete.commeCode, arete.commeCode ? (arete.ambigu ? 'probable' : true) : false)", 'mettre(arete.cible, false)', 'code chargé : la balise script ne charge pas du code'),
   dansLigne(I, 'for (const chemin of lister(arete.dossier)) mettre(chemin, true);', 'mettre(chemin, true)', 'mettre(chemin, false)', 'code chargé : un module d\'un préfixe d\'import map n\'est pas chargé comme du code'),
   dansLigne(I, 'if (code.has(rel)) nonLus.parCode.add(rel);', 'if (code.has(rel)) ', '', 'code chargé : une image atteinte par un lien est dite chargée comme du code'),
   dansLigne(I, 'if (f.binaire) { if (nonLus) binaires.push(rel); continue; }', 'if (f.binaire) { if (nonLus) binaires.push(rel); continue; }', 'if (nonLus) binaires.push(rel); if (f.binaire) continue;', 'code chargé : tout fichier lu est dit non lu'),
@@ -92,7 +92,7 @@ const MUTANTS = [
   dansLigne(I, 'const reserves = { dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard, position: s.debut, commeCode: true };', 'commeCode: true', 'commeCode: false', 'code chargé : un script de la page ne charge pas du code'),
   dansLigne(I, 'const reserves = { dansTemplate: e.dansTemplate', 'commeCode: true', 'commeCode: false', 'code chargé : une import map ne charge pas du code'),
   dansLigne(I, "typeof ref === 'string' ? { relatif: ref, commeCode: true }", '{ relatif: ref, commeCode: true }', '{ relatif: ref }', 'code chargé : un import d\'un fichier de code ne charge pas du code'),
-  dansLigne(I, "typeof ref === 'string' ? { relatif: ref, commeCode: true }", '{ ...ref, commeCode: true }', '{ ...ref }', 'code chargé : un worker d\'un fichier de code ne charge pas du code'),
+  dansLigne(I, "typeof ref === 'string' ? { relatif: ref, commeCode: true }", '{ ...ref, commeCode: ref.commeCode ?? true }', '{ ...ref }', 'code chargé : un worker d\'un fichier de code ne charge pas du code'),
 
   // --- le budget des arêtes de document et ce que le contexte en dit
   dansLigne(I, 'const calculerTronque = () =>', '|| documentsEpuises())', ')', 'tronque : le budget d\'arêtes de document épuisé ne tronque rien'),

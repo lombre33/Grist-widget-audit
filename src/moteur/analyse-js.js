@@ -9,7 +9,10 @@
  */
 import { parse } from 'acorn';
 import * as walk from 'acorn-walk';
-import { lirePage, integriteProtege, urlDe, urlDeCarte } from './page-html.js';
+import { lirePage, integriteProtege, urlDe, urlDeCarte, baseDe } from './page-html.js';
+
+const EXTENSIONS_JS = ['.js', '.mjs', '.cjs', '.jsx'];
+const EXTENSIONS_PAGE = ['.html', '.htm'];
 
 /**
  * Extrait les unités de code JavaScript d'un fichier : le fichier entier pour
@@ -29,24 +32,36 @@ import { lirePage, integriteProtege, urlDe, urlDeCarte } from './page-html.js';
  * propre emplacement.
  * `debut` est le décalage de la balise `<script>` dans la page (null pour un
  * fichier .js) : l'ordre des balises dit quelle import map précède quel script.
- * @returns {Array<{chemin:string, source:string, positionDe:?Function, mention:?string, debutLigne:number, finLigne:number, inline:boolean, module:boolean, baseBrute:?string, debut:?number}>}
+ *
+ * Un fichier qu'une balise script, un import ou un worker désigne par son adresse
+ * (`commeCode`, posé par l'inventaire) est du code pour le navigateur quelle que
+ * soit son extension : `<script src="logique.txt">` exécute le texte du fichier,
+ * sous le type que l'hébergement lui donne. Il se lit comme du code. Une page
+ * ainsi désignée donne ses scripts inline puis, en dernier, le fichier entier
+ * (un fichier peut être à la fois du HTML et du JavaScript valide) : dernier,
+ * pour que la recherche de l'unité qui couvre une ligne (`uniteCouvrant`) garde
+ * des unités rangées par fin de ligne.
+ * @returns {Array<{chemin:string, source:string, positionDe:?Function, mention:?string, debutLigne:number, finLigne:number, inline:boolean, module:boolean, baseBrute:?string, debut:?number, facultative?:boolean}>}
  */
 export function unitesJs(fichier) {
   if (fichier.binaire || !fichier.contenu) return [];
-  if (['.js', '.mjs', '.cjs', '.jsx'].includes(fichier.ext)) {
-    return [{ chemin: fichier.chemin, source: fichier.contenu, positionDe: null, mention: null, debutLigne: 1, finLigne: Infinity, inline: false, module: false, baseBrute: null, debut: null }];
-  }
-  if (!['.html', '.htm'].includes(fichier.ext)) return [];
-
-  const page = lirePage(fichier.contenu);
+  const estPage = EXTENSIONS_PAGE.includes(fichier.ext);
   const unites = [];
-  for (const s of page.scripts) {
-    if (!s.unite) continue; // pas du code que le navigateur exécute : externe, import map, jamais fermé, type non exécuté
-    unites.push({
-      chemin: fichier.chemin, source: s.texte, positionDe: s.positionDe, mention: s.mention,
-      debutLigne: page.positionDe(s.debutContenu).ligne, finLigne: page.positionDe(s.finContenu).ligne,
-      inline: true, module: s.genre === 'module', baseBrute: s.baseBrute, debut: s.debut,
-    });
+  if (estPage) {
+    const page = lirePage(fichier.contenu);
+    for (const s of page.scripts) {
+      if (!s.unite) continue; // pas du code que le navigateur exécute : externe, import map, jamais fermé, type non exécuté
+      unites.push({
+        chemin: fichier.chemin, source: s.texte, positionDe: s.positionDe, mention: s.mention,
+        debutLigne: page.positionDe(s.debutContenu).ligne, finLigne: page.positionDe(s.finContenu).ligne,
+        inline: true, module: s.genre === 'module', baseBrute: s.baseBrute, debut: s.debut,
+      });
+    }
+  }
+  const parSonExtension = EXTENSIONS_JS.includes(fichier.ext);
+  if (parSonExtension || fichier.commeCode) {
+    // `finLigne` est fini pour une page, dont les lignes se parcourent (`mentionsParLigne`). `facultative` : seule une carte d'import désigne ce fichier, qui peut aussi être de la donnée (`with { type: 'css' }`) : il se lit s'il se lit, et ne se dit illisible que par une information.
+    unites.push({ chemin: fichier.chemin, source: fichier.contenu, positionDe: null, mention: null, debutLigne: 1, finLigne: estPage ? (fichier.lignes?.length ?? fichier.contenu.split('\n').length) : Infinity, inline: false, module: false, baseBrute: null, debut: null, facultative: !parSonExtension && fichier.commeCode === 'probable' });
   }
   return unites;
 }
@@ -102,25 +117,69 @@ export function syntaxeDeModule(ast) {
 }
 
 /**
- * Parse une unité. Renvoie null si le code est syntaxiquement invalide (TS,
- * JSX exotique…). Les commentaires sont collectés à part (`ast.commentaires`,
- * `{debut, fin}` en décalage de caractères) : acorn ne les rattache à aucun
- * nœud par défaut, or au moins une règle (A-ERR-01) a besoin de savoir si une
- * portée de code est commentée sans se soucier de la syntaxe qu'elle contient.
+ * Vrai pour le dépassement de pile devant un code imbriqué plus profondément que la pile ne le porte : le `RangeError` de V8 (le parcours
+ * d'acorn-walk, une règle récursive) ou l'erreur de syntaxe que la lecture d'acorn en fait elle-même (« Not enough stack space to parse input »).
  */
-export function parser(source) {
-  for (const sourceType of ['module', 'script']) {
-    try {
-      const commentaires = [];
-      const ast = parse(source, {
-        ecmaVersion: 'latest', sourceType, locations: true, allowHashBang: true,
-        onComment: (_bloc, _texte, debut, fin) => commentaires.push({ debut, fin }),
-      });
-      ast.commentaires = commentaires;
-      return ast;
-    } catch { /* on tente l'autre mode */ }
+export const depassementDePile = (e) => (e instanceof RangeError && /call stack/i.test(String(e.message))) || (e instanceof SyntaxError && /not enough stack space/i.test(String(e.message)));
+
+/** Des deux erreurs des deux modes, celle qui dit le plus : un dépassement de pile, sinon celle qui va le plus loin dans le texte. */
+const erreurLaPlusLoin = (a, b) => {
+  if (!a || a.cause === 'profondeur') return a ?? b;
+  if (b.cause === 'profondeur') return b;
+  return (b.position ?? -1) > (a.position ?? -1) ? b : a;
+};
+
+/**
+ * Une lecture d'acorn, dans un mode (`module` ou `script`). Dans son propre appel : l'erreur d'une lecture qui échoue, et ce que le
+ * cadre qui l'a attrapée tient, ne restent pas dans le cadre de `lire` pendant la lecture du mode suivant. Mesuré sur un gros
+ * fichier qui ne se lit dans aucun mode (`scripts/mesurer-memoire-lecture.mjs`) : quand la vérification de l'erreur se faisait dans le
+ * cadre de la boucle, la mémoire de la première lecture n'était pas rendue à temps et le tas plafonné d'un conteneur n'y suffisait plus,
+ * alors que, lues une à une dans leur propre appel, les deux lectures y tiennent. La cause exacte dans V8 n'est pas établie.
+ */
+function tenter(source, sourceType) {
+  try {
+    const commentaires = [];
+    const ast = parse(source, {
+      ecmaVersion: 'latest', sourceType, locations: true, allowHashBang: true,
+      onComment: (_bloc, _texte, debut, fin) => commentaires.push({ debut, fin }),
+    });
+    ast.commentaires = commentaires;
+    return { ast, erreur: null };
+  } catch (e) {
+    const profond = depassementDePile(e);
+    return {
+      ast: null,
+      erreur: {
+        cause: profond ? 'profondeur' : 'syntaxe',
+        message: profond ? 'la pile déborde' : String(e?.message ?? e).replace(/\s*\(\d+:\d+\)$/, ''),
+        ligne: e?.loc?.line ?? null, colonne: e?.loc ? e.loc.column + 1 : null,
+        position: typeof e?.pos === 'number' ? e.pos : null,
+      },
+    };
   }
-  return null;
+}
+
+/**
+ * Lit une unité : son arbre, ou la raison pour laquelle acorn n'en donne pas (TS, JSX, syntaxe invalide, code plus profond
+ * que la pile). Module puis script : quand aucun des deux ne lit, l'erreur dite est celle qui dit le plus (`erreurLaPlusLoin`).
+ * Les commentaires sont collectés à part (`ast.commentaires`, `{debut, fin}` en décalage de caractères) : acorn ne les
+ * rattache à aucun nœud par défaut, or au moins une règle (A-ERR-01) a besoin de savoir si une portée de code est commentée
+ * sans se soucier de la syntaxe qu'elle contient.
+ * @returns {{ast: ?object, erreur: ?{cause: 'syntaxe'|'profondeur', message: string, ligne: ?number, colonne: ?number, position: ?number}}}
+ */
+export function lire(source) {
+  let erreur = null;
+  for (const sourceType of ['module', 'script']) {
+    const lecture = tenter(source, sourceType);
+    if (lecture.ast) return lecture;
+    erreur = erreurLaPlusLoin(erreur, lecture.erreur);
+  }
+  return { ast: null, erreur };
+}
+
+/** L'arbre d'une unité, ou null quand acorn ne la lit pas (la raison est dans `lire`). */
+export function parser(source) {
+  return lire(source).ast;
 }
 
 /** Vrai si au moins un commentaire est entièrement contenu dans la portée du nœud donné. */
@@ -129,18 +188,71 @@ export function aCommentaireDansPortee(ast, noeud) {
 }
 
 /**
+ * Note qu'une unité n'a pas été lue (`contexte.illisibles`, une entrée par unité : les vingt parcours de règles
+ * la rencontrent chacun, la première raison est gardée). C-SURFACE-03 le dit.
+ * @param {{cause: 'syntaxe'|'profondeur'|'analyse', message: string, ligne: ?number, colonne: ?number, position: ?number}} erreur
+ */
+function noterIllisible(releves, f, u, erreur) {
+  const liste = (releves.illisibles ??= new Map());
+  const cle = `${f.chemin}\0${u.inline ? u.debut : 'fichier'}`;
+  if (liste.has(cle)) return;
+  // La position d'une erreur se dit dans le fichier réel : pour un script inline, par le décalage dans la page.
+  const place = u.positionDe && typeof erreur.position === 'number' ? u.positionDe(erreur.position) : null;
+  liste.set(cle, {
+    chemin: f.chemin, cause: erreur.cause, message: erreur.message, inline: u.inline, facultative: Boolean(u.facultative),
+    ligne: place ? place.ligne : (u.inline ? u.debutLigne : erreur.ligne), colonne: place ? place.colonne + 1 : erreur.colonne,
+    surface: Boolean(f.executee), dossierExclu: Boolean(f.dossierExclu),
+  });
+}
+
+/** Les unités qu'acorn n'a pas lues, par fichier : la raison, gardée pour que la vingtaine de règles qui les rencontrent ne refassent pas une lecture qui a échoué (jusqu'à la fin d'un gros fichier). */
+const lecturesEchouees = new WeakMap();
+
+/** `lire` l'unité, une seule fois quand la lecture échoue : l'arbre d'une lecture réussie n'est pas gardé (la mémoire), le refus l'est (quelques octets). */
+function lireUnite(f, u) {
+  const cle = u.inline ? u.debut : 'fichier';
+  const echecs = lecturesEchouees.get(f);
+  if (echecs?.has(cle)) return { ast: null, erreur: echecs.get(cle) };
+  const lecture = lire(u.source);
+  if (!lecture.ast) {
+    if (!echecs) lecturesEchouees.set(f, new Map([[cle, lecture.erreur]]));
+    else echecs.set(cle, lecture.erreur);
+  }
+  return lecture;
+}
+
+/**
  * Parcourt toutes les unités JS du contexte en appelant `visiteur` avec
  * l'AST et un utilitaire `signaler(noeud, …)` qui gère le décalage de ligne
  * des scripts inline.
+ *
+ * Une unité qu'acorn ne lit pas n'est pas visitée, et une unité dont le parcours échoue (la pile déborde, une règle
+ * lève une erreur sur un code piégé) ne fait pas tomber l'audit : dans les deux cas elle est relevée dans
+ * `releverDans.illisibles` (le contexte par défaut), où C-SURFACE-03 la dit. Un code que le navigateur exécute et
+ * qu'aucune règle n'a lu ne se passe pas sous silence. Seul le code de la surface est relevé quand c'est la lecture
+ * qui échoue (du JSX ou du TypeScript qu'aucune page ne charge n'est pas du code exécuté) ; un parcours qui échoue
+ * est toujours relevé.
  */
-export function pourChaqueUniteJs(contexte, { surfaceSeulement = false, ignorerVendorise = false } = {}, visiteur) {
+export function pourChaqueUniteJs(contexte, { surfaceSeulement = false, ignorerVendorise = false, releverDans = contexte } = {}, visiteur) {
   for (const f of contexte.fichiers) {
     if (surfaceSeulement && !f.executee) continue;
     if (ignorerVendorise && (f.vendorise || f.dossierExclu)) continue;
     for (const u of unitesJs(f)) {
-      const ast = parser(u.source);
-      if (!ast) { visiteur({ unite: u, ast: null, fichier: f, ligneDe: () => null, walk }); continue; }
-      visiteur({ unite: u, ast, fichier: f, ligneDe: (noeud) => ligneDans(u, noeud), walk });
+      const { ast, erreur } = lireUnite(f, u);
+      if (!ast) {
+        if (f.executee) noterIllisible(releverDans, f, u, u.facultative ? { ...erreur, cause: 'donnee-possible' } : erreur);
+        continue;
+      }
+      try {
+        visiteur({ unite: u, ast, fichier: f, ligneDe: (noeud) => ligneDans(u, noeud), walk });
+      } catch (e) {
+        const profond = depassementDePile(e);
+        noterIllisible(releverDans, f, u, {
+          cause: profond ? 'profondeur' : 'analyse',
+          message: profond ? 'la pile déborde' : `${e?.name ?? 'Error'} : ${String(e?.message ?? e).slice(0, 200)}`,
+          ligne: null, colonne: null, position: null,
+        });
+      }
     }
   }
 }
@@ -326,6 +438,101 @@ export function extraireImportMaps(contenu, cheminPage = '') {
     }
   }
   return entrees;
+}
+
+const PROTOCOLES_SPECIAUX = new Set(['http:', 'https:', 'ws:', 'wss:', 'ftp:', 'file:']);
+
+/** Ajoute à une table de carte (`imports`, ou un bloc de `scopes`) les clés d'un objet de la carte `s`, normalisées comme Chromium le fait : la première carte qui nomme une clé l'emporte. */
+function ajouterALaTable(table, source, s, cheminPage) {
+  if (!source || typeof source !== 'object' || Array.isArray(source)) return;
+  const propres = new Map();
+  for (const [cle, valeur] of Object.entries(source)) {
+    if (cle === '') continue;
+    const normalisee = urlDeCarte(cle, s.baseBrute, cheminPage)?.href ?? cle;           // une clé qui est une adresse se compare résolue
+    let adresse = typeof valeur === 'string' ? urlDeCarte(valeur, s.baseBrute, cheminPage) : null;
+    if (adresse && cle.endsWith('/') && !adresse.href.endsWith('/')) adresse = null;    // une clé de préfixe dont l'adresse n'en est pas un : la résolution échoue
+    propres.set(normalisee, adresse);
+  }
+  for (const [cle, adresse] of propres) if (!table.entrees.has(cle)) table.entrees.set(cle, adresse);
+}
+
+/**
+ * Ce qu'une table de carte rend d'un spécificateur normalisé : l'adresse de sa clé exacte, sinon celle de la plus longue clé de préfixe
+ * (qui finit par `/`) qu'il commence ; `null` quand l'adresse est bloquée, `undefined` quand aucune clé ne correspond.
+ * Un spécificateur qui est une adresse d'un schéma non spécial (`data:`) ne s'apparie à aucun préfixe.
+ */
+function correspondance(table, normalise, special) {
+  if (table.entrees.has(normalise)) return table.entrees.get(normalise);
+  if (!special) return undefined;
+  for (const cle of table.prefixes) {
+    if (!normalise.startsWith(cle)) continue;
+    const adresse = table.entrees.get(cle);
+    if (adresse === null) return null;
+    let url;
+    try { url = new URL(normalise.slice(cle.length), adresse.href); } catch { return null; }
+    return url.href.startsWith(adresse.href) ? url : null;                             // un `..` qui sortirait de l'adresse du préfixe fait échouer la résolution
+  }
+  return undefined;
+}
+
+/**
+ * Ce que les cartes d'import d'une page font d'un spécificateur de module, comme Chromium 141 le fait (`import.meta.resolve` est l'oracle
+ * de `tests/carte-import-chromium.test.mjs`) : les cartes se fusionnent, la première qui nomme une clé l'emporte ; pour un référent, les
+ * blocs `scopes` dont le préfixe est celui de son adresse, puis, si aucun ne nomme le spécificateur, les `imports` du dessus ; dans une
+ * table, la clé exacte, sinon le plus long préfixe (`"lib/": "./libs/"` : `import 'lib/x.js'` charge `libs/x.js`). Un nom nu qu'aucune
+ * clé ne nomme est une erreur du navigateur, une adresse qu'aucune clé ne remappe est elle-même. Quand plusieurs portées correspondent au
+ * référent (`./sub/` et `./sub/deep/`), la norme veut la plus longue ; Chromium 141 en retient une dans un ordre qui n'est pas celui-là
+ * (mesuré sur des paires de portées imbriquées : pour certaines c'est la plus courte, et d'un lancement à l'autre la même) : l'outil rend alors les adresses de toutes
+ * celles qui nomment le spécificateur, le doute inclut. L'ordre des cartes et des chargements (une carte lue après le premier module est
+ * ignorée) n'est pas modélisé : une carte de la page compte toujours.
+ * @param {string} contenu la page
+ * @param {string} cheminPage son chemin dans le widget
+ * @param {?('gabarit'|'standard')} [sans] ignore les cartes qui ne s'appliquent pas tout de suite (`<template>`) ou que Chromium n'applique pas (`standard`) :
+ *   les fermetures de la surface sans ces chargements (voir `mentionDe`)
+ * @returns {?{ resoudre: (specificateur: string, referent: {chemin: string, baseBrute: ?string}) => URL[], taille: number }} null : la page n'a pas de carte
+ *   que Chromium applique, ou ses cartes ne portent aucune clé. `resoudre` rend les adresses que le spécificateur peut prendre (une seule, sauf entre portées
+ *   imbriquées ; aucune quand la résolution échoue) ; `referent` : le fichier (`baseBrute` null) ou la page
+ *   (son script inline, sous la `<base>` qui le précède) dont le code importe ; `taille` : ce qu'une résolution parcourt au plus (clés de préfixe, blocs).
+ */
+export function resolveurDeCartes(contenu, cheminPage, sans = null) {
+  const cartes = cartesDeLaPage(contenu).filter(({ s }) => !(sans === 'gabarit' && s.dansTemplate) && !(sans === 'standard' && s.seulementStandard));
+  if (cartes.length === 0) return null;
+  const nouvelle = () => ({ entrees: new Map(), prefixes: [] });
+  const imports = nouvelle();
+  const blocs = new Map();                                        // préfixe de portée (href) → table
+  for (const { carte, s } of cartes) {
+    ajouterALaTable(imports, carte?.imports, s, cheminPage);
+    const portees = carte?.scopes;
+    if (!portees || typeof portees !== 'object' || Array.isArray(portees)) continue;
+    for (const [prefixe, source] of Object.entries(portees)) {
+      const cle = urlDe(prefixe, s.baseBrute, cheminPage)?.href;
+      if (cle === undefined) continue;
+      let table = blocs.get(cle);
+      if (!table) blocs.set(cle, table = nouvelle());
+      ajouterALaTable(table, source, s, cheminPage);
+    }
+  }
+  if (imports.entrees.size === 0 && blocs.size === 0) return null;   // une carte qui ne porte que des empreintes (`integrity`) ne résout aucun nom
+  const tables = [imports, ...blocs.values()];
+  for (const table of tables) table.prefixes = [...table.entrees.keys()].filter((cle) => cle.endsWith('/')).sort((a, b) => b.length - a.length);
+  const portees = [...blocs].sort(([a], [b]) => b.length - a.length);
+  const duReferent = new Map();                                   // href du référent → ses blocs, le préfixe le plus long d'abord
+  const blocsDe = (href) => {
+    let liste = duReferent.get(href);
+    if (!liste) duReferent.set(href, liste = portees.filter(([prefixe]) => prefixe === href || (prefixe.endsWith('/') && href.startsWith(prefixe))).map(([, table]) => table));
+    return liste;
+  };
+  const resoudre = (specificateur, { chemin, baseBrute }) => {
+    const enAdresse = urlDeCarte(specificateur, baseBrute, chemin);
+    const normalise = enAdresse ? enAdresse.href : specificateur;
+    const special = enAdresse === null || PROTOCOLES_SPECIAUX.has(enAdresse.protocol);
+    const parPortee = blocsDe(baseDe(baseBrute, chemin).url.href).map((table) => correspondance(table, normalise, special)).filter((trouve) => trouve !== undefined);
+    if (parPortee.length > 0) return [...new Map(parPortee.filter(Boolean).map((url) => [url.href, url])).values()];   // une portée qui nomme le spécificateur ferme la résolution, `null` (adresse bloquée) comprise
+    const trouve = correspondance(imports, normalise, special);
+    if (trouve !== undefined) return trouve ? [trouve] : [];
+    return enAdresse ? [enAdresse] : [];
+  };
+  return { resoudre, taille: 1 + tables.reduce((n, table) => n + table.prefixes.length, 0) + blocs.size };
 }
 
 /**

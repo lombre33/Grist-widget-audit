@@ -140,7 +140,7 @@ MUTANTS.push(
   dansLigne(J, "if (canal !== 'import() distant' && unite.inline && !unite.module) return;", "canal !== 'import() distant' && unite.inline && !unite.module", 'false', 'import : un import statique d\'un script classique est signalé'),
   dansLigne(J, "if (canal !== 'import() distant' && unite.inline && !unite.module) return;", "canal !== 'import() distant' && ", '', 'import : un import() d\'un script classique est ignoré'),
   dansLigne(J, "if (canal !== 'import() distant' && unite.inline && !unite.module) return;", ' unite.inline &&', '', 'import : les imports d\'un fichier .js sont ignorés'),
-  dansLigne(J, "import { lirePage, integriteProtege, urlDe, urlDeCarte } from './page-html.js';", 'urlDe, urlDeCarte }', 'urlDe, urlDe as urlDeCarte }', 'import : un nom nu est résolu contre la <base>'),
+  dansLigne(J, "import { lirePage, integriteProtege, urlDe, urlDeCarte, baseDe } from './page-html.js';", 'urlDe, urlDeCarte, baseDe }', 'urlDe, urlDe as urlDeCarte, baseDe }', 'import : un nom nu est résolu contre la <base>'),
   dansLigne(J, 'const url = urlDeCarte(valeur, unite.inline', 'unite.inline ? unite.baseBrute : null', 'null', 'import : la <base> de la page est ignorée'),
   dansLigne(S, 'const chargeDuCode = CANAUX_DE_CODE.has(canal);', 'CANAUX_DE_CODE.has(canal)', 'false', 'import : dit comme une requête de données'),
   dansLigne(S, "const CANAUX_DE_CODE = new Set(", "'import() distant', ", '', 'import : import() dit comme une requête de données'),
@@ -255,7 +255,7 @@ MUTANTS.push(
   dansLigne(I, 'if (dossiersVus.has(arete.dossier)) continue;', 'dossiersVus.has(arete.dossier)', 'false', 'fermeture : un dossier nommé plusieurs fois est relu'),
   dansLigne(I, 'dossiersVus.add(arete.dossier);', 'dossiersVus.add(arete.dossier);', 'void 0;', 'fermeture : un dossier lu n\'est pas noté'),
   dansLigne(I, 'for (const chemin of lister(arete.dossier)) mettre(chemin', 'mettre(chemin, true)', 'void chemin', 'fermeture : les modules d\'un dossier ne sont pas suivis'),
-  dansLigne(I, 'if (arete.dossier === undefined) { mettre(arete.cible', 'mettre(arete.cible, arete.commeCode);', 'void 0;', 'fermeture : un fichier désigné n\'est pas suivi'),
+  dansLigne(I, 'if (arete.dossier === undefined) { mettre(arete.cible', "mettre(arete.cible, arete.commeCode, arete.commeCode ? (arete.ambigu ? 'probable' : true) : false);", 'void 0;', 'fermeture : un fichier désigné n\'est pas suivi'),
 );
 
 // --- ce qui s'adresse au document : les contextes de page et la résolution --------------------------------------------
@@ -324,9 +324,9 @@ MUTANTS.push(
   dansLigne(I, 'return i >= 0 && ', '|\\/)', ')', 'import() calculé : « / » n\'est plus une adresse'),
   dansLigne(I, 'return i >= 0 && ', '/^(?:', '/(?:', 'import() calculé : un nom nu qui contient « / » est une adresse'),
   dansLigne(I, 'return i >= 0 && ', 'debut.slice(0, i + 1)', 'debut.slice(0, i)', 'import() calculé : le dossier perd sa barre finale (locales2/ est sous locales)'),
-  [I, "          const dossier = dossierDeSourceCalculee(n.source);\n          if (dossier !== null) refs.push({ dossierRelatif: dossier });", "          const dossier = dossierDeSourceCalculee(n.source);\n          if (true) refs.push({ dossierRelatif: dossier });", 'import() calculé : un début qui n\'est pas une adresse est suivi'],
+  [I, "            const dossier = dossierDeSourceCalculee(n.source);\n            if (dossier !== null) refs.push({ dossierRelatif: dossier });", "            const dossier = dossierDeSourceCalculee(n.source);\n            if (true) refs.push({ dossierRelatif: dossier });", 'import() calculé : un début qui n\'est pas une adresse est suivi'],
   [I, "dossierDeDebut(m[1] ?? m[2]);\n      if (dossier !== null) refs.push({ dossierRelatif: dossier });", "dossierDeDebut(m[1] ?? m[2]);\n      if (true) refs.push({ dossierRelatif: dossier });", 'illisible : un début qui n\'est pas une adresse est suivi'],
-  [I, "          const dossier = dossierDeSourceCalculee(n.source);\n          if (dossier !== null) refs.push({ dossierRelatif: dossier });", "          const dossier = dossierDeSourceCalculee(n.source);\n          void dossier;", 'import() calculé : son dossier n\'est jamais suivi'],
+  [I, "            const dossier = dossierDeSourceCalculee(n.source);\n            if (dossier !== null) refs.push({ dossierRelatif: dossier });", "            const dossier = dossierDeSourceCalculee(n.source);\n            void dossier;", 'import() calculé : son dossier n\'est jamais suivi'],
   [I, "dossierDeDebut(m[1] ?? m[2]);\n      if (dossier !== null) refs.push({ dossierRelatif: dossier });", "dossierDeDebut(m[1] ?? m[2]);\n      void dossier;", 'illisible : le début fixe d\'un import() n\'est plus suivi'],
   dansLigne(I, 'const dossier = dossierDeDebut(m[1] ?? m[2]);', 'm[1] ?? m[2]', 'm[1]', 'illisible : le début fixe d\'un gabarit n\'est plus lu'),
 );

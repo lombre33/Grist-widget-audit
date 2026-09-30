@@ -262,7 +262,7 @@ MUTANTS.push(
   dansLigne(I, 'for (const ch of s.chargements) if (ch.execute) local(ch.valeur, s.baseBrute,', 'position: s.debut', 'position: 0', 'arête : une balise qui charge un fichier n\'a pas son décalage'),
   dansLigne(I, 'const reserves = { dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard, position: s.debut', 'position: s.debut', 'position: 0', 'arête : un fichier qu\'un script écrit dans la page charge n\'a pas le décalage de ce script'),
   dansLigne(I, 'const reserves = { dansTemplate: e.dansTemplate, seulementStandard: e.seulementStandard, position: e.index', 'position: e.index', 'position: 0', 'arête : un fichier qu\'une entrée d\'import map désigne n\'a pas le décalage de la carte'),
-  dansLigne(I, 'const propres = ref.worker ?', 'ref.worker ? { ...reserves, worker: true } : reserves', 'reserves', 'arête : un worker créé dans la page n\'est pas dit worker'),
+  dansLigne(I, 'const propres = { ...reserves, ...(ref.worker ?', '...(ref.worker ? { worker: true } : {})', '...{}', 'arête : un worker créé dans la page n\'est pas dit worker'),
   dansLigne(I, 'if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard, worker, position', 'gabarit, standard, worker, position', 'gabarit, standard, position', 'arête : le fait qu\'un fichier soit chargé par un worker est perdu'),
   dansLigne(I, 'if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard, worker, position', 'gabarit, standard, worker, position', 'gabarit, standard, worker', 'arête : la position de la balise est perdue'),
 );

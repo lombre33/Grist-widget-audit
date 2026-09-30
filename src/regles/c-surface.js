@@ -18,9 +18,9 @@ import { constat } from '../moteur/modele.js';
 import { cheminVendorise } from '../contexte/inventaire.js';
 
 /** Les fichiers non lus dits un à un ; au-delà, un seul constat les regroupe (ils sont tous dans sa preuve). */
-const MAX_FICHIERS_DITS = 50;
+export const MAX_FICHIERS_DITS = 50;
 
-const TOUS_LES_AXES_STATIQUES = ['A', 'B', 'C', 'E', 'F'];
+export const TOUS_LES_AXES_STATIQUES = ['A', 'B', 'C', 'E', 'F'];
 /**
  * Ce que tout code exécuté alimente, le sien ou celui d'un tiers : injection (C), chargements distants (E), hôtes contactés
  * (F), et la documentation de ces hôtes et de l'accès demandé (B-DOC-03 et B-DOC-04 lisent ce que C a relevé sur tout le code
@@ -28,7 +28,7 @@ const TOUS_LES_AXES_STATIQUES = ['A', 'B', 'C', 'E', 'F'];
  */
 const AXES_DU_CODE_EXECUTE = ['B', 'C', 'E', 'F'];
 
-const nombre = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
+export const nombre = (n) => String(n).replace(/\B(?=(\d{3})+(?!\d))/g, ' ');
 /** Une taille à l'unité qui la rend lisible (un plafond abaissé pour un essai tient en octets). */
 const mio = (octets) => {
   if (octets >= 1024 * 1024) return `${(octets / 1024 / 1024).toFixed(1).replace('.', ',')} Mio`;
@@ -71,9 +71,9 @@ const PLAFONDS = [
   },
   {
     drapeau: 'documents',
-    titre: (t) => `Plus de ${nombre(t.maxPasDocuments)} pas d'analyse de document : l'ordre de chargement n'est pas établi pour toutes les pages`,
-    constat: (t) => `L'outil a parcouru ${nombre(t.maxPasDocuments)} arêtes de documents (les fichiers qu'une page charge, dans l'ordre des balises), son plafond : pour les pages suivantes, il n'a pas établi quelle carte d'import précède quel script, donc si une empreinte d'intégrité protège ce que la page charge.`,
-    impact: "Une empreinte d'import map ne protège que les chargements qui commencent après la carte : sans l'ordre, l'outil ne peut pas dire si du code distant est protégé.",
+    titre: (t) => `Plus de ${nombre(t.maxPasDocuments)} pas d'analyse de document : ni l'ordre de chargement ni les noms que le code importe ne sont établis pour toutes les pages`,
+    constat: (t) => `L'outil a parcouru ${nombre(t.maxPasDocuments)} arêtes de documents (les fichiers qu'une page charge, dans l'ordre des balises, et les noms que le code importe, résolus par les cartes d'import), son plafond : pour les pages suivantes, il n'a pas établi quelle carte d'import précède quel script, donc si une empreinte d'intégrité protège ce que la page charge, ni quels fichiers les noms importés désignent, donc quel code la page exécute.`,
+    impact: "Une empreinte d'import map ne protège que les chargements qui commencent après la carte : sans l'ordre, l'outil ne peut pas dire si du code distant est protégé. Un nom que la carte résout en un fichier en fait du code exécuté : sans la résolution, l'outil ne sait pas quel fichier l'est.",
     remediation: "Réduire le nombre de pages d'entrée et de fichiers qu'elles chargent.",
   },
 ];

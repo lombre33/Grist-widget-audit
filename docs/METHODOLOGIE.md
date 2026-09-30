@@ -188,7 +188,57 @@ imbrication de code littéral), et aucun ne se passe sous silence :
   connue** : une adresse entièrement calculée (`import(x)`) ne désigne aucun
   dossier que l'inventaire sache nommer, donc un fichier de code non lu que
   seule une telle adresse atteindrait reste dit comme information. L'`import()`
-  calculé est, lui, déjà dit par une règle de l'axe C.
+  calculé est, lui, déjà dit par une règle de l'axe C ;
+- un **code que l'outil ne sait pas lire** et que la page exécute est un
+  constat critique et bloquant par fichier, ou par script de la page
+  (C-SURFACE-03), avec les axes empêchés du fichier non lu : la syntaxe
+  qu'acorn refuse (TypeScript, JSX que la page charge), une imbrication que la
+  pile de l'analyse ne porte pas alors que le navigateur l'exécute, un parcours
+  des règles qui déborde, une règle qui échoue sur un code piégé. Le code piégé
+  est dit et les autres fichiers sont audités comme s'il n'était pas là : il ne
+  fait pas tomber l'audit. Ce qu'aucune page n'exécute est une information
+  groupée, qui ne bloque pas.
+
+Un fichier qu'une balise script, un import ou un worker désigne par son adresse
+est du code pour le navigateur **quelle que soit son extension** :
+`<script src="logique.txt">` exécute le texte du fichier, sous le type que
+l'hébergement lui donne, et c'est l'auteur du widget qui choisit l'hébergement.
+L'audit le lit comme du code. Trois exceptions, parce que le navigateur n'y
+exécute rien : le JSON valide (un objet ne se lit ni comme un module ni comme un
+script) ; un import de données (`import … with { type: 'json' }`, `'css'`,
+`'text'`, `'bytes'`, aussi en `import()` et `export … from`) ; et ce qu'une
+carte d'import désigne sans que rien dans le code lu l'importe, qui n'est du
+code que si un import sans type de données l'emploie : il est lu comme du code
+quand il se lit comme du JavaScript, et sinon dit par une information (il peut
+être de la donnée, ou du code que l'outil ne sait pas lire).
+
+Le code que l'outil a lu **désigne aussi des fichiers par un nom** : `import
+'lib'` et `import 'lib/x.js'` mènent, par la carte d'import de la page, à un
+fichier, qui est du code quelle que soit son extension (`"lib/": "./libs/"` fait
+de `libs/x.txt` du code dès qu'un import le nomme). La carte se lit comme
+Chromium l'applique, et `tests/carte-import-chromium.test.mjs` compare chaque cas
+à `import.meta.resolve` de Chromium : les cartes d'une page se fusionnent et la
+première qui nomme une clé l'emporte ; dans une table, la clé exacte passe avant
+le plus long préfixe (une clé qui finit par `/`) ; un nom nu qu'aucune clé ne
+nomme est une erreur du navigateur ; une adresse `null` ou qui n'est pas une
+chaîne bloque le nom ; `scopes` donne au module qui importe sa propre table avant
+celle du dessus. Un fichier ainsi désigné qui ne se lit pas est un constat
+critique et bloquant (C-SURFACE-03), comme un fichier qu'une balise `<script src>`
+désigne. Un import de données par un nom n'en fait pas du code, et un code que
+l'outil ne lit pas ne désigne rien par ses noms (ce que son texte semble importer
+peut être un commentaire ou une chaîne). La résolution des noms consomme le
+plafond d'analyse de document (C-SURFACE-01) : un plafond atteint est dit, il ne
+désigne pas en silence.
+
+**Limites connues** : le JavaScript qu'acorn ne connaît pas encore (une
+proposition très récente du langage) est dit illisible, pas absous ; l'ordre des
+cartes et des chargements (une carte lue après le premier module est ignorée
+par le navigateur) n'est pas modélisé, une carte de la page compte toujours ;
+quand plusieurs portées de la carte correspondent au module qui importe,
+Chromium 141 n'en retient pas toujours la plus longue comme la norme le veut : la
+résolution rend alors les adresses de toutes celles qui nomment le nom, le doute
+inclut ; et une adresse entièrement calculée (`import(x)`) ne désigne aucun
+fichier que l'inventaire sache nommer (elle est dite par une règle de l'axe C).
 
 Les plafonds ne sont pas fixés au jugé : `scripts/mesurer-marges-plafonds.mjs
 <dépôt>…` dit ce que chacun coûte à des dépôts donnés et la marge qui reste

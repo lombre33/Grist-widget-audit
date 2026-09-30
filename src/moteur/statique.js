@@ -9,6 +9,7 @@ import { reglesC } from '../regles/c-securite.js';
 import { reglesE } from '../regles/e-dependances.js';
 import { reglesF } from '../regles/f-conformite.js';
 import { analyserSurface } from '../regles/c-surface.js';
+import { analyserIllisibles } from '../regles/c-illisibles.js';
 import { mentionsParLigne } from './analyse-js.js';
 
 // Règles dont l'emplacement est une balise de la page et non du code : elles disent elles-mêmes ce que la page a de particulier (gabarit, standard seul).
@@ -47,6 +48,7 @@ export async function analyseStatique(ctx, options = {}) {
     constats.push(...(r ?? []));
   }
   constats.push(...analyserSurface(ctx));
+  constats.push(...analyserIllisibles(ctx));
   ajouterMentions(ctx, constats);
   return constats;
 }

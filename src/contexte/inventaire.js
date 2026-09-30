@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as walk from 'acorn-walk';
 import { lirePage, urlDe, urlDeCarte, cheminLocal, mentionDe } from '../moteur/page-html.js';
-import { parser, chaineLitterale, nomPointe, extraireImportMaps } from '../moteur/analyse-js.js';
+import { parser, chaineLitterale, nomPointe, extraireImportMaps, resolveurDeCartes, depassementDePile } from '../moteur/analyse-js.js';
 import { lireFeuille, nouveauBudgetCss } from '../moteur/css.js';
 import { numeroLigne } from '../moteur/lignes.js';
 
@@ -73,10 +73,13 @@ export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LIS
   const parChemin = new Map(fichiers.map((f) => [f.chemin, f]));
   const trouver = (chemin) => parChemin.get(chemin) ?? ouvrirHorsInventaire(racine, chemin, fichiers, parChemin, etat);
   const entrees = trouverPointsDEntree(fichiers, manifestes, trouver);
-  const { surface, mentions, partiel, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments, nonLusParCode, nonLusAtteints, documentsEpuises } = calculerSurface(entrees, trouver, nouveauListeur(racine, fichiers, etat, maxEntreesListees), { maxResolutions, maxPasDocuments });
+  const { surface, mentions, partiel, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments, nonLusParCode, nonLusAtteints, designesCommeCode, documentsEpuises } = calculerSurface(entrees, trouver, nouveauListeur(racine, fichiers, etat, maxEntreesListees), { maxResolutions, maxPasDocuments });
 
   for (const f of fichiers) {
     f.executee = surface.has(f.chemin);
+    const designe = designesCommeCode.get(f.chemin) ?? false;
+    // Du JSON valide n'exécute rien, quelle que soit l'adresse qui le désigne : un objet ne se lit ni comme un module ni comme un script, une valeur seule n'a pas d'effet. Ce n'est pas du code que l'outil ne saurait pas lire.
+    f.commeCode = designe && estJsonValide(f.contenu) ? false : designe;
     f.mention = mentions.get(f.chemin) ?? null;
     f.vendorise = estVendorise(f);
   }
@@ -108,6 +111,11 @@ export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LIS
 
   const plafonds = { octets: maxOctetsCumules, octetsFichier: maxOctetsFichier };
   return { racine, fichiers, entrees, surface, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments, paquet, manifestes, get tronque() { return calculerTronque(); }, fichiersReels, nonLus, plafonds };
+}
+
+/** Vrai si le texte est du JSON valide (un objet, un tableau, une chaîne, un nombre, `true`, `false` ou `null`). */
+function estJsonValide(texte) {
+  try { JSON.parse(texte); return true; } catch { return false; }
 }
 
 function parcourir(racine, dossier, acc, etat) {
@@ -258,7 +266,7 @@ export function raisonsDeTroncature(tronque) {
   if (tronque.octets) raisons.push(`plus de ${Math.round(tronque.maxOctets / 1024 / 1024)} Mio de contenu lu`);
   if (tronque.listage) raisons.push(`plus de ${tronque.maxEntreesListees} entrées lues dans les dossiers exclus pour suivre une adresse d'import map ou un import() à début fixe`);
   if (tronque.surface) raisons.push(`plus de ${tronque.maxResolutions} résolutions d'adresses de worker sous les pages d'entrée : la surface n'est pas complète`);
-  if (tronque.documents) raisons.push(`plus de ${tronque.maxPasDocuments} pas d'analyse de document : l'ordre de chargement n'est pas établi pour toutes les pages`);
+  if (tronque.documents) raisons.push(`plus de ${tronque.maxPasDocuments} pas d'analyse de document : ni l'ordre de chargement ni les noms que le code importe ne sont établis pour toutes les pages`);
   return raisons;
 }
 
@@ -448,6 +456,10 @@ export function resolveurDeDocument(contextes, budget = { restant: Infinity, epu
  */
 export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX_RESOLUTIONS, maxPasDocuments = MAX_PAS_DOCUMENTS } = {}) {
   const budget = { restant: maxResolutions, epuise: false };
+  // Le budget des pas d'analyse de document : les arêtes que les graphes de document parcourent, et les noms qu'une carte d'import résout (`atteints`).
+  const budgetDocuments = { restant: maxPasDocuments };
+  // Un pas de plus que l'analyse de document veut faire (une page évaluée pour un chargement) : faux quand il n'en reste plus, et le budget reste épuisé.
+  const depenserPasDocuments = (pas) => (budgetDocuments.restant -= pas) >= 0;
   let resoudreDocument = null;
   const cheminsDuDocument = (relative) => (resoudreDocument ??= resolveurDeDocument(contextesDeDocument(entrees, trouver), budget))(relative);
   /** Les chemins qu'une référence de fichier peut désigner, depuis le fichier `rel` ; rien pour une adresse qui sort du widget. */
@@ -467,29 +479,40 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
     return cibles;
   };
   const aretesDe = new Map();                                    // chemin → [{ cible | dossier, gabarit, standard, worker, position }], lues une fois
-  const aretes = (rel) => {
-    let liste = aretesDe.get(rel);
+  /** Les arêtes d'un fichier. `commeCode` : une adresse écrite le désigne comme du code (`true`), ou une carte d'import peut le faire (`'probable'`) : ses références se lisent alors comme celles d'un code, quelle que soit son extension. */
+  const aretes = (rel, commeCode = false) => {
+    const cle = commeCode ? `${rel}\0${commeCode}` : rel;
+    let liste = aretesDe.get(cle);
     if (liste) return liste;
     liste = [];
-    for (const ref of referencesSortantes(trouver(rel))) {
+    const refs = referencesSortantes(trouver(rel), commeCode);
+    liste.specificateurs = refs.specificateurs;                  // ce que le code importe : une carte d'import le résout (voir `atteints`)
+    for (const ref of refs) {
       const objet = typeof ref === 'object';
       const gabarit = objet && Boolean(ref.dansTemplate);
       const standard = objet && Boolean(ref.seulementStandard);
       const worker = objet && Boolean(ref.worker);
       const position = objet ? ref.position : undefined;
-      const commeCode = objet && Boolean(ref.commeCode);            // un chargement de code (script, import, worker, carte d'import), non un `<link>` ni une URL de feuille de style
+      const commeCodeArete = objet && Boolean(ref.commeCode);        // un chargement de code (script, import, worker, carte d'import), non un `<link>` ni une URL de feuille de style
+      const ambigu = objet && Boolean(ref.ambigu);                   // une carte d'import : ce qu'elle désigne n'est du code que si un import sans type de données l'emploie
       if (objet && ref.dossier !== undefined) liste.push({ dossier: ref.dossier, gabarit, standard, worker, position });
       else if (objet && ref.dossierRelatif !== undefined) for (const dossier of dossiersDepuis(rel, ref.dossierRelatif)) liste.push({ dossier, gabarit, standard, worker, position });
       else {
         for (const cible of ciblesDe(ref, rel)) {
           for (const candidat of [cible, `${cible}.js`, `${cible}.mjs`, path.posix.join(cible, 'index.js')]) {
-            if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard, worker, position, commeCode });
+            if (trouver(candidat)) liste.push({ cible: candidat, gabarit, standard, worker, position, commeCode: commeCodeArete, ambigu });
           }
         }
       }
     }
-    aretesDe.set(rel, liste);
+    aretesDe.set(cle, liste);
     return liste;
+  };
+  const resolveursDePages = new Map();                           // page, sans quelle réserve → son résolveur de cartes d'import (null : aucune carte que Chromium applique)
+  const resolveurDePage = (rel, f, evite) => {
+    const cle = `${rel}\0${evite ?? ''}`;
+    if (!resolveursDePages.has(cle)) resolveursDePages.set(cle, f.contenu ? resolveurDeCartes(f.contenu, rel, evite) : null);
+    return resolveursDePages.get(cle);
   };
   /** Fichiers atteints depuis `departs` (les entrées par défaut), sans emprunter les arêtes qui portent la réserve `evite` (`gabarit`, `standard`). Chaque chemin entre une fois dans la file et chaque dossier se lit une fois : la fermeture est linéaire en arêtes, quel que soit le nombre de fois qu'un même fichier ou un même dossier est nommé. */
   const atteints = (evite, departs = entrees, nonLus = null) => {
@@ -498,25 +521,70 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
     const file = [...departs];
     const mis = new Set(file);
     const code = new Set(file);                                  // atteints par un chargement de code : un point d'entrée est chargé comme une page
-    const mettre = (chemin, commeCode) => {
+    // Désignés par leur adresse par un chargement de code (balise script, import, worker : `true` ; carte d'import : `'probable'`) :
+    // le navigateur en exécute le texte quelle que soit l'extension, l'audit le lit comme du code (`unitesJs`). Un dossier listé pour
+    // un import() à début fixe ne désigne aucun fichier en particulier : il n'en fait pas du code lisible, seulement du code atteint.
+    const designes = new Map();
+    const parcourusComme = new Map();                            // chemin → comment ses références ont été lues (`false`, `'probable'`, `true`)
+    const rang = (designe) => (designe === true ? 2 : designe === 'probable' ? 1 : 0);
+    const mettre = (chemin, commeCode, designe = false) => {
       if (commeCode) code.add(chemin);
+      if (commeCode && designe && rang(designe) > rang(designes.get(chemin))) designes.set(chemin, designe);
       if (!mis.has(chemin)) { mis.add(chemin); file.push(chemin); }
+      // Déjà parcouru avant qu'une adresse le désigne (ou le désigne plus sûrement) comme du code : ses références de code n'ont pas été lues, il repasse.
+      else if (vus.has(chemin) && rang(designes.get(chemin)) > rang(parcourusComme.get(chemin))) file.push(chemin);
     };
     const binaires = [];                                         // ce que la file atteint et que l'outil ne lit pas
+    // Un nom que du code lu importe (`import 'lib'`) mène, par la carte d'import d'une page, à un fichier : c'est du code pour le navigateur quelle que
+    // soit son extension, sauf un import de données (`with { type: 'css' }`). Chaque couple (nom importé, carte) se résout une fois, quel que soit
+    // l'ordre où la file rencontre la page et le code qui importe : l'un et l'autre s'ajoutent à ce que l'autre a déjà vu.
+    const cartes = [];                                           // les pages atteintes dont une carte d'import résout des noms : { page, resolveur }
+    const pagesAvecCarte = new Set();
+    const noms = [];                                             // ce que le code atteint et lu importe (voir `referencesSortantes`)
+    const nomsVus = new Set();
+    const appliquer = (carte, nom) => {
+      if (nom.donnees || (evite && nom[evite]) || (nom.page !== null && nom.page !== carte.page)) return;   // un script inline n'a que la carte de sa page
+      if (!depenserPasDocuments(1 + carte.resolveur.taille)) return;      // plafond : C-SURFACE-01 le dit, le nom ne désigne rien
+      for (const url of carte.resolveur.resoudre(nom.specificateur, nom)) {
+        const chemin = cheminLocal(url);
+        if (chemin === null) continue;
+        for (const candidat of [chemin, `${chemin}.js`, `${chemin}.mjs`, path.posix.join(chemin, 'index.js')]) if (trouver(candidat)) mettre(candidat, true, true);
+      }
+    };
     for (let i = 0; i < file.length; i++) {
       const rel = file[i];
       const f = trouver(rel);
       if (!f) continue;
       if (f.binaire) { if (nonLus) binaires.push(rel); continue; }
       vus.add(rel);
-      for (const arete of aretes(rel)) {
+      const comme = designes.get(rel) ?? false;
+      parcourusComme.set(rel, comme);
+      const liste = aretes(rel, comme);
+      if (['.html', '.htm'].includes(f.ext) && !pagesAvecCarte.has(rel)) {
+        const resolveur = resolveurDePage(rel, f, evite);
+        if (resolveur) {
+          pagesAvecCarte.add(rel);
+          const carte = { page: rel, resolveur };
+          cartes.push(carte);
+          for (const nom of noms) appliquer(carte, nom);
+        }
+      }
+      for (const nom of liste.specificateurs) {
+        const cle = `${nom.chemin}\0${nom.page ?? ''}\0${nom.baseBrute ?? ''}\0${nom.donnees ? 1 : 0}\0${nom.specificateur}`;
+        if (nomsVus.has(cle)) continue;
+        nomsVus.add(cle);
+        noms.push(nom);
+        for (const carte of cartes) appliquer(carte, nom);
+      }
+      for (const arete of liste) {
         if (evite && arete[evite]) continue;
-        if (arete.dossier === undefined) { mettre(arete.cible, arete.commeCode); continue; }
+        if (arete.dossier === undefined) { mettre(arete.cible, arete.commeCode, arete.commeCode ? (arete.ambigu ? 'probable' : true) : false); continue; }
         if (dossiersVus.has(arete.dossier)) continue;            // un dossier ne se relit pas : ses modules sont déjà dans la file
         dossiersVus.add(arete.dossier);
         for (const chemin of lister(arete.dossier)) mettre(chemin, true);
       }
     }
+    if (nonLus) nonLus.designes = designes;
     // Un fichier que l'outil ne lit pas (une extension de binaire, un fichier trop gros) et qu'une page atteint : `atteints` les
     // nomme tous, `parCode` ceux qu'un chargement de code désigne (le navigateur les charge comme du code, personne ne les a lus).
     // Relevé une fois la file vidée : un fichier peut être atteint par un chargement de code après avoir été écarté une première fois.
@@ -526,13 +594,12 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
     }
     return vus;
   };
-  const relevesNonLus = { atteints: new Set(), parCode: new Set() };
+  const relevesNonLus = { atteints: new Set(), parCode: new Set(), designes: new Map() };
   const surface = atteints(null, entrees, relevesNonLus);
   const sansGabarit = atteints('gabarit');
   const sansStandard = atteints('standard');
   // Ce que le document d'une page charge dans son propre contexte, pour une règle qui doit savoir de quelle import map un module dépend : ni ce que ses workers exécutent (Chromium 141 n'applique jamais l'import map de la page, ni la clé `integrity`, à un worker), ni ce que charge une autre page HTML. À la demande, une fois par page, dans un budget d'arêtes commun ; null quand il est épuisé (l'appelant compte alors la page comme chargeur, il ne blanchit rien).
   // Chaque fichier porte le décalage de la PREMIÈRE balise de la page qui mène à lui : une empreinte d'import map ne protège que les chargements qui commencent après la carte (mesuré dans Chromium 141 : un module placé avant la carte et lu avant elle, page livrée en deux morceaux, s'exécute malgré l'empreinte). Les balises se suivent dans l'ordre du document, chacune ne visite que ce que les précédentes n'ont pas atteint : la fermeture reste linéaire. Une arête sans position (`<link>`, feuille) mène au bout de la file (`Infinity`) : elle ne charge aucun module qu'une empreinte protège.
-  const budgetDocuments = { restant: maxPasDocuments };
   const parcourirDocument = (page) => {
     const racine = trouver(page);
     const positions = new Map();
@@ -593,9 +660,7 @@ export function calculerSurface(entrees, trouver, lister, { maxResolutions = MAX
     if (mention) mentions.set(rel, mention);
   }
   const pasDocuments = () => maxPasDocuments - budgetDocuments.restant;
-  // Un pas de plus que l'analyse de document veut faire (une page évaluée pour un chargement) : faux quand il n'en reste plus, et le budget reste épuisé.
-  const depenserPasDocuments = (pas) => (budgetDocuments.restant -= pas) >= 0;
-  return { surface, mentions, partiel: budget.epuise, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments, nonLusParCode: relevesNonLus.parCode, nonLusAtteints: relevesNonLus.atteints, documentsEpuises: () => budgetDocuments.restant < 0 };
+  return { surface, mentions, partiel: budget.epuise, surfaceDuDocument, debutDeChargement, surfaceDesWorkers, pasDocuments, depenserPasDocuments, nonLusParCode: relevesNonLus.parCode, nonLusAtteints: relevesNonLus.atteints, designesCommeCode: relevesNonLus.designes, documentsEpuises: () => budgetDocuments.restant < 0 };
 }
 
 const ALIAS_GLOBAL = '(?:(?:window|self|globalThis)\\.)?';
@@ -710,34 +775,51 @@ function dossierDeDebut(debut) {
   return i >= 0 && /^(?:\.{1,2}\/|\/)/.test(debut) ? debut.slice(0, i + 1) : null;
 }
 
+/** Les types d'un import avec attributs (`with { type: 'json' }`) que le navigateur ne lit pas comme du JavaScript : des données, une feuille de style. */
+const TYPES_D_IMPORT_DE_DONNEES = new Set(['json', 'css', 'bytes', 'text']);
+const nomDeCle = (n) => n?.key?.name ?? n?.key?.value;
+const proprieteDe = (objet, nom) => (objet?.type === 'ObjectExpression' ? objet.properties.find((p) => p.type === 'Property' && !p.computed && nomDeCle(p) === nom) : undefined);
+
+/**
+ * Vrai pour les attributs d'un import (la liste d'un `import … with { type: 'json' }`, ou l'objet d'options d'un `import()`) qui disent
+ * que le module est de ce type : le navigateur le charge, ne l'exécute pas, et il ne se lit pas comme du code.
+ */
+function importDeDonnees(attributs) {
+  if (Array.isArray(attributs)) return attributs.some((a) => nomDeCle(a) === 'type' && TYPES_D_IMPORT_DE_DONNEES.has(a.value?.value));
+  const avec = proprieteDe(attributs, 'with') ?? proprieteDe(attributs, 'assert');
+  const type = proprieteDe(avec?.value, 'type');
+  return type?.value?.type === 'Literal' && TYPES_D_IMPORT_DE_DONNEES.has(type.value.value);
+}
+
 /**
  * Références qu'un code JavaScript suit : `import` (avec ou sans liaison,
  * `import './app.js'` compris), `export … from`, `import()` à argument
  * littéral (chaîne ou gabarit sans interpolation) et workers, lus dans l'AST,
  * jamais dans un commentaire ni dans une chaîne. Un code qu'acorn ne lit pas
- * (TypeScript, JSX) se lit par expressions régulières : le doute inclut, une
- * entrée de trop dans la surface coûte moins qu'un angle mort.
+ * (TypeScript, JSX) ou dont l'arbre déborde la pile du parcours se lit par
+ * expressions régulières : le doute inclut, une entrée de trop dans la surface
+ * coûte moins qu'un angle mort. Un import de données (`with { type: 'json' }`)
+ * est une référence qui n'est pas un chargement de code (`commeCode: false`).
+ * Le tableau rendu porte aussi `specificateurs` : chaque spécificateur que l'arbre
+ * importe (nom nu compris, sans rien de plus), avec `donnees` pour un import de
+ * données. Une lecture par expressions régulières n'en ajoute aucun : un texte de
+ * commentaire ou de chaîne n'y est pas distingué d'un import, et aucun nom n'en désigne
+ * un fichier. Un arbre que le parcours ne porte pas garde ceux qu'il a rencontrés avant
+ * de déborder : ce sont de vrais imports.
  */
 function referencesDeCode(source) {
   const ast = parser(source);
-  const refs = [];
+  let refs = [];
+  let specificateurs = [];                                         // les noms et adresses que l'arbre importe, `donnees` pour un import de données : ce qu'une carte d'import résout (`calculerSurface`)
+  const nommes = new Set();
+  const nom = (specificateur, deDonnees) => {
+    const cle = `${deDonnees ? 1 : 0}${specificateur}`;
+    if (!nommes.has(cle)) { nommes.add(cle); specificateurs.push({ specificateur, donnees: deDonnees }); }
+  };
   const module = (valeur) => { if (estAdresseDeModule(valeur)) refs.push(valeur); };
-  if (ast) {
-    walk.full(ast, (n) => {
-      if (n.type === 'ImportDeclaration' || n.type === 'ExportAllDeclaration' || (n.type === 'ExportNamedDeclaration' && n.source)) {
-        if (typeof n.source.value === 'string') module(n.source.value);
-      } else if (n.type === 'ImportExpression') {
-        const valeur = chaineLitterale(n.source);
-        if (valeur !== null) module(valeur);
-        else {
-          const dossier = dossierDeSourceCalculee(n.source);
-          if (dossier !== null) refs.push({ dossierRelatif: dossier });
-        }
-      } else {
-        refs.push(...referencesWorkerDansAst(n));
-      }
-    });
-  } else {
+  const donnees = (valeur) => { if (estAdresseDeModule(valeur)) refs.push({ relatif: valeur, commeCode: false }); };
+  const parExpressionsRegulieres = () => {
+    refs = [];                                                     // lus par expressions régulières, les noms peuvent être dans un commentaire ou une chaîne : aucun n'est ajouté
     for (const m of source.matchAll(/\bfrom\s+["']([^"']+)["']/g)) module(m[1]);
     for (const m of source.matchAll(/\bimport\s*\(\s*["']([^"']+)["']/g)) module(m[1]);
     for (const m of source.matchAll(/\bimport\s+["']([^"']+)["']/g)) module(m[1]);
@@ -746,7 +828,39 @@ function referencesDeCode(source) {
       if (dossier !== null) refs.push({ dossierRelatif: dossier });
     }
     refs.push(...referencesWorkerParRegex(source));
+  };
+  if (ast) {
+    try {
+      walk.full(ast, (n) => {
+        if (n.type === 'ImportDeclaration' || n.type === 'ExportAllDeclaration' || (n.type === 'ExportNamedDeclaration' && n.source)) {
+          if (typeof n.source.value === 'string') {
+            const deDonnees = importDeDonnees(n.attributes);
+            (deDonnees ? donnees : module)(n.source.value);
+            nom(n.source.value, deDonnees);
+          }
+        } else if (n.type === 'ImportExpression') {
+          const valeur = chaineLitterale(n.source);
+          if (valeur !== null) {
+            const deDonnees = importDeDonnees(n.options);
+            (deDonnees ? donnees : module)(valeur);
+            nom(valeur, deDonnees);
+          } else {
+            const dossier = dossierDeSourceCalculee(n.source);
+            if (dossier !== null) refs.push({ dossierRelatif: dossier });
+          }
+        } else {
+          refs.push(...referencesWorkerDansAst(n));
+        }
+      });
+    } catch (e) {
+      // Un arbre plus profond que la pile du parcours : le code est dit illisible quand les règles le parcourent (C-SURFACE-03) ; la surface, elle, se lit par expressions régulières.
+      if (!depassementDePile(e)) throw e;
+      parExpressionsRegulieres();
+    }
+  } else {
+    parExpressionsRegulieres();
   }
+  refs.specificateurs = specificateurs;
   return refs;
 }
 
@@ -768,9 +882,13 @@ function urlsDeFeuille(entrees) {
  * url(), worker). Une page HTML les donne déjà résolues depuis la racine du
  * widget (`{chemin}`), `<base>` comprise : un chargement qui sort du widget
  * n'y figure pas, le fichier local du même nom n'est jamais lu à sa place.
+ * Le tableau rendu porte aussi `specificateurs` : ce que le code du fichier (ou de chaque script inline d'une page) importe, avec le référent
+ * qui l'importe (`chemin`, `baseBrute`, `page` : la page dont c'est un script inline, null pour un fichier). Ce ne sont pas des arêtes :
+ * une carte d'import les résout (`calculerSurface`).
  */
-function referencesSortantes(f) {
+function referencesSortantes(f, commeCode = false) {
   const refs = [];
+  const specificateurs = [];                                       // ce que le code de ce fichier importe, à résoudre par les cartes d'import (voir `referencesDeCode`)
   const c = f.contenu ?? '';
   if (f.ext === '.html' || f.ext === '.htm') {
     const { scripts, ressources, feuilles } = lirePage(c);
@@ -790,8 +908,10 @@ function referencesSortantes(f) {
       if (s.unite) {
         // Un worker écrit en commentaire ou en gabarit n'y figure pas ; dans la page, tout se résout contre la base du document.
         const reserves = { dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard, position: s.debut, commeCode: true };
-        for (const ref of referencesDeCode(s.texte)) {
-          const propres = ref.worker ? { ...reserves, worker: true } : reserves;      // ce qu'un worker exécute est dit à la fermeture (`surfaceDesWorkers`)
+        const lues = referencesDeCode(s.texte);
+        for (const specificateur of lues.specificateurs) specificateurs.push({ ...specificateur, chemin: f.chemin, baseBrute: s.baseBrute, page: f.chemin, gabarit: Boolean(s.dansTemplate), standard: Boolean(s.seulementStandard) });
+        for (const ref of lues) {
+          const propres = { ...reserves, ...(ref.worker ? { worker: true } : {}), ...(ref.commeCode === false ? { commeCode: false } : {}) };      // ce qu'un worker exécute est dit à la fermeture (`surfaceDesWorkers`) ; un import de données n'est pas un chargement de code
           if (typeof ref === 'string') local(ref, s.baseBrute, reserves);
           else if (ref.dossierRelatif !== undefined) dossier(ref.dossierRelatif, s.baseBrute, propres);
           else local(ref.documentRelatif ?? ref.relatif, s.baseBrute, propres);
@@ -803,7 +923,7 @@ function referencesSortantes(f) {
     for (const e of extraireImportMaps(c, f.chemin)) {
       const chemin = cheminLocal(urlDeCarte(e.url, e.baseBrute, f.chemin));
       if (chemin === null) continue;
-      const reserves = { dansTemplate: e.dansTemplate, seulementStandard: e.seulementStandard, position: e.index, commeCode: true };   // la carte se lit avant tout import par un nom : ce qu'elle désigne ne se charge pas avant elle
+      const reserves = { dansTemplate: e.dansTemplate, seulementStandard: e.seulementStandard, position: e.index, commeCode: true, ambigu: true };   // la carte se lit avant tout import par un nom : ce qu'elle désigne ne se charge pas avant elle
       // Une adresse qui finit par `/` est un préfixe (`"lib/": "./libs/"` : `import 'lib/x.js'` charge `libs/x.js`) : tout module du dossier peut être chargé.
       refs.push(chemin === '' || chemin.endsWith('/') ? { dossier: chemin, ...reserves } : { chemin, ...reserves });
     }
@@ -812,8 +932,15 @@ function referencesSortantes(f) {
     for (const feuille of feuilles) for (const url of urlsDeFeuille(lireFeuille(feuille, budget))) local(url, feuille.baseBrute, { dansTemplate: feuille.modele });
   }
   if (f.ext === '.css') refs.push(...urlsDeFeuille(lireFeuille({ sorte: 'style', applique: true, precharge: false, modele: false, texte: c, mimeLibre: true, baseBrute: null })));
-  // Ce que le code d'un fichier charge (import, import(), worker, importScripts) est du code : le chargement le marque `commeCode`.
-  if (['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'].includes(f.ext)) refs.push(...referencesDeCode(c).map((ref) => (typeof ref === 'string' ? { relatif: ref, commeCode: true } : { ...ref, commeCode: true })));
+  // Ce que le code d'un fichier charge (import, import(), worker, importScripts) est du code : le chargement le marque `commeCode`, sauf un import de données (`with { type: 'json' }`).
+  // Un fichier qu'une adresse écrite désigne comme du code a les références d'un code quelle que soit son extension ; désigné par une carte d'import seulement (`'probable'`),
+  // il ne les a que s'il se lit comme du JavaScript : ce qu'une carte désigne peut être un module JSON ou CSS.
+  if (['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'].includes(f.ext) || commeCode === true || (commeCode === 'probable' && parser(c))) {
+    const lues = referencesDeCode(c);
+    for (const specificateur of lues.specificateurs) specificateurs.push({ ...specificateur, chemin: f.chemin, baseBrute: null, page: null, gabarit: false, standard: false });
+    refs.push(...lues.map((ref) => (typeof ref === 'string' ? { relatif: ref, commeCode: true } : { ...ref, commeCode: ref.commeCode ?? true })));
+  }
+  refs.specificateurs = specificateurs;
   return refs;
 }
 
