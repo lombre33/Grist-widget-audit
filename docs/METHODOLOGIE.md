@@ -194,10 +194,14 @@ imbrication de code littéral), et aucun ne se passe sous silence :
   (C-SURFACE-03), avec les axes empêchés du fichier non lu : la syntaxe
   qu'acorn refuse (TypeScript, JSX que la page charge), une imbrication que la
   pile de l'analyse ne porte pas alors que le navigateur l'exécute, un parcours
-  des règles qui déborde, une règle qui échoue sur un code piégé. Le code piégé
-  est dit et les autres fichiers sont audités comme s'il n'était pas là : il ne
-  fait pas tomber l'audit. Ce qu'aucune page n'exécute est une information
-  groupée, qui ne bloque pas.
+  des règles qui déborde, une règle qui échoue sur un code piégé, une erreur de
+  l'outil lui-même. L'inventaire des fichiers lit ce même code pour savoir ce
+  que la page charge : ce qu'il n'a pas pu lire ou parcourir est dit comme le
+  reste, une fois par unité, avec l'étape où l'échec a eu lieu (lecture,
+  parcours d'une règle, inventaire), et une lecture qui a échoué n'est pas
+  refaite par les règles. Le code piégé est dit et les autres fichiers sont
+  audités comme s'il n'était pas là : il ne fait pas tomber l'audit. Ce
+  qu'aucune page n'exécute est une information groupée, qui ne bloque pas.
 
 Un fichier qu'une balise script, un import ou un worker désigne par son adresse
 est du code pour le navigateur **quelle que soit son extension** :

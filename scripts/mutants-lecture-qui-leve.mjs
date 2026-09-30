@@ -31,15 +31,15 @@ const MUTANTS = [
   // La lecture qui lève : ce qu'elle dit, et qu'acorn l'a bien tentée -----------------------------------------------------------
   dansLigne(AJ, 'export const depassementDePile', '(e instanceof RangeError && /call stack/i.test(String(e.message))) || ', '', 'lecture qui lève : le RangeError de V8 n\'est plus un dépassement de pile'),
   dansLigne(AJ, 'export const depassementDePile', ' || (e instanceof SyntaxError && /not enough stack space/i.test(String(e.message)))', '', 'lecture qui lève : l\'erreur que la lecture d\'acorn en fait n\'est plus un dépassement de pile'),
-  dansLigne(AJ, "cause: profond ? 'profondeur' : 'syntaxe',", "profond ? 'profondeur' : 'syntaxe'", "'syntaxe'", 'lecture qui lève : un dépassement de pile est dit de syntaxe'),
-  dansLigne(AJ, "message: profond ? 'la pile déborde' : String(e?.message ?? e)", "profond ? 'la pile déborde' : ", '', 'lecture qui lève : la raison d\'un dépassement de pile est le message de l\'erreur levée'),
+  dansLigne(AJ, "cause: profond ? 'profondeur' : syntaxe ?", "profond ? 'profondeur' :", "profond ? 'syntaxe' :", 'lecture qui lève : un dépassement de pile est dit de syntaxe'),
+  dansLigne(AJ, "message: profond ? 'la pile déborde' : syntaxe ?", "profond ? 'la pile déborde' : ", '', 'lecture qui lève : la raison d\'un dépassement de pile est le message de l\'erreur levée'),
   dansLigne(AJ, 'const lecture = tenter(source, sourceType);', 'tenter(source, sourceType)', "{ ast: null, erreur: { cause: 'profondeur', message: 'la pile déborde', ligne: null, colonne: null, position: null } }", 'lecture qui lève : la pile est dite déborder sans qu\'acorn ait lu'),
-  brut(AJ, '    const profond = depassementDePile(e);\n    return {\n      ast: null,', '    const profond = depassementDePile(e);\n    if (!profond && !(e instanceof SyntaxError)) throw e;\n    return {\n      ast: null,', 'lecture qui lève : une erreur qui n\'est ni de syntaxe ni un dépassement de pile fait tomber l\'audit'),
+  brut(AJ, '  } catch (e) {\n    return { ast: null, erreur: erreurDeLecture(e) };', '  } catch (e) {\n    if (!depassementDePile(e) && !(e instanceof SyntaxError)) throw e;\n    return { ast: null, erreur: erreurDeLecture(e) };', 'lecture qui lève : une erreur qui n\'est ni de syntaxe ni un dépassement de pile fait tomber l\'audit'),
 
   // Ce que la lecture qui a échoué devient : relevée, sans arrêter le parcours des autres fichiers -------------------------------
-  dansLigne(AJ, 'if (f.executee) noterIllisible(releverDans, f, u,', 'if (f.executee)', 'if (false)', 'lecture qui lève : le code exécuté que la lecture refuse n\'est jamais relevé'),
-  brut(AJ, "        if (f.executee) noterIllisible(releverDans, f, u, u.facultative ? { ...erreur, cause: 'donnee-possible' } : erreur);\n        continue;", "        if (f.executee) noterIllisible(releverDans, f, u, u.facultative ? { ...erreur, cause: 'donnee-possible' } : erreur);\n        return;", 'lecture qui lève : le premier code illisible interrompt le parcours des autres fichiers'),
-  dansLigne(AJ, "const cle = `${f.chemin}\\0${u.inline ? u.debut : 'fichier'}`;", "'fichier'}`", "'fichier'}${liste.size}`", 'lecture qui lève : chaque règle qui rencontre le fichier le relève de nouveau'),
+  dansLigne(AJ, 'if (f.executee) noterIllisible(releves, f, u,', 'if (f.executee)', 'if (false)', 'lecture qui lève : le code exécuté que la lecture refuse n\'est jamais relevé'),
+  brut(AJ, "        noterLectureRefusee(releverDans, f, u, erreur);\n        continue;", "        noterLectureRefusee(releverDans, f, u, erreur);\n        return;", 'lecture qui lève : le premier code illisible interrompt le parcours des autres fichiers'),
+  dansLigne(AJ, "const cle = `${f.chemin}\\0${cleDUnite(u)}`;", "cleDUnite(u)}`", "cleDUnite(u)}${liste.size}`", 'lecture qui lève : chaque règle qui rencontre le fichier le relève de nouveau'),
 
   // Le constat, et ce qu'il empêche --------------------------------------------------------------------------------------------
   dansLigne(T, 'constats.push(...analyserIllisibles(ctx));', 'constats.push(...analyserIllisibles(ctx));', '', 'lecture qui lève : les codes illisibles ne sont pas dits par l\'analyse statique'),
@@ -47,7 +47,7 @@ const MUTANTS = [
   brut(IL, CONSTAT_CRITIQUE, CONSTAT_CRITIQUE.replace('bloquant: true', 'bloquant: false'), 'lecture qui lève : un code illisible ne bloque pas'),
   dansLigne(IL, 'axesEmpeches: axesDUnFichierNonLu(n),', 'axesDUnFichierNonLu(n)', '[]', 'lecture qui lève : un code illisible n\'empêche aucun axe'),
   dansLigne(CS, '!n.dossierExclu && !cheminVendorise(n.chemin) ? TOUS_LES_AXES_STATIQUES : AXES_DU_CODE_EXECUTE', 'TOUS_LES_AXES_STATIQUES :', 'AXES_DU_CODE_EXECUTE :', 'lecture qui lève : un code illisible du contributeur n\'empêche pas A'),
-  dansLigne(IL, 'preuve: { cause: n.cause, message: n.message, ligne: n.ligne, colonne: n.colonne, inline: n.inline },', 'cause: n.cause, ', '', 'lecture qui lève : la preuve ne dit pas la cause'),
+  dansLigne(IL, 'preuve: { cause: n.cause, message: n.message, etape: n.etape,', 'cause: n.cause, ', '', 'lecture qui lève : la preuve ne dit pas la cause'),
   dansLigne(N, 'for (const code of c.axesEmpeches ?? []) {', 'c.axesEmpeches ?? []', '[]', 'lecture qui lève : la notation ne lit pas les axes qu\'un constat empêche'),
   brut(N, '        scoreMesure: parAxe[code].score,\n        score: 0,', '        scoreMesure: parAxe[code].score,\n        score: parAxe[code].score,', 'lecture qui lève : un axe empêché garde sa note'),
 

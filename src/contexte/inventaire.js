@@ -16,7 +16,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import * as walk from 'acorn-walk';
 import { lirePage, urlDe, urlDeCarte, cheminLocal, mentionDe } from '../moteur/page-html.js';
-import { parser, chaineLitterale, nomPointe, extraireImportMaps, resolveurDeCartes, depassementDePile } from '../moteur/analyse-js.js';
+import { lireUnite, noterParcoursEchoue, chaineLitterale, nomPointe, extraireImportMaps, resolveurDeCartes } from '../moteur/analyse-js.js';
 import { lireFeuille, nouveauBudgetCss } from '../moteur/css.js';
 import { numeroLigne } from '../moteur/lignes.js';
 
@@ -53,6 +53,9 @@ const MAX_OCTETS_FICHIER = 16 * 1024 * 1024;
 
 /** Extensions considérées comme du code exécuté côté navigateur. */
 const CODE_WEB = new Set(['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx', '.html', '.htm', '.css']);
+
+/** Les fichiers dont l'extension dit qu'ils contiennent du code : l'inventaire en lit les références (import, import(), worker). */
+const EXTENSIONS_DE_CODE = ['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'];
 
 /**
  * @param {string} racine chemin absolu du dépôt audité
@@ -798,7 +801,10 @@ function importDeDonnees(attributs) {
  * jamais dans un commentaire ni dans une chaîne. Un code qu'acorn ne lit pas
  * (TypeScript, JSX) ou dont l'arbre déborde la pile du parcours se lit par
  * expressions régulières : le doute inclut, une entrée de trop dans la surface
- * coûte moins qu'un angle mort. Un import de données (`with { type: 'json' }`)
+ * coûte moins qu'un angle mort. Ni l'un ni l'autre ne se passe sous silence : la
+ * lecture qui échoue est celle de `lireUnite` (gardée, les règles ne la refont pas),
+ * le parcours qui échoue est relevé (`noterParcoursEchoue`), et C-SURFACE-03 dit
+ * les deux comme ceux des règles. Un import de données (`with { type: 'json' }`)
  * est une référence qui n'est pas un chargement de code (`commeCode: false`).
  * Le tableau rendu porte aussi `specificateurs` : chaque spécificateur que l'arbre
  * importe (nom nu compris, sans rien de plus), avec `donnees` pour un import de
@@ -806,9 +812,12 @@ function importDeDonnees(attributs) {
  * commentaire ou de chaîne n'y est pas distingué d'un import, et aucun nom n'en désigne
  * un fichier. Un arbre que le parcours ne porte pas garde ceux qu'il a rencontrés avant
  * de déborder : ce sont de vrais imports.
+ * `f` est le fichier, `unite` ce qui se lit (`{ source, inline, debut }`, voir `lireUnite`) et `lecture` sa lecture, quand l'appelant l'a déjà faite (la porte des
+ * fichiers que seule une carte d'import désigne). Exportée pour les essais.
  */
-function referencesDeCode(source) {
-  const ast = parser(source);
+export function referencesDeCode(f, unite, lecture = lireUnite(f, unite)) {
+  const { ast } = lecture;
+  const source = unite.source;
   let refs = [];
   let specificateurs = [];                                         // les noms et adresses que l'arbre importe, `donnees` pour un import de données : ce qu'une carte d'import résout (`calculerSurface`)
   const nommes = new Set();
@@ -853,8 +862,8 @@ function referencesDeCode(source) {
         }
       });
     } catch (e) {
-      // Un arbre plus profond que la pile du parcours : le code est dit illisible quand les règles le parcourent (C-SURFACE-03) ; la surface, elle, se lit par expressions régulières.
-      if (!depassementDePile(e)) throw e;
+      // Un arbre que le parcours ne porte pas (la pile déborde, une erreur de l'outil) : l'échec est relevé, C-SURFACE-03 le dit ; la surface, elle, se lit par expressions régulières.
+      noterParcoursEchoue(f, unite, e);
       parExpressionsRegulieres();
     }
   } else {
@@ -908,7 +917,7 @@ function referencesSortantes(f, commeCode = false) {
       if (s.unite) {
         // Un worker écrit en commentaire ou en gabarit n'y figure pas ; dans la page, tout se résout contre la base du document.
         const reserves = { dansTemplate: s.dansTemplate, seulementStandard: s.seulementStandard, position: s.debut, commeCode: true };
-        const lues = referencesDeCode(s.texte);
+        const lues = referencesDeCode(f, { source: s.texte, inline: true, debut: s.debut });
         for (const specificateur of lues.specificateurs) specificateurs.push({ ...specificateur, chemin: f.chemin, baseBrute: s.baseBrute, page: f.chemin, gabarit: Boolean(s.dansTemplate), standard: Boolean(s.seulementStandard) });
         for (const ref of lues) {
           const propres = { ...reserves, ...(ref.worker ? { worker: true } : {}), ...(ref.commeCode === false ? { commeCode: false } : {}) };      // ce qu'un worker exécute est dit à la fermeture (`surfaceDesWorkers`) ; un import de données n'est pas un chargement de code
@@ -935,10 +944,15 @@ function referencesSortantes(f, commeCode = false) {
   // Ce que le code d'un fichier charge (import, import(), worker, importScripts) est du code : le chargement le marque `commeCode`, sauf un import de données (`with { type: 'json' }`).
   // Un fichier qu'une adresse écrite désigne comme du code a les références d'un code quelle que soit son extension ; désigné par une carte d'import seulement (`'probable'`),
   // il ne les a que s'il se lit comme du JavaScript : ce qu'une carte désigne peut être un module JSON ou CSS.
-  if (['.js', '.mjs', '.cjs', '.ts', '.jsx', '.tsx'].includes(f.ext) || commeCode === true || (commeCode === 'probable' && parser(c))) {
-    const lues = referencesDeCode(c);
-    for (const specificateur of lues.specificateurs) specificateurs.push({ ...specificateur, chemin: f.chemin, baseBrute: null, page: null, gabarit: false, standard: false });
-    refs.push(...lues.map((ref) => (typeof ref === 'string' ? { relatif: ref, commeCode: true } : { ...ref, commeCode: ref.commeCode ?? true })));
+  const parSonExtension = EXTENSIONS_DE_CODE.includes(f.ext);
+  if (parSonExtension || commeCode) {
+    const unite = { source: c, inline: false, debut: null };
+    const lecture = lireUnite(f, unite);                           // une seule lecture pour la porte et pour les références ; un échec est gardé, les règles ne le refont pas, et C-SURFACE-03 le dit
+    if (parSonExtension || commeCode === true || lecture.ast) {
+      const lues = referencesDeCode(f, unite, lecture);
+      for (const specificateur of lues.specificateurs) specificateurs.push({ ...specificateur, chemin: f.chemin, baseBrute: null, page: null, gabarit: false, standard: false });
+      refs.push(...lues.map((ref) => (typeof ref === 'string' ? { relatif: ref, commeCode: true } : { ...ref, commeCode: ref.commeCode ?? true })));
+    }
   }
   refs.specificateurs = specificateurs;
   return refs;

@@ -106,6 +106,10 @@ test('une lecture qui lève une erreur qui n\'est pas un dépassement de pile n\
   assert.equal(illisibles.length, 1);
   assert.equal(etat(illisibles[0]), 'critique bloquant');
   assert.equal(illisibles[0].fichier, 'app.js');
+  assert.equal(illisibles[0].preuve.cause, 'analyse', 'une erreur de l\'outil n\'est pas une erreur de syntaxe du code : elle est à signaler, le code n\'est pas à réécrire');
+  assert.equal(illisibles[0].preuve.message, 'TypeError : Cannot read properties of undefined (reading \'type\')');
+  assert.equal(illisibles[0].preuve.etape, 'lecture');
+  assert.match(illisibles[0].remediation, /Signaler l'erreur/);
   assert.deepEqual(illisibles[0].axesEmpeches, TOUS);
   assert.ok(a.de('C-EXFIL-01', 'autre.js').length > 0, 'le fichier d\'à côté est audité comme s\'il était seul');
 });

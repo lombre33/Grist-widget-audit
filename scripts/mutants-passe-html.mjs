@@ -32,7 +32,7 @@ const MUTANTS = [
   [5, 'src/regles/c-securite.js', 'const metas = balises.filter(estMetaCsp);', "const metas = balises.filter((b) => estMetaCsp(b) && /http-equiv\\s*=\\s*[\"']/i.test(b.balise));"],
   [5, 'src/regles/f-conformite.js', "if (entree && !/\\S/.test(lirePage(c).titre ?? '')) {", 'if (entree && !/<title>\\s*\\S/i.test(c)) {'],
   [5, 'src/contexte/inventaire.js', '      if (s.unite) {\n', '      {\n'],
-  [5, 'src/contexte/inventaire.js', 'const lues = referencesDeCode(s.texte);', 'const lues = referencesDeCode(c);'],
+  [5, 'src/contexte/inventaire.js', 'const lues = referencesDeCode(f, { source: s.texte, inline: true, debut: s.debut });', 'const lues = referencesDeCode(f, { source: c, inline: true, debut: s.debut });'],
   [5, 'src/regles/c-securite.js', "if (rel.includes('noopener') || rel.includes('noreferrer')) continue;", 'if (false) continue;'],
   [5, 'src/regles/c-securite.js', 'estMetaCsp(b) && b.dansTete && aUneDirective(b)', 'estMetaCsp(b) && aUneDirective(b)'],
   [6, 'src/moteur/decoupeur-html.js', 'offset - (ch.length - 1)', 'offset - ch.length'],

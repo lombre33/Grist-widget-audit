@@ -122,12 +122,45 @@ export function syntaxeDeModule(ast) {
  */
 export const depassementDePile = (e) => (e instanceof RangeError && /call stack/i.test(String(e.message))) || (e instanceof SyntaxError && /not enough stack space/i.test(String(e.message)));
 
-/** Des deux erreurs des deux modes, celle qui dit le plus : un dépassement de pile, sinon celle qui va le plus loin dans le texte. */
+/** Ce que dit une erreur qui n'est ni un dépassement de pile ni une erreur de syntaxe : son type et son message, tronqué. */
+const messageDErreur = (e) => `${e?.name ?? 'Error'} : ${String(e?.message ?? e).slice(0, 200)}`;
+
+/**
+ * Des deux erreurs des deux modes, celle qui dit le plus : un dépassement de pile, puis une erreur de l'outil (`analyse` : la lecture
+ * n'est pas allée au bout, on ne sait pas ce que l'autre mode aurait donné), sinon celle qui va le plus loin dans le texte.
+ */
+const RANG_DE_CAUSE = { profondeur: 2, analyse: 1, syntaxe: 0 };
 const erreurLaPlusLoin = (a, b) => {
-  if (!a || a.cause === 'profondeur') return a ?? b;
-  if (b.cause === 'profondeur') return b;
+  if (!a) return b;
+  if (RANG_DE_CAUSE[b.cause] !== RANG_DE_CAUSE[a.cause]) return RANG_DE_CAUSE[b.cause] > RANG_DE_CAUSE[a.cause] ? b : a;
   return (b.position ?? -1) > (a.position ?? -1) ? b : a;
 };
+
+/**
+ * Ce qu'une lecture qui lève dit. Un dépassement de pile : `profondeur`. Une erreur de syntaxe d'acorn, qui porte la position où il s'arrête :
+ * `syntaxe`. Toute autre erreur (un défaut de l'outil ou de sa dépendance, la mémoire) : `analyse`, dite comme celle d'un parcours qui échoue :
+ * le code n'est pas en cause, on ne lui conseille pas d'être réécrit, et l'erreur est à signaler.
+ */
+function erreurDeLecture(e) {
+  const profond = depassementDePile(e);
+  const syntaxe = e instanceof SyntaxError && typeof e.pos === 'number';
+  return {
+    cause: profond ? 'profondeur' : syntaxe ? 'syntaxe' : 'analyse',
+    message: profond ? 'la pile déborde' : syntaxe ? String(e.message).replace(/\s*\(\d+:\d+\)$/, '') : messageDErreur(e),
+    ligne: e?.loc?.line ?? null, colonne: e?.loc ? e.loc.column + 1 : null,
+    position: typeof e?.pos === 'number' ? e.pos : null,
+  };
+}
+
+/** Ce qu'un parcours de l'arbre qui lève dit : la pile qui déborde, ou l'erreur que l'outil a levée sur ce code. Ni ligne ni position : le code se lit, c'est le parcours qui échoue. */
+export function erreurDeParcours(e) {
+  const profond = depassementDePile(e);
+  return {
+    cause: profond ? 'profondeur' : 'analyse',
+    message: profond ? 'la pile déborde' : messageDErreur(e),
+    ligne: null, colonne: null, position: null,
+  };
+}
 
 /**
  * Une lecture d'acorn, dans un mode (`module` ou `script`). Dans son propre appel : l'erreur d'une lecture qui échoue, et ce que le
@@ -146,26 +179,17 @@ function tenter(source, sourceType) {
     ast.commentaires = commentaires;
     return { ast, erreur: null };
   } catch (e) {
-    const profond = depassementDePile(e);
-    return {
-      ast: null,
-      erreur: {
-        cause: profond ? 'profondeur' : 'syntaxe',
-        message: profond ? 'la pile déborde' : String(e?.message ?? e).replace(/\s*\(\d+:\d+\)$/, ''),
-        ligne: e?.loc?.line ?? null, colonne: e?.loc ? e.loc.column + 1 : null,
-        position: typeof e?.pos === 'number' ? e.pos : null,
-      },
-    };
+    return { ast: null, erreur: erreurDeLecture(e) };
   }
 }
 
 /**
  * Lit une unité : son arbre, ou la raison pour laquelle acorn n'en donne pas (TS, JSX, syntaxe invalide, code plus profond
- * que la pile). Module puis script : quand aucun des deux ne lit, l'erreur dite est celle qui dit le plus (`erreurLaPlusLoin`).
+ * que la pile, erreur de l'outil). Module puis script : quand aucun des deux ne lit, l'erreur dite est celle qui dit le plus (`erreurLaPlusLoin`).
  * Les commentaires sont collectés à part (`ast.commentaires`, `{debut, fin}` en décalage de caractères) : acorn ne les
  * rattache à aucun nœud par défaut, or au moins une règle (A-ERR-01) a besoin de savoir si une portée de code est commentée
  * sans se soucier de la syntaxe qu'elle contient.
- * @returns {{ast: ?object, erreur: ?{cause: 'syntaxe'|'profondeur', message: string, ligne: ?number, colonne: ?number, position: ?number}}}
+ * @returns {{ast: ?object, erreur: ?{cause: 'syntaxe'|'profondeur'|'analyse', message: string, ligne: ?number, colonne: ?number, position: ?number}}}
  */
 export function lire(source) {
   let erreur = null;
@@ -187,30 +211,47 @@ export function aCommentaireDansPortee(ast, noeud) {
   return (ast?.commentaires ?? []).some((c) => c.debut >= noeud.start && c.fin <= noeud.end);
 }
 
+/** La clé d'une unité parmi celles de son fichier : le décalage de sa balise `<script>` dans la page, ou « fichier » pour le fichier entier. */
+const cleDUnite = (u) => (u.inline ? u.debut : 'fichier');
+
 /**
  * Note qu'une unité n'a pas été lue (`contexte.illisibles`, une entrée par unité : les vingt parcours de règles
- * la rencontrent chacun, la première raison est gardée). C-SURFACE-03 le dit.
- * @param {{cause: 'syntaxe'|'profondeur'|'analyse', message: string, ligne: ?number, colonne: ?number, position: ?number}} erreur
+ * la rencontrent chacun, et l'inventaire des fichiers avant elles, la première raison est gardée). C-SURFACE-03 le dit.
+ * `erreur.etape` dit où l'échec a eu lieu : `lecture` (acorn ne donne pas d'arbre, par défaut), `parcours` (une règle a échoué sur l'arbre)
+ * ou `inventaire` (l'inventaire des fichiers n'a pas pu parcourir l'arbre pour savoir ce que la page charge).
+ * @param {{cause: 'syntaxe'|'profondeur'|'analyse', message: string, ligne: ?number, colonne: ?number, position: ?number, etape?: 'lecture'|'parcours'|'inventaire'}} erreur
  */
 function noterIllisible(releves, f, u, erreur) {
   const liste = (releves.illisibles ??= new Map());
-  const cle = `${f.chemin}\0${u.inline ? u.debut : 'fichier'}`;
+  const cle = `${f.chemin}\0${cleDUnite(u)}`;
   if (liste.has(cle)) return;
   // La position d'une erreur se dit dans le fichier réel : pour un script inline, par le décalage dans la page.
   const place = u.positionDe && typeof erreur.position === 'number' ? u.positionDe(erreur.position) : null;
   liste.set(cle, {
-    chemin: f.chemin, cause: erreur.cause, message: erreur.message, inline: u.inline, facultative: Boolean(u.facultative),
+    chemin: f.chemin, cause: erreur.cause, message: erreur.message, etape: erreur.etape ?? 'lecture', inline: u.inline, facultative: Boolean(u.facultative),
     ligne: place ? place.ligne : (u.inline ? u.debutLigne : erreur.ligne), colonne: place ? place.colonne + 1 : erreur.colonne,
     surface: Boolean(f.executee), dossierExclu: Boolean(f.dossierExclu),
   });
 }
 
+/** Une unité dont la lecture n'a pas donné d'arbre : dite si le code est exécuté (du JSX ou du TypeScript qu'aucune page ne charge n'est pas du code exécuté) ; un fichier que seule une carte d'import désigne n'est peut-être que de la donnée. */
+function noterLectureRefusee(releves, f, u, erreur) {
+  if (f.executee) noterIllisible(releves, f, u, u.facultative ? { ...erreur, cause: 'donnee-possible' } : erreur);
+}
+
 /** Les unités qu'acorn n'a pas lues, par fichier : la raison, gardée pour que la vingtaine de règles qui les rencontrent ne refassent pas une lecture qui a échoué (jusqu'à la fin d'un gros fichier). */
 const lecturesEchouees = new WeakMap();
 
-/** `lire` l'unité, une seule fois quand la lecture échoue : l'arbre d'une lecture réussie n'est pas gardé (la mémoire), le refus l'est (quelques octets). */
-function lireUnite(f, u) {
-  const cle = u.inline ? u.debut : 'fichier';
+/** Les unités dont l'arbre a été lu et que l'inventaire des fichiers n'a pas pu parcourir, par fichier : la raison, que `releverEchecsDeLInventaire` dit. */
+const parcoursEchoues = new WeakMap();
+
+/**
+ * `lire` l'unité, une seule fois quand la lecture échoue : l'arbre d'une lecture réussie n'est pas gardé (la mémoire), le refus l'est (quelques octets).
+ * L'inventaire des fichiers (`construireContexte`) et les règles lisent par là : ce que l'un n'a pas pu lire, l'autre ne le relit pas, et l'échec n'est dit qu'une fois.
+ * `u` est une unité de `unitesJs`, ou l'une de ses trois propriétés : `{ source, inline, debut }`.
+ */
+export function lireUnite(f, u) {
+  const cle = cleDUnite(u);
   const echecs = lecturesEchouees.get(f);
   if (echecs?.has(cle)) return { ast: null, erreur: echecs.get(cle) };
   const lecture = lire(u.source);
@@ -219,6 +260,32 @@ function lireUnite(f, u) {
     else echecs.set(cle, lecture.erreur);
   }
   return lecture;
+}
+
+/** L'inventaire des fichiers n'a pas pu parcourir l'arbre de cette unité (la pile déborde, une erreur de l'outil) : il le dit ici, il en lit les références par expressions régulières, et C-SURFACE-03 le dit. Une fois par unité. */
+export function noterParcoursEchoue(f, u, e) {
+  const cle = cleDUnite(u);
+  let echecs = parcoursEchoues.get(f);
+  if (!echecs) parcoursEchoues.set(f, echecs = new Map());
+  if (!echecs.has(cle)) echecs.set(cle, { ...erreurDeParcours(e), etape: 'inventaire' });
+}
+
+/**
+ * Relève dans `contexte.illisibles` ce que l'inventaire des fichiers a lui-même échoué à lire ou à parcourir : il lit tout le code de la surface pour savoir ce que
+ * la page charge, et un échec de sa part ne se passe pas sous silence parce qu'il lit par expressions régulières à la place. Dit comme celui des règles, une fois par
+ * unité : la raison qu'une règle a déjà relevée est gardée, `noterIllisible` ne la remplace pas. Appelée une fois que les règles ont tourné (C-SURFACE-03).
+ */
+export function releverEchecsDeLInventaire(contexte) {
+  for (const f of contexte.fichiers ?? []) {
+    const lectures = lecturesEchouees.get(f);
+    const parcours = parcoursEchoues.get(f);
+    if (!lectures && !parcours) continue;
+    for (const u of unitesJs(f)) {
+      const cle = cleDUnite(u);
+      if (lectures?.has(cle)) noterLectureRefusee(contexte, f, u, lectures.get(cle));
+      else if (parcours?.has(cle)) noterIllisible(contexte, f, u, parcours.get(cle));
+    }
+  }
 }
 
 /**
@@ -240,18 +307,13 @@ export function pourChaqueUniteJs(contexte, { surfaceSeulement = false, ignorerV
     for (const u of unitesJs(f)) {
       const { ast, erreur } = lireUnite(f, u);
       if (!ast) {
-        if (f.executee) noterIllisible(releverDans, f, u, u.facultative ? { ...erreur, cause: 'donnee-possible' } : erreur);
+        noterLectureRefusee(releverDans, f, u, erreur);
         continue;
       }
       try {
         visiteur({ unite: u, ast, fichier: f, ligneDe: (noeud) => ligneDans(u, noeud), walk });
       } catch (e) {
-        const profond = depassementDePile(e);
-        noterIllisible(releverDans, f, u, {
-          cause: profond ? 'profondeur' : 'analyse',
-          message: profond ? 'la pile déborde' : `${e?.name ?? 'Error'} : ${String(e?.message ?? e).slice(0, 200)}`,
-          ligne: null, colonne: null, position: null,
-        });
+        noterIllisible(releverDans, f, u, { ...erreurDeParcours(e), etape: 'parcours' });
       }
     }
   }

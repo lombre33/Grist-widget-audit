@@ -33,6 +33,7 @@ import { analyseStatique } from '../src/moteur/statique.js';
 
 const page = (corps, tete = '') => `<!doctype html><meta charset=utf-8>${tete}${corps}`;
 const MODULE = (chemin) => `<script type=module src="${chemin}"></script>`;
+const CARTE = (imports) => `<script type=importmap>${JSON.stringify({ imports })}</script>`;
 
 /**
  * [nom, fichiers(E), options]
@@ -75,6 +76,69 @@ const FORMES = [
     'index.html': page(`<script type=importmap>{"imports":{"lib/":"./libs/"}}</script><script type=module>import 'lib/x.js';</script>`),
     'libs/x.js': '\n', 'libs/y.js': '// jamais importé\n',
   }), { enTrop: ['libs/y.js'] }],
+
+  // Le cas inverse de la carte : la clé est une adresse que la page charge (`./a.js`, `/w/a.js`) et la carte la ré-adresse vers `b.js`. Chromium ne l'applique
+  // qu'aux imports de la page et de ses modules, jamais à `<script src>`, `<link>`, `new Worker()`, `importScripts()` ni à ce qu'un worker importe : il charge
+  // tantôt la cible, tantôt l'origine. La surface garde les deux adresses, l'excès est dit ; un fichier chargé que la surface n'aurait plus fait échouer le test.
+  ['carte inverse : import \'./a.js\' sous la clé ./a.js → ./b.js (Chromium charge la cible)', () => ({
+    'index.html': page(`${CARTE({ './a.js': './b.js' })}<script type=module>import './a.js';</script>`),
+    'a.js': '\n', 'b.js': '\n',
+  }), { enTrop: ['a.js'] }],
+
+  ['carte inverse : import() à littéral sous la clé ./a.js → ./b.js (Chromium charge la cible)', () => ({
+    'index.html': page(`${CARTE({ './a.js': './b.js' })}<script type=module>import('./a.js');</script>`),
+    'a.js': '\n', 'b.js': '\n',
+  }), { enTrop: ['a.js'] }],
+
+  ['carte inverse : module m.js qui importe ./a.js sous la clé ./a.js → ./b.js (Chromium charge la cible)', () => ({
+    'index.html': page(`${CARTE({ './a.js': './b.js' })}${MODULE('m.js')}`),
+    'm.js': "import './a.js';\n", 'a.js': '\n', 'b.js': '\n',
+  }), { enTrop: ['a.js'] }],
+
+  ['carte inverse : <script type=module src="a.js"> (la carte ne s\'applique pas : Chromium charge a.js)', () => ({
+    'index.html': page(`${CARTE({ './a.js': './b.js' })}${MODULE('a.js')}`),
+    'a.js': '\n', 'b.js': '\n',
+  }), { enTrop: ['b.js'] }],
+
+  ['carte inverse : <script src="a.js"> classique (Chromium charge a.js)', () => ({
+    'index.html': page(`${CARTE({ './a.js': './b.js' })}<script src="a.js"></script>`),
+    'a.js': '\n', 'b.js': '\n',
+  }), { enTrop: ['b.js'] }],
+
+  ['carte inverse : <link rel=modulepreload href="a.js"> (Chromium charge a.js)', () => ({
+    'index.html': page(`${CARTE({ './a.js': './b.js' })}<link rel=modulepreload href="a.js">`),
+    'a.js': '\n', 'b.js': '\n',
+  }), { enTrop: ['b.js'] }],
+
+  ['carte inverse : worker classique new Worker(\'/w/a.js\') sous la clé /w/a.js → /w/b.js (Chromium charge w/a.js)', () => ({
+    'index.html': page(`${CARTE({ '/w/a.js': '/w/b.js' })}<script>new Worker('/w/a.js');</script>`),
+    'w/a.js': '\n', 'w/b.js': '\n',
+  }), { enTrop: ['w/b.js'] }],
+
+  ['carte inverse : worker module new Worker(\'/w/a.js\', { type: \'module\' }) sous la clé /w/a.js → /w/b.js (Chromium charge w/a.js)', () => ({
+    'index.html': page(`${CARTE({ '/w/a.js': '/w/b.js' })}<script type=module>new Worker('/w/a.js', { type: 'module' });</script>`),
+    'w/a.js': '\n', 'w/b.js': '\n',
+  }), { enTrop: ['w/b.js'] }],
+
+  ['carte inverse : worker module w.js qui importe ./a.js (il n\'a pas la carte de la page : Chromium charge a.js)', () => ({
+    'index.html': page(`${CARTE({ './a.js': './b.js' })}<script type=module>new Worker('w.js', { type: 'module' });</script>`),
+    'w.js': "import './a.js';\n", 'a.js': '\n', 'b.js': '\n',
+  }), { enTrop: ['b.js'] }],
+
+  ['carte inverse : worker classique w.js : importScripts(\'./a.js\') (Chromium charge a.js)', () => ({
+    'index.html': page(`${CARTE({ './a.js': './b.js' })}<script>new Worker('w.js');</script>`),
+    'w.js': "importScripts('./a.js');\n", 'a.js': '\n', 'b.js': '\n',
+  }), { enTrop: ['b.js'] }],
+
+  ['carte inverse : worker module w.js qui importe le nom nu lib (la carte de la page ne s\'applique pas, l\'import échoue : b.js n\'est pas chargé)', () => ({
+    'index.html': page(`${CARTE({ lib: './b.js' })}<script type=module>new Worker('w.js', { type: 'module' });</script>`),
+    'w.js': "import 'lib';\n", 'b.js': '\n',
+  }), { enTrop: ['b.js'] }],
+
+  ['carte inverse : worker module w.js qui importe ./a.js sous la clé absolue /a.js → /b.js de la page (Chromium charge a.js)', () => ({
+    'index.html': page(`${CARTE({ '/a.js': '/b.js' })}<script type=module>new Worker('w.js', { type: 'module' });</script>`),
+    'w.js': "import './a.js';\n", 'a.js': '\n', 'b.js': '\n',
+  }), { enTrop: ['b.js'] }],
 
   ['code rangé dans dist/, build/, vendor/, node_modules/', () => ({
     'index.html': page(`<script src="dist/app.js"></script><script src="vendor/lib.js"></script>${MODULE('build/x.js')}<script src="node_modules/p/index.js"></script>`),

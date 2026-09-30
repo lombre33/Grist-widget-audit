@@ -54,7 +54,7 @@ test('un code que la page exécute et que l\'analyse ne lit pas (TypeScript) est
   assert.match(c.remediation, /JavaScript valide/);
   assert.ok(c.impact);
   assert.deepEqual(c.axesEmpeches, TOUS);
-  assert.deepEqual(c.preuve, { cause: 'syntaxe', message: 'Unexpected token', ligne: 2, colonne: 6, inline: false });
+  assert.deepEqual(c.preuve, { cause: 'syntaxe', message: 'Unexpected token', etape: 'lecture', ligne: 2, colonne: 6, inline: false });
   const n = noterStatique(a.constats);
   assert.deepEqual(n.axesEmpeches, TOUS);
   assert.equal(n.verdict, 'NON CONFORME');
@@ -83,7 +83,7 @@ test('un script de la page que l\'analyse ne lit pas est dit sur la page, à la 
   assert.equal(c.ligne, 4);
   assert.equal(c.titre, 'Script de la page que l\'outil ne sait pas lire');
   assert.match(c.constat, /\(ligne 4, colonne 6\)/);
-  assert.deepEqual(c.preuve, { cause: 'syntaxe', message: 'Unexpected token', ligne: 4, colonne: 6, inline: true });
+  assert.deepEqual(c.preuve, { cause: 'syntaxe', message: 'Unexpected token', etape: 'lecture', ligne: 4, colonne: 6, inline: true });
   assert.deepEqual(c.axesEmpeches, TOUS);
   const enLigne = page('<script>let y: string;</script>');
   const c1 = ILLISIBLE(await auditer({ 'index.html': enLigne }))[0];
@@ -119,7 +119,9 @@ test('un code que la lecture lit et dont le parcours des règles déborde la pil
   assert.equal(c.fichier, 'piege.js');
   assert.equal(etat(c), 'critique bloquant');
   assert.equal(c.preuve.cause, 'profondeur');
-  assert.match(c.constat, /sa pile déborde\. S'il s'exécute dans le navigateur, aucune règle ne l'a lu\./, 'un parcours qui déborde ne dit pas de ligne : le code se lit, c\'est le parcours qui échoue');
+  assert.equal(c.preuve.etape, 'parcours');
+  assert.match(c.constat, /la pile déborde quand une règle le parcourt\. S'il s'exécute dans le navigateur, ce que les règles en disent est incomplet\./, 'un parcours qui déborde ne dit pas de ligne : le code se lit, c\'est le parcours qui échoue');
+  assert.doesNotMatch(c.constat, /aucune règle ne l'a lu/, 'le code se lit : une règle qui ne le parcourt pas n\'y perd rien, le texte ne dit pas qu\'aucune ne l\'a lu');
   assert.deepEqual(c.axesEmpeches, TOUS);
   assert.ok(a.de('C-EXFIL-01', 'mal.js').length > 0, 'le fichier d\'à côté est audité comme s\'il était seul');
   const n = noterStatique(a.constats);
