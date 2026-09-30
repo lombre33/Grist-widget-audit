@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { chargementsDeFichier, analyserRessourcesExternes, extraitAutour, numeroLigne } from '../src/regles/c-securite.js';
+import { chargementsDeFichier, analyserRessourcesExternes, extraitAutour } from '../src/regles/c-securite.js';
 import { lirePage, usageLien, candidatsSrcset } from '../src/moteur/page-html.js';
 import { decoderUrlData, lireCss, lireFeuille, lirePrechargement, LIMITES_CSS } from '../src/moteur/css.js';
 
@@ -719,19 +719,6 @@ test('extraitAutour : borné à 60 caractères avant et 236 après, sans sortir 
   assert.equal(extraitAutour(`X${'z'.repeat(300)}`, 0), `X${'z'.repeat(235)}…`, 'au début du fichier : pas de … devant');
   assert.equal(extraitAutour(`${'z'.repeat(100)}\nabX`, 103), 'abX', 'la ligne commence à moins de 60 caractères de la référence, loin du début du fichier : pas de … devant');
   assert.equal(extraitAutour(`${'z'.repeat(300)}X`, 300), `…${'z'.repeat(60)}X`, 'à la fin du fichier : pas de … derrière');
-});
-
-test('numeroLigne : le numéro (à partir de 1) de la ligne qui porte le caractère, identique à la coupe naïve sur toutes les entrées', () => {
-  const c = 'a\nbb\n\nccc';
-  assert.deepEqual([0, 1, 2, 4, 5, 6, 8].map((i) => numeroLigne(c, i)), [1, 1, 2, 2, 3, 4, 4]);
-  assert.equal(numeroLigne('', 0), 1);
-  assert.equal(numeroLigne('a\r\nb', 3), 2);
-  let graine = 7;
-  const hasard = () => { graine = (graine * 1103515245 + 12345) & 0x7fffffff; return graine; };
-  for (let essai = 0; essai < 300; essai++) {
-    const texte = Array.from({ length: hasard() % 12 }, () => 'a\n\r'[hasard() % 3]).join('');
-    for (let i = 0; i <= texte.length; i++) assert.equal(numeroLigne(texte, i), texte.slice(0, i).split('\n').length, `${JSON.stringify(texte)} en ${i}`);
-  }
 });
 
 test('40 000 références externes sur une ligne (.css, <style>, attributs style) : des constats en moins de 4 s, sans quadratique ni mémoire qui enfle', () => {

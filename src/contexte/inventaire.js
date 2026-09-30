@@ -18,6 +18,7 @@ import * as walk from 'acorn-walk';
 import { lirePage, urlDe, urlDeCarte, cheminLocal, mentionDe } from '../moteur/page-html.js';
 import { parser, chaineLitterale, nomPointe, extraireImportMaps } from '../moteur/analyse-js.js';
 import { lireFeuille, nouveauBudgetCss } from '../moteur/css.js';
+import { numeroLigne } from '../moteur/lignes.js';
 
 /**
  * Dossiers que l'inventaire ne parcourt pas : du code généré ou tiers, ou de
@@ -795,5 +796,5 @@ function lireJson(abs) {
 
 /** Numéro de ligne (1-based) d'un décalage caractère. */
 export function ligneDe(contenu, index) {
-  return contenu.slice(0, index).split('\n').length;
+  return numeroLigne(contenu, index);
 }

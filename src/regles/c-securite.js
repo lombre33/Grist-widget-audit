@@ -21,6 +21,7 @@ import { importsDistants, raisonsEntreeNonProtegee } from '../contexte/imports-d
 import { lirePage, integriteProtege, urlDe, urlDeCarte, mentionDe } from '../moteur/page-html.js';
 import { nomFinal, plierLitteraux, decoderAtobLitteral, decoderFromCharCodeLitteral, coercerLitteralNonChaine, prefixeConcatenationLitteral, classifierSourceWorker, extraireCodeLitteralWorker } from '../moteur/litteraux.js';
 import { lireFeuille, nouveauBudgetCss, LIMITES_CSS } from '../moteur/css.js';
+import { numeroLigne } from '../moteur/lignes.js';
 
 /** Hôtes considérés comme faisant partie de l'infrastructure Grist elle-même. */
 const HOTES_GRIST = [/(^|\.)getgrist\.com$/i, /(^|\.)grist\.numerique\.gouv\.fr$/i, /(^|\.)gristlabs\.com$/i];
@@ -2466,29 +2467,6 @@ export function analyserImportDynamique(ctx) {
 // ---------------------------------------------------------------------------
 // Utilitaires locaux
 // ---------------------------------------------------------------------------
-
-// Les sauts de ligne d'un contenu, calculés une fois : `contenu.slice(0, index).split('\n')` recopiait tout le début du fichier à chaque constat (40 000 références dans un `.css` de 2 Mio : 26 s).
-const SAUTS_DE_LIGNE = new Map();
-const TAILLE_SAUTS = 8;
-
-/** Le numéro (à partir de 1) de la ligne qui porte le caractère `index` de `contenu`. */
-export function numeroLigne(contenu, index) {
-  let sauts = SAUTS_DE_LIGNE.get(contenu);
-  if (!sauts) {
-    sauts = [];
-    for (let i = contenu.indexOf('\n'); i !== -1; i = contenu.indexOf('\n', i + 1)) sauts.push(i);
-    if (SAUTS_DE_LIGNE.size >= TAILLE_SAUTS) SAUTS_DE_LIGNE.clear();
-    SAUTS_DE_LIGNE.set(contenu, sauts);
-  }
-  let a = 0;
-  let b = sauts.length;
-  while (a < b) {
-    const milieu = (a + b) >> 1;
-    if (sauts[milieu] < index) a = milieu + 1;
-    else b = milieu;
-  }
-  return a + 1;
-}
 
 /**
  * Le fragment de `contenu` autour de `decalage` (60 caractères avant, 236 après, sans sortir de la ligne, un `…` là où

@@ -250,6 +250,13 @@ const CAS = [
     for (let i = 0; i < 300; i++) fichiers[`p${i}/index.html`] = `${TETE}<script type="importmap">${JSON.stringify({ integrity })}</script><script type="module" src="/app.js"></script>`;
     return fichiers;
   }],
+  // --- analyse complète : une ligne à établir pour chaque occurrence d'un motif dans un même fichier (le numéro de ligne se lit dans un index des sauts de ligne, pas en recopiant le début du fichier à chaque occurrence)
+  ['analyse : 300 000 marqueurs TODO dans un .js, un par ligne', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(300000, () => '// TODO: x\n') })],
+  ['analyse : 300 000 marqueurs TODO dans un .js, sur une ligne', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': `/* ${N(300000, () => 'TODO: ')} */` })],
+  ['analyse : 100 000 références à un hôte tiers non souverain, une par ligne', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(100000, () => '// https://fonts.googleapis.com/a\n') })],
+  ['analyse : 100 000 références à un hôte tiers non souverain, sur une ligne', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': `/* ${N(100000, () => 'https://fonts.googleapis.com/a ')} */` })],
+  // Une référence cachée par un encodage : le littéral décodé est un fichier de plus, dont la référence ne compte que si son fichier d'origine ne la porte pas déjà en clair (ici : jamais). Le fichier d'origine se cherche dans une table, et son contenu ne se parcourt qu'une fois par hôte ; un `find` sur tout l'inventaire et un `includes` sur tout le fichier à chaque référence, eux, sont quadratiques.
+  ['analyse : 40 000 eval(atob(…)) qui cachent chacun une référence à un hôte tiers non souverain', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(40000, (i) => `eval(atob("${Buffer.from(`fetch('https://fonts.googleapis.com/a${i}')`).toString('base64')}"));\n`) })],
 ];
 
 const { values, positionals } = parseArgs({

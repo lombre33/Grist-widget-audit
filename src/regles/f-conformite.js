@@ -13,6 +13,7 @@ import { TokenizerMode, foreignContent } from 'parse5';
 import { constat } from '../moteur/modele.js';
 import { Decoupeur } from '../moteur/decoupeur-html.js';
 import { lirePage } from '../moteur/page-html.js';
+import { numeroLigne } from '../moteur/lignes.js';
 
 /**
  * Domaines dont l'appel depuis le navigateur d'un agent pose une question
@@ -38,6 +39,18 @@ const NON_SOUVERAINS = [
 export function analyserSouverainete(ctx) {
   const constats = [];
   const trouves = new Map();
+  // Le fichier d'origine d'un littéral passé à `eval` : cherché dans une table faite une fois, non par un `find` sur tout l'inventaire à chaque référence.
+  let fichiersParChemin = null;
+  const origineDe = (f) => (fichiersParChemin ??= new Map(ctx.fichiers.map((of) => [of.chemin, of]))).get(f.origineReelle.chemin);
+  // Et son contenu n'est parcouru qu'une fois par hôte : une même référence répétée mille fois ne relit pas mille fois un fichier de plusieurs Mio.
+  const hotesEnClair = new Map();                                // fichier d'origine → hôte → vrai s'il figure en clair dans son contenu
+  const enClairDansLOrigine = (origine, h) => {
+    if (!origine?.contenu) return false;
+    let deja = hotesEnClair.get(origine);
+    if (!deja) hotesEnClair.set(origine, deja = new Map());
+    if (!deja.has(h)) deja.set(h, origine.contenu.includes(h));
+    return deja.get(h);
+  };
 
   for (const f of ctx.fichiers) {
     if (!f.executee || f.binaire || !f.contenu) continue;
@@ -56,12 +69,11 @@ export function analyserSouverainete(ctx) {
         // part ailleurs en clair et reste une référence à part entière, révélée
         // par le seul décodage.
         if (f.litteralImbrique && f.origineReelle) {
-          const origine = ctx.fichiers.find((of) => of.chemin === f.origineReelle.chemin);
-          if (origine?.contenu?.includes(h)) continue;
+          if (enClairDansLOrigine(origineDe(f), h)) continue;
         }
         const cle = `${nom}`;
         if (!trouves.has(cle)) trouves.set(cle, { nom, motif, emplacements: [] });
-        trouves.get(cle).emplacements.push({ fichier: f.chemin, ligne: f.contenu.slice(0, m.index).split('\n').length, hote: h });
+        trouves.get(cle).emplacements.push({ fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), hote: h });
       }
     }
   }

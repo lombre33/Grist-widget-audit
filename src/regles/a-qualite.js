@@ -10,6 +10,7 @@
 import path from 'node:path';
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs, nomPointe, aCommentaireDansPortee } from '../moteur/analyse-js.js';
+import { numeroLigne } from '../moteur/lignes.js';
 
 const SEUILS = {
   fichierLong: 600,        // lignes significatives
@@ -193,7 +194,7 @@ export function analyserTracesDev(ctx) {
   for (const f of ctx.fichiers) {
     if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu) continue;
     for (const m of f.contenu.matchAll(/\b(TODO|FIXME|XXX|HACK|À FAIRE|BUG)\b[ :]/g)) {
-      marqueurs.push({ fichier: f.chemin, ligne: f.contenu.slice(0, m.index).split('\n').length, type: m[1] });
+      marqueurs.push({ fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), type: m[1] });
     }
   }
 
