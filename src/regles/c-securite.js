@@ -22,6 +22,7 @@ import { lirePage, integriteProtege, urlDe, urlDeCarte, mentionDe } from '../mot
 import { nomFinal, plierLitteraux, decoderAtobLitteral, decoderFromCharCodeLitteral, coercerLitteralNonChaine, prefixeConcatenationLitteral, classifierSourceWorker, extraireCodeLitteralWorker } from '../moteur/litteraux.js';
 import { lireFeuille, nouveauBudgetCss, LIMITES_CSS } from '../moteur/css.js';
 import { numeroLigne } from '../moteur/lignes.js';
+import { analyserSecrets } from './c-secrets.js';
 
 /** Hôtes considérés comme faisant partie de l'infrastructure Grist elle-même. */
 const HOTES_GRIST = [/(^|\.)getgrist\.com$/i, /(^|\.)grist\.numerique\.gouv\.fr$/i, /(^|\.)gristlabs\.com$/i];
@@ -1990,58 +1991,6 @@ export function analyserStockage(ctx) {
   return constats;
 }
 
-/** Secrets en dur. Les motifs sont volontairement spécifiques pour éviter le bruit. */
-const MOTIFS_SECRETS = [
-  [/\bAKIA[0-9A-Z]{16}\b/g, 'clé d\'accès AWS'],
-  [/\bghp_[A-Za-z0-9]{36}\b/g, 'jeton personnel GitHub'],
-  [/\bgithub_pat_[A-Za-z0-9_]{50,}\b/g, 'jeton personnel GitHub (format récent)'],
-  [/\bsk-[A-Za-z0-9]{32,}\b/g, 'clé d\'API de type OpenAI'],
-  [/\bxox[baprs]-[A-Za-z0-9-]{10,}\b/g, 'jeton Slack'],
-  [/-----BEGIN (RSA |EC |OPENSSH |PGP )?PRIVATE KEY-----/g, 'clé privée'],
-  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b/g, 'jeton JWT'],
-  [/\bAIza[0-9A-Za-z_-]{35}\b/g, 'clé d\'API Google'],
-  [/(?:api[_-]?key|apikey|secret|token|password|passwd|motdepasse)\s*[:=]\s*["'`]([^"'`\s]{12,})["'`]/gi, 'identifiant en dur'],
-];
-
-const LEURRES = /^(x{4,}|\.{3,}|<[^>]+>|\$\{|process\.env|votre|your|example|placeholder|changeme|todo|null|undefined|test|demo|lorem)/i;
-
-export function analyserSecrets(ctx) {
-  const constats = [];
-  for (const f of ctx.fichiers) {
-    if (f.binaire || !f.contenu) continue;
-    if (/(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/.test(f.chemin)) continue;
-
-    for (const [re, libelle] of MOTIFS_SECRETS) {
-      for (const m of f.contenu.matchAll(re)) {
-        const valeur = m[1] ?? m[0];
-        if (LEURRES.test(valeur)) continue;
-        if (/^[a-z]+(\.[a-z]+)+$/i.test(valeur)) continue;   // ressemble à un chemin, pas à un secret
-        // Un fichier synthétique (`litteralImbrique`) qui reproduit
-        // TEXTUELLEMENT un secret déjà visible dans son fichier d'origine (un
-        // littéral direct, non obfusqué) ne doit pas le compter une deuxième
-        // fois : préexistant à ce commit, mais corrigé au passage par le même
-        // mécanisme que F-SOUV-01 (voir plus bas), déjà en place pour cette
-        // matérialisation.
-        if (f.litteralImbrique && f.origineReelle) {
-          const origine = ctx.fichiers.find((of) => of.chemin === f.origineReelle.chemin);
-          if (origine?.contenu?.includes(m[0])) continue;
-        }
-        constats.push(constat({
-          regle: 'C-SECRET-01', axe: 'C', severite: 'critique', bloquant: true, confiance: 'probable',
-          titre: `Secret potentiel versionné dans le dépôt (${libelle})`,
-          fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index),
-          extrait: masquer(m[0]),
-          constat: `Une valeur correspondant au format d'un ${libelle} est présente dans un fichier versionné.`,
-          impact: "Un secret dans un dépôt public est compromis dès sa publication, et le reste après suppression du fichier : il demeure dans l'historique Git. Pour un widget, un secret est en outre livré au navigateur de chaque agent.",
-          remediation: "Révoquer immédiatement le secret côté fournisseur, puis le retirer de l'historique. Un widget est du code exécuté côté client : il ne peut pas détenir de secret. Toute opération nécessitant un secret doit passer par un service tiers, hors du widget.",
-          referentiels: ['ANSSI — Guide d\'hygiène informatique', 'CWE-798', 'OWASP Top 10 A07:2021'],
-        }));
-      }
-    }
-  }
-  return constats;
-}
-
 /** Aléa non cryptographique utilisé pour ce qui ressemble à un identifiant de sécurité. */
 export function analyserAlea(ctx) {
   const constats = [];
@@ -2494,11 +2443,6 @@ function extraireSource(source, noeud) {
   if (!noeud || noeud.start == null) return '';
   return source.slice(noeud.start, Math.min(noeud.end, noeud.start + 600));
 }
-function masquer(s) {
-  const t = String(s);
-  return t.length <= 12 ? '***' : `${t.slice(0, 6)}…${t.slice(-4)} (${t.length} caractères)`;
-}
-
 export const reglesC = [
   // En tête : matérialise tout code littéral fourni en chaîne (eval,
   // Function, setTimeout/setInterval, Worker) comme des fichiers de plus de

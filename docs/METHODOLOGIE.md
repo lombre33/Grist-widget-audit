@@ -76,6 +76,60 @@ d'intégrité, injection DOM (`innerHTML`, `eval`, `document.write`),
 elle est signalée en confiance `à vérifier`, non bloquante, et c'est l'axe D
 qui tranche en observant ce qui part réellement.
 
+### Secrets versionnés (C-SECRET-01)
+
+Un secret poussé dans un dépôt public est perdu à l'instant où il l'est : le
+retirer d'un fichier ne l'efface pas de l'historique, il faut le révoquer. La
+règle cherche deux choses, et ne les mélange pas.
+
+- **Le format d'un fournisseur** (clé d'accès AWS, jetons GitHub, clés de type
+  OpenAI, jetons Slack, clé privée PEM avec son corps, JWT) est reconnu dans
+  tout texte du dépôt, README et carte de sources compris, et dans un fichier
+  que l'outil ne sait pas lire : seul un fichier de verrous de paquets, dont
+  les empreintes ressemblent à des clés, n'est pas lu. C'est un critique
+  bloquant, même sous un nom sans rapport. Un format que son fournisseur
+  publie pour être public (clé Google, clé publique Stripe, jeton public
+  Mapbox) est une information : il n'y a rien à révoquer. Les clés d'exemple de
+  la documentation d'AWS ne disent rien.
+- **Un « nom = valeur »** : un littéral affecté à un nom dont le **dernier mot**
+  est un secret (`apiKey`, `DB_PASSWORD`, `authToken`, `mot_de_passe`), car
+  `tokenUrl` ou `passwordLabel` disent ce que la valeur décrit, non ce
+  qu'elle est. En JavaScript, par l'arbre (déclaration, affectation, propriété
+  d'objet, champ de classe) ; dans un fichier de configuration (`.env`, JSON,
+  YAML, INI, properties, TOML, `.npmrc`), ligne à ligne. La valeur se juge
+  dans cet ordre : d'allure générée (du hasard plutôt que des mots : assez de
+  caractères, trois classes ou une entropie haute ; un hexadécimal long, un
+  UUID) c'est un critique bloquant ; une valeur de remplacement (`xxxx`,
+  `changeme`, `${VAR}`, `process.env…`, `example`), une phrase ou une adresse ne
+  dit rien ; le reste, assez long pour être autre chose qu'un mot, est « à
+  vérifier » : majeur, non bloquant, car ce peut être un exemple.
+
+Le constat ne reproduit jamais la valeur (quatre caractères de chaque côté au
+plus, moins pour une valeur courte), et redit au plus une fois ce qu'un littéral
+exécuté (`eval`, `Function`) reprend d'un fichier déjà lu.
+
+**Limites assumées** : la règle dit ce qu'elle voit, elle ne prouve pas qu'un
+secret est valide ; un mot de passe choisi par une personne (`Soleil2024!`, sans
+allure de hasard) n'est dit que « à vérifier », sous un nom qui évoque un
+secret, et il n'est pas dit du tout sous huit caractères ; un fichier
+TypeScript ou un code illisible n'est lu que par les formats de fournisseur
+(et, quand une page l'exécute, dit illisible par C-SURFACE-03) ; un format de
+fournisseur absent de la liste (clés Stripe secrètes, Anthropic, jetons Slack
+d'application…) n'est reconnu que s'il est affecté, dans un fichier JavaScript
+ou de configuration, à un nom qui évoque un secret.
+
+**Le coût est borné par construction**, parce qu'en V2 un algorithme quadratique
+est un déni de service : le nom se juge sur ses derniers caractères et la valeur
+sur ses premiers (`LONGUEUR_DE_NOM`, `APERCU`), chaque occurrence d'un mot de
+secret est prise pour centre d'un travail borné (pas d'expression régulière à nom
+libre, qui relirait la suite entière à chaque départ), et chaque suite gloutonne
+d'un format a une borne haute : sans elle, l'analyseur d'expressions régulières de
+V8 déborde de sa pile de retour arrière sur une suite de quelques millions de
+caractères (une image en base64, une carte de sources), et la règle échoue avec
+tous les secrets du reste du dépôt. `scripts/mutants-c-secret.mjs` rejoue un défaut
+plausible par choix de la règle, et les essais sont faits pour que chacun en tue
+un.
+
 ## Axe D — Sécurité en condition réelle
 
 ### Ce qui est exécuté, et ce qui ne l'est pas
