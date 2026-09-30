@@ -164,6 +164,15 @@ export function analyserGestionErreurs(ctx) {
   return constats;
 }
 
+/**
+ * Un marqueur de travail inachevé : le mot entier, suivi d'une espace ou de deux-points.
+ * `\b` ne borne que des caractères de mot ASCII, et « À » n'en est pas un : devant « À FAIRE »,
+ * il ne trouvait de frontière que si le caractère d'avant était une lettre ou un chiffre, donc
+ * le marqueur ne correspondait qu'accolé à un mot (« xÀ FAIRE ») et jamais isolé. Le marqueur
+ * accentué a sa propre borne (ni lettre, ni chiffre, ni soulignement avant lui), et son propre groupe.
+ */
+const MARQUEUR_INACHEVE = /(?:\b(TODO|FIXME|XXX|HACK|BUG)|(?<![\p{L}\p{N}_])(À FAIRE))\b[ :]/gu;
+
 /** Traces de développement laissées dans le code livré. */
 export function analyserTracesDev(ctx) {
   const constats = [];
@@ -193,8 +202,8 @@ export function analyserTracesDev(ctx) {
 
   for (const f of ctx.fichiers) {
     if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu) continue;
-    for (const m of f.contenu.matchAll(/\b(TODO|FIXME|XXX|HACK|À FAIRE|BUG)\b[ :]/g)) {
-      marqueurs.push({ fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), type: m[1] });
+    for (const m of f.contenu.matchAll(MARQUEUR_INACHEVE)) {
+      marqueurs.push({ fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), type: m[1] ?? m[2] });
     }
   }
 

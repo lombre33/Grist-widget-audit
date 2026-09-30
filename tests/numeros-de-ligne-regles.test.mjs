@@ -2,6 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { analyserTracesDev } from '../src/regles/a-qualite.js';
 import { analyserSouverainete } from '../src/regles/f-conformite.js';
+import { MAX_EMPLACEMENTS } from '../src/moteur/modele.js';
 
 /**
  * A-DEV-03 (marqueurs de travail inachevé) et F-SOUV-01 (services tiers non souverains) donnent la ligne
@@ -63,8 +64,10 @@ test('A-DEV-03 : la ligne d\'un marqueur ne recopie pas le début du fichier à 
   let constats;
   const coupes = caracteresCoupesParLignes(() => { constats = analyserTracesDev({ fichiers: [fichier('app.js', contenu)] }); });
   const c = constats.find((x) => x.regle === 'A-DEV-03');
-  assert.equal(c.preuve.emplacements.length, N);
-  assert.deepEqual([c.preuve.emplacements[0].ligne, c.preuve.emplacements[N - 1].ligne], [1, N]);
+  // la liste rendue est bornée (`MAX_EMPLACEMENTS`), le travail, lui, porte sur les N marqueurs : la ligne est calculée avant la borne
+  assert.equal(c.preuve.emplacements.length, MAX_EMPLACEMENTS);
+  assert.equal(c.preuve.emplacementsOmis, N - MAX_EMPLACEMENTS);
+  assert.deepEqual([c.preuve.emplacements[0].ligne, c.preuve.emplacements[MAX_EMPLACEMENTS - 1].ligne], [1, MAX_EMPLACEMENTS]);
   assert.ok(coupes <= 2 * contenu.length, `${coupes} caractères passés à split('\\n') pour un fichier de ${contenu.length} : le début du fichier est recopié à chaque marqueur`);
 });
 
@@ -89,8 +92,9 @@ test('F-SOUV-01 : la ligne d\'une référence ne recopie pas le début du fichie
   let constats;
   const coupes = caracteresCoupesParLignes(() => { constats = analyserSouverainete({ fichiers: [fichier('app.js', contenu)] }); });
   const c = constats.find((x) => x.regle === 'F-SOUV-01');
-  assert.equal(c.preuve.emplacements.length, N);
-  assert.deepEqual([c.preuve.emplacements[0].ligne, c.preuve.emplacements[N - 1].ligne], [1, N]);
+  assert.equal(c.preuve.emplacements.length, MAX_EMPLACEMENTS);
+  assert.equal(c.preuve.emplacementsOmis, N - MAX_EMPLACEMENTS);
+  assert.deepEqual([c.preuve.emplacements[0].ligne, c.preuve.emplacements[MAX_EMPLACEMENTS - 1].ligne], [1, MAX_EMPLACEMENTS]);
   assert.ok(coupes <= 2 * contenu.length, `${coupes} caractères passés à split('\\n') pour un fichier de ${contenu.length} : le début du fichier est recopié à chaque référence`);
 });
 

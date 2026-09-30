@@ -14,6 +14,7 @@
 import path from 'node:path';
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs } from '../moteur/analyse-js.js';
+import { numeroLigne } from '../moteur/lignes.js';
 
 const REF_GUIDE_LISIBILITE = 'Guide de contribution Grist.Gouv — « The code is readable by a human developer without needing an AI tool to understand it »';
 
@@ -74,7 +75,10 @@ export function analyserReadme(ctx) {
 
   const texte = readme.contenu.toLowerCase();
   const attendus = [
-    { cle: 'role', libelle: 'ce que fait le widget', motifs: /(#|\n)\s*(à quoi|a quoi|description|présentation|presentation|what|objectif|fonctionnalit|usage|utilisation)/i },
+    // `[^\S\n]*` et non `\s*` : un début de ligne suivi d'un mot de rubrique, sans que le blanc franchisse la
+    // fin de ligne. Le résultat est le même (la dernière fin de ligne d'une suite de blancs est un départ qui
+    // convient), mais `\s*` relisait toute la suite de lignes vides depuis chacune : quadratique.
+    { cle: 'role', libelle: 'ce que fait le widget', motifs: /(#|\n)[^\S\n]*(à quoi|a quoi|description|présentation|presentation|what|objectif|fonctionnalit|usage|utilisation)/i },
     { cle: 'config', libelle: 'comment le configurer', motifs: /(configur|installation|install|paramétr|parametr|mise en place|setup|requiredaccess|niveau d'accès|colonnes)/i },
     { cle: 'deps', libelle: 'ses dépendances', motifs: /(dépendance|dependance|dependenc|prérequis|prerequis|requirements|librairie|bibliothèque|aucune dépendance)/i },
   ];
@@ -153,6 +157,58 @@ export function analyserCommentaires(ctx) {
 }
 
 /**
+ * Un blanc qui ne franchit pas une fin de ligne : `\s` moins \n, \r, U+2028 et U+2029
+ * (donc l'espace insécable et la marque d'ordre des octets, que `[ \t]` ne couvre pas).
+ * `\s*` traversait les fins de ligne : `^\s*` courait d'une ligne vide à la suivante
+ * (temps quadratique sur un fichier de lignes vides) et un `//` de fin de ligne se
+ * rattachait au texte de la ligne d'après (un constat qu'aucune ligne ne contient).
+ */
+const BLANC = '[^\\S\\r\\n\\u2028\\u2029]';
+
+/** Le nombre d'occurrences d'un motif dans un contenu et l'indice de la première (`-1` s'il n'y en a pas). */
+const compter = (re) => (contenu) => {
+  let n = 0;
+  let premier = -1;
+  for (const m of contenu.matchAll(re)) if (n++ === 0) premier = m.index;
+  return { n, premier };
+};
+
+/** Écart maximal, en caractères, entre l'ouverture `/**` et `@param`, et longueur maximale du type entre accolades, d'un JSDoc générique. */
+const PORTEE_JSDOC = 200;
+const PARAM_GENERIQUE = new RegExp(`@param\\s+\\{[^}]{0,${PORTEE_JSDOC}}\\}\\s+\\w+\\s+-\\s+The\\s`, 'gi');
+
+/**
+ * Les JSDoc génériques en anglais : un `@param {type} nom - The …` dans les 200
+ * caractères qui suivent l'ouverture `/**` d'un commentaire, un seul par commentaire
+ * (le texte d'une occurrence est consommé : le `@param` suivant du même commentaire ne
+ * compte pas). On cherche le `@param` d'abord, puis l'ouverture dans la fenêtre qui le
+ * précède : partir de chaque `/**` et laisser un quantificateur paresseux chercher plus
+ * loin relisait la même fenêtre pour chacune (quadratique sur `/** @param {` répété).
+ */
+function jsdocGeneriques(contenu) {
+  let n = 0;
+  let premier = -1;
+  let fin = 0;
+  for (const m of contenu.matchAll(PARAM_GENERIQUE)) {
+    const debutFenetre = Math.max(fin, m.index - PORTEE_JSDOC - 3);
+    const ouverture = contenu.slice(debutFenetre, m.index).indexOf('/**');
+    if (ouverture === -1) continue;
+    if (n++ === 0) premier = debutFenetre + ouverture;
+    fin = m.index + m[0].length;
+  }
+  return { n, premier };
+}
+
+const MOTIFS_GENERATION = [
+  [compter(new RegExp(`^${BLANC}*//${BLANC}*(Step|Étape|Etape)${BLANC}*\\d+${BLANC}*[:\\-]`, 'gim')), 'commentaires numérotés « Étape N »'],
+  [compter(/\b(As an AI|I'm an AI|En tant qu'(IA|assistant)|Voici le code|Here's the (code|implementation)|Note: This (code|implementation))\b/gi), "formules d'assistant conversationnel"],
+  [compter(new RegExp(`^${BLANC}*\`\`\``, 'gm')), 'délimiteurs de bloc de code Markdown laissés dans un fichier source'],
+  [compter(new RegExp(`//${BLANC}*(Ajout|Added|Modification|Changed|Suppression|Removed) (de|du|of|the) `, 'gi')), 'commentaires de journal de modification dans le code'],
+  [jsdocGeneriques, 'JSDoc générique en anglais dans un code par ailleurs francophone'],
+  [compter(new RegExp(`//${BLANC}*(Vérifier si|Check if|Boucle sur|Loop through|Retourne|Returns) (le|la|les|the)?${BLANC}*\\w+${BLANC}*$`, 'gim')), 'commentaires paraphrasant la ligne suivante'],
+];
+
+/**
  * Marqueurs de production générée sans relecture.
  *
  * Aucun de ces signaux ne prouve quoi que ce soit isolément — un développeur
@@ -165,26 +221,12 @@ export function analyserSignauxGeneration(ctx) {
   const constats = [];
   const signaux = [];
 
-  const motifs = [
-    [/^\s*\/\/\s*(Step|Étape|Etape)\s*\d+\s*[:\-]/gim, 'commentaires numérotés « Étape N »'],
-    [/\b(As an AI|I'm an AI|En tant qu'(IA|assistant)|Voici le code|Here's the (code|implementation)|Note: This (code|implementation))\b/gi, "formules d'assistant conversationnel"],
-    [/^\s*```/gm, 'délimiteurs de bloc de code Markdown laissés dans un fichier source'],
-    [/\/\/\s*(Ajout|Added|Modification|Changed|Suppression|Removed) (de|du|of|the) /gi, 'commentaires de journal de modification dans le code'],
-    [/\/\*\*[\s\S]{0,200}?@param\s+\{[^}]*\}\s+\w+\s+-\s+The\s/gi, 'JSDoc générique en anglais dans un code par ailleurs francophone'],
-    [/\/\/\s*(Vérifier si|Check if|Boucle sur|Loop through|Retourne|Returns) (le|la|les|the)?\s*\w+\s*$/gim, 'commentaires paraphrasant la ligne suivante'],
-  ];
-
   for (const f of ctx.fichiers) {
     if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || !['.js', '.mjs', '.html'].includes(f.ext)) continue;
     if (f.chemin.endsWith('.md')) continue;
-    for (const [re, libelle] of motifs) {
-      const occurrences = [...f.contenu.matchAll(re)];
-      if (occurrences.length) {
-        signaux.push({
-          fichier: f.chemin, libelle, occurrences: occurrences.length,
-          ligne: f.contenu.slice(0, occurrences[0].index).split('\n').length,
-        });
-      }
+    for (const [trouver, libelle] of MOTIFS_GENERATION) {
+      const { n, premier } = trouver(f.contenu);
+      if (n > 0) signaux.push({ fichier: f.chemin, libelle, occurrences: n, ligne: numeroLigne(f.contenu, premier) });
     }
   }
 

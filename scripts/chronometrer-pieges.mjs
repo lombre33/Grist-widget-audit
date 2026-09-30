@@ -257,6 +257,11 @@ const CAS = [
   ['analyse : 100 000 références à un hôte tiers non souverain, sur une ligne', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': `/* ${N(100000, () => 'https://fonts.googleapis.com/a ')} */` })],
   // Une référence cachée par un encodage : le littéral décodé est un fichier de plus, dont la référence ne compte que si son fichier d'origine ne la porte pas déjà en clair (ici : jamais). Le fichier d'origine se cherche dans une table, et son contenu ne se parcourt qu'une fois par hôte ; un `find` sur tout l'inventaire et un `includes` sur tout le fichier à chaque référence, eux, sont quadratiques.
   ['analyse : 40 000 eval(atob(…)) qui cachent chacun une référence à un hôte tiers non souverain', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(40000, (i) => `eval(atob("${Buffer.from(`fetch('https://fonts.googleapis.com/a${i}')`).toString('base64')}"));\n`) })],
+  // --- des blancs qui franchissaient les fins de ligne : `^\s*` (B-IA-01) courait d'une ligne vide à la suivante, `\s*` du README aussi ; un JSDoc générique cherché depuis chaque `/**` relisait la même fenêtre
+  ['analyse : 200 000 lignes vides dans un .js', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(200000, () => '\n') })],
+  ['analyse : 200 000 lignes vides dans un .js, fins de ligne CRLF', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(200000, () => '\r\n') })],
+  ['analyse : 40 000 `/** @param {` dans un .js', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(40000, () => '/** @param {') })],
+  ['analyse : un README de 200 000 lignes vides', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': '1;', 'README.md': N(200000, () => '\n') })],
 ];
 
 const { values, positionals } = parseArgs({

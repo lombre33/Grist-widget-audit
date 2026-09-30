@@ -54,9 +54,9 @@ const MUTANTS = [
   dansLigne(I, 'return numeroLigne(contenu, index);', 'numeroLigne(contenu, index)', 'contenu.slice(0, index).split(\'\\n\').length', 'ligneDe : le début du contenu recopié à chaque appel (quadratique)'),
 
   // --- A-DEV-03
-  dansLigne(A, 'marqueurs.push({ fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), type: m[1] });', 'numeroLigne(f.contenu, m.index)', 'f.contenu.slice(0, m.index).split(\'\\n\').length', 'A-DEV-03 : le début du fichier recopié à chaque marqueur (quadratique)'),
-  dansLigne(A, 'marqueurs.push({ fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), type: m[1] });', 'numeroLigne(f.contenu, m.index)', '1', 'A-DEV-03 : tous les marqueurs à la ligne 1'),
-  dansLigne(A, 'marqueurs.push({ fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), type: m[1] });', 'numeroLigne(f.contenu, m.index)', 'numeroLigne(f.contenu, m.index) - 1', 'A-DEV-03 : lignes à partir de 0'),
+  dansLigne(A, 'marqueurs.push({ fichier: f.chemin, ligne: numeroLigne(', 'numeroLigne(f.contenu, m.index)', 'f.contenu.slice(0, m.index).split(\'\\n\').length', 'A-DEV-03 : le début du fichier recopié à chaque marqueur (quadratique)'),
+  dansLigne(A, 'marqueurs.push({ fichier: f.chemin, ligne: numeroLigne(', 'numeroLigne(f.contenu, m.index)', '1', 'A-DEV-03 : tous les marqueurs à la ligne 1'),
+  dansLigne(A, 'marqueurs.push({ fichier: f.chemin, ligne: numeroLigne(', 'numeroLigne(f.contenu, m.index)', 'numeroLigne(f.contenu, m.index) - 1', 'A-DEV-03 : lignes à partir de 0'),
 
   // --- F-SOUV-01
   dansLigne(F, 'trouves.get(cle).emplacements.push({ fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), hote: h });', 'numeroLigne(f.contenu, m.index)', 'f.contenu.slice(0, m.index).split(\'\\n\').length', 'F-SOUV-01 : le début du fichier recopié à chaque référence (quadratique)'),

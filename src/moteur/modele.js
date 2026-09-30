@@ -49,6 +49,21 @@ export const CONFIANCES = {
 let compteur = 0;
 
 /**
+ * Le nombre d'emplacements qu'un constat garde dans sa preuve. Un fichier hostile en produit des
+ * centaines de milliers pour une même règle (un marqueur par ligne), et le rapport JSON, seul
+ * format qui porte la liste, ferait plusieurs dizaines de Mio. Au-delà, le constat garde les
+ * premiers et dit combien il en omet (`preuve.emplacementsOmis`) ; son texte, écrit avant la
+ * coupe, porte le total exact. La borne est très au-dessus de ce qu'une cible honnête produit.
+ */
+export const MAX_EMPLACEMENTS = 500;
+
+function preuveBornee(preuve) {
+  const emplacements = preuve?.emplacements;
+  if (!Array.isArray(emplacements) || emplacements.length <= MAX_EMPLACEMENTS) return preuve ?? null;
+  return { ...preuve, emplacements: emplacements.slice(0, MAX_EMPLACEMENTS), emplacementsOmis: emplacements.length - MAX_EMPLACEMENTS };
+}
+
+/**
  * Un `extrait` est replié (blancs) puis coupé à 300 caractères, mais seul son
  * début est lu : replier tout un texte de plusieurs Mio (une ligne CSS
  * minifiée, une balise énorme) pour chacun de milliers de constats coûtait un
@@ -102,7 +117,7 @@ export function constat(c) {
     extrait: c.extrait ? String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT).replace(/\s+/g, ' ').slice(0, 300) : null,
     referentiels: c.referentiels ?? [],
     confiance: c.confiance ?? 'probable',
-    preuve: c.preuve ?? null,
+    preuve: preuveBornee(c.preuve),
     mesurePartielle: Boolean(c.mesurePartielle),
   };
 }
