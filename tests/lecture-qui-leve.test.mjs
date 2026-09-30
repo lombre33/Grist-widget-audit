@@ -110,6 +110,7 @@ test('une lecture qui lève une erreur qui n\'est pas un dépassement de pile n\
   assert.equal(illisibles[0].preuve.message, 'TypeError : Cannot read properties of undefined (reading \'type\')');
   assert.equal(illisibles[0].preuve.etape, 'lecture');
   assert.match(illisibles[0].remediation, /Signaler l'erreur/);
+  assert.match(illisibles[0].constat, /^L'analyse de ce code s'est interrompue sur une erreur \(TypeError : Cannot read properties of undefined \(reading 'type'\)\)\. S'il s'exécute dans le navigateur, aucune règle ne l'a lu\.$/, 'la lecture a échoué : aucune règle n\'a eu d\'arbre, le texte ne dit pas « incomplet »');
   assert.deepEqual(illisibles[0].axesEmpeches, TOUS);
   assert.ok(a.de('C-EXFIL-01', 'autre.js').length > 0, 'le fichier d\'à côté est audité comme s\'il était seul');
 });

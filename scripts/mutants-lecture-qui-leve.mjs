@@ -48,6 +48,7 @@ const MUTANTS = [
   dansLigne(IL, 'axesEmpeches: axesDUnFichierNonLu(n),', 'axesDUnFichierNonLu(n)', '[]', 'lecture qui lève : un code illisible n\'empêche aucun axe'),
   dansLigne(CS, '!n.dossierExclu && !cheminVendorise(n.chemin) ? TOUS_LES_AXES_STATIQUES : AXES_DU_CODE_EXECUTE', 'TOUS_LES_AXES_STATIQUES :', 'AXES_DU_CODE_EXECUTE :', 'lecture qui lève : un code illisible du contributeur n\'empêche pas A'),
   dansLigne(IL, 'preuve: { cause: n.cause, message: n.message, etape: n.etape,', 'cause: n.cause, ', '', 'lecture qui lève : la preuve ne dit pas la cause'),
+  dansLigne(IL, "return `${debut}. S'il s'exécute dans le navigateur, aucune règle ne l'a lu.`;", "aucune règle ne l'a lu", 'ce que les règles en disent est incomplet', 'lecture qui lève : l\'erreur de l\'outil est dite « incomplet », alors qu\'aucune règle n\'a eu d\'arbre'),
   dansLigne(N, 'for (const code of c.axesEmpeches ?? []) {', 'c.axesEmpeches ?? []', '[]', 'lecture qui lève : la notation ne lit pas les axes qu\'un constat empêche'),
   brut(N, '        scoreMesure: parAxe[code].score,\n        score: 0,', '        scoreMesure: parAxe[code].score,\n        score: parAxe[code].score,', 'lecture qui lève : un axe empêché garde sa note'),
 

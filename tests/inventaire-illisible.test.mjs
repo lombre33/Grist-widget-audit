@@ -302,9 +302,12 @@ test('chaque étape dit ce qui a eu lieu, et ne prétend jamais qu\'aucune règl
   assert.doesNotMatch(inventaire.constat, /aucune règle ne l'a lu/);
   assert.match(dire({ cause: 'profondeur' }).constat, /sa pile déborde\. S'il s'exécute dans le navigateur, aucune règle ne l'a lu\./, 'sans étape, c\'est celle de la lecture');
 
-  for (const etape of ['lecture', 'parcours', undefined]) {
-    assert.match(dire({ cause: 'analyse', etape }).constat, /^L'analyse de ce code s'est interrompue sur une erreur \(x\) : ce que les règles en disent est incomplet\.$/, String(etape));
+  for (const etape of ['lecture', undefined]) {
+    assert.match(dire({ cause: 'analyse', etape }).constat, /^L'analyse de ce code s'est interrompue sur une erreur \(x\)\. S'il s'exécute dans le navigateur, aucune règle ne l'a lu\.$/, `${String(etape)} : aucune règle n'a d'arbre, « incomplet » y voudrait dire « rien »`);
   }
+  const analyseParcours = dire({ cause: 'analyse', etape: 'parcours' });
+  assert.match(analyseParcours.constat, /^L'analyse de ce code s'est interrompue sur une erreur \(x\) : ce que les règles en disent est incomplet\.$/);
+  assert.doesNotMatch(analyseParcours.constat, /aucune règle ne l'a lu/, 'une règle qui échoue sur un code que les autres lisent n\'est pas une lecture que personne n\'a faite');
   assert.match(dire({ cause: 'analyse', etape: 'inventaire' }).constat, /^L'inventaire des fichiers que ce code charge s'est interrompu sur une erreur \(x\) : il l'a lu par expressions régulières, et un fichier qu'il charge peut manquer à l'audit\.$/);
 
   for (const etape of ['lecture', 'parcours', 'inventaire']) assert.equal(dire({ cause: 'syntaxe', etape, message: 'Unexpected token' }).preuve.etape, etape, 'la preuve du rapport JSON dit l\'étape');

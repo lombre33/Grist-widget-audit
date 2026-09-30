@@ -38,9 +38,12 @@ const CAUSES_ILLISIBLE = {
     remediation: "Découper l'expression trop imbriquée, ou publier les sources non minifiées, pour que l'analyse les lise.",
   },
   analyse: {
-    constat: (n) => (n.etape === 'inventaire'
-      ? `L'inventaire des fichiers que ce code charge s'est interrompu sur une erreur (${n.message}) : il l'a lu par expressions régulières, et un fichier qu'il charge peut manquer à l'audit.`
-      : `L'analyse de ce code s'est interrompue sur une erreur (${n.message}) : ce que les règles en disent est incomplet.`),
+    constat: (n) => {
+      if (n.etape === 'inventaire') return `L'inventaire des fichiers que ce code charge s'est interrompu sur une erreur (${n.message}) : il l'a lu par expressions régulières, et un fichier qu'il charge peut manquer à l'audit.`;
+      const debut = `L'analyse de ce code s'est interrompue sur une erreur (${n.message})`;
+      if (n.etape === 'parcours') return `${debut} : ce que les règles en disent est incomplet.`;
+      return `${debut}. S'il s'exécute dans le navigateur, aucune règle ne l'a lu.`;
+    },
     remediation: "Signaler l'erreur avec ce rapport ; tant qu'elle n'est pas corrigée, ce code n'est pas audité.",
   },
 };

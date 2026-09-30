@@ -200,8 +200,14 @@ imbrication de code littéral), et aucun ne se passe sous silence :
   reste, une fois par unité, avec l'étape où l'échec a eu lieu (lecture,
   parcours d'une règle, inventaire), et une lecture qui a échoué n'est pas
   refaite par les règles. Le code piégé est dit et les autres fichiers sont
-  audités comme s'il n'était pas là : il ne fait pas tomber l'audit. Ce
-  qu'aucune page n'exécute est une information groupée, qui ne bloque pas.
+  audités comme s'il n'était pas là : il ne fait pas tomber l'audit. Un
+  fichier que le parcours d'une règle n'a pas pu faire et qu'aucune page
+  n'exécute est une information groupée, qui ne bloque pas. Quand c'est la
+  lecture elle-même qui échoue, le texte du constat dit ce qui a eu lieu :
+  « aucune règle ne l'a lu » (aucune n'a eu d'arbre), là où un parcours qui
+  échoue dit que ce que les règles en disent est incomplet (les autres ont
+  lu). **Limite connue** : un fichier que la lecture refuse et qu'aucune page
+  n'exécute (du TypeScript que rien ne charge) n'est pas dit.
 
 Un fichier qu'une balise script, un import ou un worker désigne par son adresse
 est du code pour le navigateur **quelle que soit son extension** :

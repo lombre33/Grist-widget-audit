@@ -26,6 +26,10 @@ const PORTE = 'if (parSonExtension || commeCode === true || lecture.ast) {';
 const CATCH_INVENTAIRE = '      noterParcoursEchoue(f, unite, e);\n      parExpressionsRegulieres();\n';
 const DANS_RELEVER = '    for (const u of unitesJs(f)) {\n      const cle = cleDUnite(u);\n      if (lectures?.has(cle))';
 const CONSTAT_INVENTAIRE = "if (n.etape === 'inventaire') return `${debut}";
+const PARCOURS_PROFONDEUR = "if (n.etape === 'parcours') return `${debut} : la pile";
+const INVENTAIRE_ANALYSE = "if (n.etape === 'inventaire') return `L'inventaire";
+const PARCOURS_ANALYSE = "if (n.etape === 'parcours') return `${debut} : ce que";
+const LECTURE_ANALYSE = "return `${debut}. S'il s'exécute dans le navigateur, aucune règle ne l'a lu.`;";
 
 // [fichier, chaîne d'origine (une seule occurrence), chaîne mutée, libellé]
 const MUTANTS = [
@@ -93,10 +97,16 @@ const MUTANTS = [
   dansLigne(IL, 'releverEchecsDeLInventaire(ctx);', 'releverEchecsDeLInventaire(ctx);', '', 'C-SURFACE-03 : ce que l\'inventaire n\'a pas pu lire ni parcourir n\'est pas dit'),
   dansLigne(IL, CONSTAT_INVENTAIRE, "n.etape === 'inventaire'", 'false', 'C-SURFACE-03 : l\'échec de l\'inventaire est dit un échec de lecture (profondeur)'),
   dansLigne(IL, CONSTAT_INVENTAIRE, "n.etape === 'inventaire'", "n.etape !== 'inventaire'", 'C-SURFACE-03 : toute étape est dite celle de l\'inventaire (profondeur)'),
-  dansLigne(IL, "if (n.etape === 'parcours') return", "n.etape === 'parcours'", 'false', 'C-SURFACE-03 : l\'échec d\'une règle est dit un échec de lecture (profondeur)'),
-  dansLigne(IL, "if (n.etape === 'parcours') return", "n.etape === 'parcours'", "n.etape !== 'parcours'", 'C-SURFACE-03 : toute étape est dite celle d\'une règle (profondeur)'),
-  dansLigne(IL, "constat: (n) => (n.etape === 'inventaire'", "n.etape === 'inventaire'", 'false', 'C-SURFACE-03 : l\'erreur de l\'inventaire est dite celle de l\'analyse'),
-  dansLigne(IL, "constat: (n) => (n.etape === 'inventaire'", "n.etape === 'inventaire'", 'true', 'C-SURFACE-03 : toute erreur de l\'outil est dite celle de l\'inventaire'),
+  dansLigne(IL, PARCOURS_PROFONDEUR, "n.etape === 'parcours'", 'false', 'C-SURFACE-03 : l\'échec d\'une règle est dit un échec de lecture (profondeur)'),
+  dansLigne(IL, PARCOURS_PROFONDEUR, "n.etape === 'parcours'", "n.etape !== 'parcours'", 'C-SURFACE-03 : toute étape est dite celle d\'une règle (profondeur)'),
+  dansLigne(IL, INVENTAIRE_ANALYSE, "n.etape === 'inventaire'", 'false', 'C-SURFACE-03 : l\'erreur de l\'inventaire est dite celle de l\'analyse'),
+  dansLigne(IL, INVENTAIRE_ANALYSE, "n.etape === 'inventaire'", 'true', 'C-SURFACE-03 : toute erreur de l\'outil est dite celle de l\'inventaire'),
+  // L'erreur de l'outil dite selon l'étape : à la lecture aucune règle n'a d'arbre (« incomplet » y voudrait dire « rien »), au parcours les autres règles ont lu
+  dansLigne(IL, PARCOURS_ANALYSE, "n.etape === 'parcours'", 'false', 'C-SURFACE-03 : l\'erreur d\'une règle est dite une lecture que personne n\'a faite (analyse)'),
+  dansLigne(IL, PARCOURS_ANALYSE, "n.etape === 'parcours'", "n.etape !== 'parcours'", 'C-SURFACE-03 : toute erreur de l\'outil est dite celle d\'une règle (analyse)'),
+  dansLigne(IL, PARCOURS_ANALYSE, "n.etape === 'parcours'", "n.etape !== 'lecture'", 'C-SURFACE-03 : une étape absente est dite celle d\'une règle (analyse)'),
+  dansLigne(IL, LECTURE_ANALYSE, "aucune règle ne l'a lu", 'ce que les règles en disent est incomplet', 'C-SURFACE-03 : la lecture qui échoue est dite « incomplet » (analyse)'),
+  dansLigne(IL, LECTURE_ANALYSE, "S'il s'exécute dans le navigateur, ", '', 'C-SURFACE-03 : la lecture qui échoue ne réserve pas « s\'il s\'exécute dans le navigateur » (analyse)'),
   dansLigne(IL, 'preuve: { cause: n.cause, message: n.message, etape: n.etape,', 'etape: n.etape, ', '', 'C-SURFACE-03 : la preuve ne dit pas l\'étape'),
   dansLigne(IL, 'preuve: { emplacements: reste.map((n) => ({ fichier: n.chemin, ligne: n.ligne, cause: n.cause, message: n.message', ', etape: n.etape', '', 'C-SURFACE-03 : la preuve du groupe ne dit pas l\'étape'),
 ];
