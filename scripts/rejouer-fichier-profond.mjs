@@ -12,14 +12,17 @@
  *    dépassement tombe dans la compilation d'une expression régulière, ce qu'aucun `try` n'attrape ; aucun rapport ne sort, et
  *    c'est l'enfant qui isole l'analyse (V2) qui le contient.
  * Une quatrième fin ne doit pas exister : un rapport complet qui conclut sans avoir lu le fichier (`silence`, une lecture qui
- * échoue et que personne ne dit). À un niveau que nulle pile de Node ne lit (`--sans-lecture`, 10 000 par défaut), tout rapport
- * sans C-SURFACE-03 bloquant en est une : le script le dit et sort en code 1, de même qu'une sortie 3 (`plantage` : l'outil a
- * planté, ce qu'un widget ne doit jamais pouvoir provoquer), une sortie que l'outil n'a pas (`autre`) ou un lancement qui n'a pas
- * fini dans le temps donné (`delai`, 180 s : l'audit d'un fichier de 100 Kio ne prend pas trois minutes, une boucle est un déni de
- * service, et n'est pas un abandon de V8).
+ * échoue et que personne ne dit). Ce qui distingue `lu` de `silence`, c'est un TÉMOIN et non la profondeur : le fichier porte, au
+ * cœur de ses N niveaux, un `fetch` inoffensif vers un domaine réservé (`.invalid`, RFC 2606 : il ne résout jamais, et l'audit
+ * ne lance rien), que C-EXFIL-01 dit dès qu'une règle lit jusqu'au cœur. Un rapport qui porte le témoin a lu le fichier ; un
+ * rapport sans témoin qui ne dit pas C-SURFACE-03 bloquant a conclu sans l'avoir lu, à toute profondeur (un seuil de niveaux, qui
+ * ne dit rien de ce que la pile porte ce jour-là, rangeait ces silences en « lu » sous 10 000 niveaux). Le script dit le silence
+ * et sort en code 1, de même qu'une sortie 3 (`plantage` : l'outil a planté, ce qu'un widget ne doit jamais pouvoir provoquer),
+ * une sortie que l'outil n'a pas (`autre`) ou un lancement qui n'a pas fini dans le temps donné (`delai`, 180 s : l'audit d'un
+ * fichier de 100 Kio ne prend pas trois minutes, une boucle est un déni de service, et n'est pas un abandon de V8).
  *
  * Usage : node scripts/rejouer-fichier-profond.mjs [--niveaux=1400,1700,20000] [--essais=10] [--regime=principal|worker] [--pile-mb=3.5]
- *                                                 [--arbre=<dossier>]… [--sans-lecture=10000]
+ *                                                 [--arbre=<dossier>]…
  *   --regime=worker : l'audit tourne dans un Worker (pile de 4 Mio, que `--pile-mb` change), le régime d'un processus enfant qui
  *   isole l'analyse ; `principal` : le fil principal de Node (984 Kio), le régime de la ligne de commande.
  *   --arbre : l'arbre de l'outil à lancer (le dépôt courant par défaut). Répété, les arbres sont lancés en alternance, un
@@ -34,8 +37,17 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const RACINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 
-/** Le fichier : « x=>{ » N fois puis « } » N fois, sur une seule ligne. */
-export const fichierProfond = (niveaux) => 'x=>{'.repeat(niveaux) + '}'.repeat(niveaux);
+/** L'hôte du témoin : un domaine réservé (RFC 2606), qui ne résout jamais. */
+export const TEMOIN = 'temoin-rejeu.invalid';
+const APPEL_TEMOIN = `fetch("https://${TEMOIN}/")`;
+
+/** Le fichier : « x=>{ » N fois, le témoin au cœur, puis « } » N fois, sur une seule ligne. */
+export const fichierProfond = (niveaux) => 'x=>{'.repeat(niveaux) + APPEL_TEMOIN + '}'.repeat(niveaux);
+
+/** Vrai si le rapport (`--json`) porte le témoin : un C-EXFIL-01 qui nomme l'hôte planté au cœur du fichier, donc une règle qui l'a lu jusque-là. */
+export function aVuLeTemoin(rapport) {
+  return Object.values(rapport?.axes ?? {}).some((axe) => (axe.constats ?? []).some((c) => c.regle === 'C-EXFIL-01' && JSON.stringify(c).includes(TEMOIN)));
+}
 
 /** Vrai si le rapport (`--json`) porte un C-SURFACE-03 critique et bloquant : ce que l'audit dit d'un code qu'il n'a pas lu. */
 export function diraitIllisible(rapport) {
@@ -45,16 +57,16 @@ export function diraitIllisible(rapport) {
 /**
  * La fin d'un lancement : `delai` (il n'a pas fini dans le temps donné), `abandon` (V8 a arrêté le processus : un signal, un code de
  * 128 ou plus), `plantage` (sortie 3 : l'outil a planté), `autre` (une sortie que l'outil n'a pas, ou aucun rapport alors que l'outil a
- * fini), sinon `dit`, `lu` ou, à un niveau que nulle pile ne lit, `silence`.
+ * fini), sinon `dit` (C-SURFACE-03 bloquant), `lu` (le témoin est dans le rapport) ou `silence` (ni l'un ni l'autre), à toute profondeur.
  * @param {{ status: ?number, signal: ?string, rapport: ?object, delai?: boolean }} lancement
  */
-export function classer({ status, signal, rapport, delai = false }, niveaux, sansLecture) {
+export function classer({ status, signal, rapport, delai = false }) {
   if (delai) return 'delai';
   if (signal || status === null || status >= 128) return 'abandon';
   if (status === 3) return 'plantage';
   if (![0, 1, 2].includes(status) || !rapport) return 'autre';
   if (diraitIllisible(rapport)) return 'dit';
-  return niveaux >= sansLecture ? 'silence' : 'lu';
+  return aVuLeTemoin(rapport) ? 'lu' : 'silence';
 }
 
 const FINS = ['lu', 'dit', 'abandon', 'silence', 'plantage', 'autre', 'delai'];
@@ -84,10 +96,10 @@ function lancer(arbre, widget, sortie, { regime, pileMb, enveloppe, delaiMs }) {
 /**
  * Rejoue. Rend `{ lignes, interdites }` : pour chaque (arbre, niveaux), le nombre de lancements par fin ; `interdites` le nombre de
  * lancements qui ont fini d'une fin qui ne doit pas exister.
- * @param {{ niveaux: number[], essais: number, regime: 'principal'|'worker', pileMb?: number, arbres: string[], sansLecture: number, delaiMs?: number }} options
+ * @param {{ niveaux: number[], essais: number, regime: 'principal'|'worker', pileMb?: number, arbres: string[], delaiMs?: number }} options
  *   `delaiMs` : le temps d'un lancement (180 s par défaut), au-delà duquel il est arrêté et compté `delai`.
  */
-export function rejouer({ niveaux, essais, regime, pileMb, arbres, sansLecture, delaiMs = DELAI_MS }) {
+export function rejouer({ niveaux, essais, regime, pileMb, arbres, delaiMs = DELAI_MS }) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-profond-'));
   try {
     const enveloppe = path.join(tmp, 'enveloppe-worker.mjs');
@@ -105,7 +117,7 @@ export function rejouer({ niveaux, essais, regime, pileMb, arbres, sansLecture, 
       for (let k = 1; k <= essais; k++) {
         for (const arbre of arbres) {
           const sortie = path.join(tmp, `sortie-${n}-${k}-${widgets.size}-${arbres.indexOf(arbre)}`);
-          const fin = classer(lancer(arbre, widgets.get(arbre), sortie, { regime, pileMb, enveloppe, delaiMs }), n, sansLecture);
+          const fin = classer(lancer(arbre, widgets.get(arbre), sortie, { regime, pileMb, enveloppe, delaiMs }));
           parArbre.get(arbre)[fin]++;
           fs.rmSync(sortie, { recursive: true, force: true });
         }
@@ -134,9 +146,9 @@ export function tableau(lignes, { plusieursArbres }) {
 // ---------------------------------------------------------------------------
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const args = process.argv.slice(2);
-  const USAGE = 'Usage : node scripts/rejouer-fichier-profond.mjs [--niveaux=1400,1700,20000] [--essais=10] [--regime=principal|worker] [--pile-mb=3.5] [--arbre=<dossier>]… [--sans-lecture=10000]';
+  const USAGE = 'Usage : node scripts/rejouer-fichier-profond.mjs [--niveaux=1400,1700,20000] [--essais=10] [--regime=principal|worker] [--pile-mb=3.5] [--arbre=<dossier>]…';
   const valeur = (nom) => args.filter((a) => a.startsWith(`--${nom}=`)).map((a) => a.slice(nom.length + 3));
-  const connues = ['niveaux', 'essais', 'regime', 'pile-mb', 'arbre', 'sans-lecture'];
+  const connues = ['niveaux', 'essais', 'regime', 'pile-mb', 'arbre'];
   const inconnues = args.filter((a) => !connues.some((nom) => a.startsWith(`--${nom}=`)));
   const fausse = (message) => { console.error(`${message}\n${USAGE}`); process.exit(2); };
   if (inconnues.length) fausse(`Option inconnue : ${inconnues.join(' ')}`);
@@ -150,14 +162,12 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const pileMb = pileDite === undefined ? undefined : Number(pileDite);
   if (pileMb !== undefined && !(pileMb > 0)) fausse(`Pile invalide : « ${pileDite} » (des Mio, positifs).`);
   if (pileMb !== undefined && regime !== 'worker') fausse('`--pile-mb` ne vaut que pour `--regime=worker` : la pile du fil principal est celle de Node.');
-  const sansLecture = Number(valeur('sans-lecture')[0] ?? 10_000);
-  if (!Number.isInteger(sansLecture) || sansLecture < 1) fausse(`Niveau invalide : « ${valeur('sans-lecture')[0]} ».`);
   const arbres = (valeur('arbre').length ? valeur('arbre') : [RACINE]).map((a) => path.resolve(a));
   for (const a of arbres) if (!fs.existsSync(path.join(a, 'bin', 'gwaudit.js')) || !fs.existsSync(path.join(a, 'fixtures', 'widget-exemple'))) fausse(`Pas un arbre de l'outil : ${a} (bin/gwaudit.js ou fixtures/widget-exemple manque).`);
-  const { lignes, interdites } = rejouer({ niveaux, essais, regime, pileMb, arbres, sansLecture });
+  const { lignes, interdites } = rejouer({ niveaux, essais, regime, pileMb, arbres });
   console.log(tableau(lignes, { plusieursArbres: arbres.length > 1 }));
   console.log(interdites
-    ? `\n${interdites} lancement(s) ont fini d'une fin qui ne doit pas exister (silence : un rapport complet sans C-SURFACE-03 à un niveau que nulle pile ne lit ; plantage : sortie 3 ; autre : sortie inconnue ; delai : pas fini à temps).`
+    ? `\n${interdites} lancement(s) ont fini d'une fin qui ne doit pas exister (silence : un rapport complet sans le témoin ni C-SURFACE-03, le code n'a pas été lu et personne ne le dit ; plantage : sortie 3 ; autre : sortie inconnue ; delai : pas fini à temps).`
     : '\nAucune fin interdite : chaque lancement a lu le code, l\'a dit (C-SURFACE-03 bloquant) ou a été arrêté par V8.');
   process.exitCode = interdites ? 1 : 0;
 }
