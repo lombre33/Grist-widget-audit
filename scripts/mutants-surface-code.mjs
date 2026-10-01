@@ -26,6 +26,8 @@ const QB = 'src/regles/b-lisibilite.js';
 const H = 'src/rapport/html.js';
 const M = 'src/rapport/markdown.js';
 const TESTS = ['tests/surface-code-charge.test.mjs', 'tests/surface-references.test.mjs', 'tests/inventaire-repli-workers.test.mjs'];
+// Les essais de la file de la fermeture, dont la recherche d'un fichier est bornée par un nombre d'appels : un mutant qui fait boucler la file y est tué par une assertion, en quelques secondes.
+const TESTS_BORNES = ['tests/surface-fermeture.test.mjs'];
 
 // [fichier, chaîne d'origine (une seule occurrence), chaîne mutée, libellé]
 const MUTANTS = [];
@@ -378,8 +380,11 @@ const mutants = MUTANTS
 
 process.exitCode = rejouerMutants({
   mutants,
-  groupes: [{ nom: 'tests de la surface et des chargements de code', fichiers: TESTS }],
+  groupes: [
+    { nom: 'essais bornés de la file de la fermeture', fichiers: TESTS_BORNES },     // d'abord : une file sans garde contre les cycles boucle sans fin, et la suite qui suit ne finirait que par une erreur de V8 ou par le délai
+    { nom: 'tests de la surface et des chargements de code', fichiers: TESTS },
+  ],
   exigerChromium: false,
   partie,
-  delaiMs: 90_000,                                                // une file sans garde contre les cycles boucle sans fin : ces mutants sont tués par le délai, dit comme tel
+  delaiMs: 90_000,                                                // un mutant qui ferait boucler autre chose que la file y serait tué par le délai, dit comme tel
 });
