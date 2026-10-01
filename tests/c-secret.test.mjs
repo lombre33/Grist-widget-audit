@@ -13,6 +13,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { extname } from 'node:path';
 import { auditer, page } from './aide-surface.mjs';
+import { TEXTE_ANONYME, dirAvecEmetteur, echapperHtml, INVISIBLES, EMETTEURS_HOSTILES } from './aide-secrets.mjs';
 import { noter } from '../src/moteur/notation.js';
 import { genererHtml } from '../src/rapport/html.js';
 import { genererMarkdown } from '../src/rapport/markdown.js';
@@ -227,6 +228,8 @@ test('un JWT dont la charge utile dit role anon est une clé publique par concep
     assert.equal(c.titre, 'Clé publique par conception dans le code (jeton JWT de rôle anonyme)');
     assert.match(c.constat, /« role: anon »/);
     assert.match(c.constat, /ce n'est pas un secret/);
+    // Le texte du constat dit l'émetteur, cité, quand le jeton en a un ; sinon il n'en dit rien.
+    assert.equal(c.constat, emetteur ? dirAvecEmetteur(`\`${emetteur}\``) : TEXTE_ANONYME, `${dit} : le texte`);
     assert.match(c.impact, /rôle anonyme/);
     assert.match(c.remediation, /politiques d'accès par ligne/);
     assert.deepEqual(c.preuve, { forme: 'fournisseur', fournisseur: 'jwt', publique: true, longueur: jeton.length, role: 'anon', ...(emetteur ? { emetteur } : {}) }, dit);
@@ -235,36 +238,126 @@ test('un JWT dont la charge utile dit role anon est une clé publique par concep
   }
 });
 
-test('l\'émetteur d\'un JWT de rôle anonyme est un texte que le widget choisit : dit en clair, borné à cent caractères, rendu bien formé, et aucun rapport ne le rend tel quel', async () => {
+/**
+ * Les trois rapports que lit un humain, et le JSON : les sorties d'un audit, sans axe D ni réseau, d'un fichier qui porte un JWT de rôle anonyme. Un rapport par jeton : la page HTML regroupe
+ * les constats d'une même règle au-delà d'un seuil et ne dit plus le texte de chacun.
+ */
+async function rapportDeJwt(charge) {
+  const jeton = jwtDeCharge(charge);
+  const a = await auditer({ 'app.js': `var cle = '${jeton}';\n` });
+  const notation = noter(a.constats, new Set(['D']));
+  const rapport = { ctx: a.ctx, notation, meta: { nomDepot: 'w', version: '0' } };
+  const [c, ...autres] = C_SECRET(a);
+  assert.equal(autres.length, 0);
+  const constatsDuJson = JSON.parse(genererJson(rapport)).axes.C.constats.filter((x) => x.regle === 'C-SECRET-01');
+  assert.equal(constatsDuJson.length, 1);
+  return { c, jeton, enJson: constatsDuJson[0], json: genererJson(rapport), html: genererHtml(rapport), markdown: genererMarkdown(rapport) };
+}
+
+test('l\'émetteur d\'un JWT de rôle anonyme est un texte que le widget choisit : dit en clair, borné à cent caractères, rendu bien formé, cité dans le texte du constat, et aucun rapport ne le lit comme autre chose que du texte', async () => {
   const cent = 'é'.repeat(100);
   const HOSTILE = '<img src=x onerror=alert(1)>"\'`|\n# titre\r\n| a | b |\u0000\u001b[31m</script><!--';
+  // [nom, émetteur écrit dans le jeton, émetteur que la preuve garde (borné, bien formé, sinon tel quel), ce que le texte du constat en cite]
   const cas = [
-    ['cent caractères : dit en entier', JSON.stringify({ iss: cent, role: 'anon' }), cent],
-    ['cent un : coupé à cent, puis « … »', JSON.stringify({ iss: `${cent}x`, role: 'anon' }), `${cent}…`],
-    ['douze mille : coupé à cent, le jeton reste un JWT', JSON.stringify({ iss: 'a'.repeat(12000), role: 'anon' }), `${'a'.repeat(100)}…`],
-    ['une paire de substitution à cheval sur la coupe : sa moitié devient U+FFFD', JSON.stringify({ iss: `${'a'.repeat(99)}😀b`, role: 'anon' }), `${'a'.repeat(99)}�…`],
-    ['une paire entière avant la coupe : gardée', JSON.stringify({ iss: `${'a'.repeat(98)}😀b`, role: 'anon' }), `${'a'.repeat(98)}😀…`],
-    ['une moitié de paire écrite seule par un échappement : U+FFFD', '{"iss":"x\\ud83dy","role":"anon"}', 'x�y'],
-    ['du balisage, des guillemets, des retours à la ligne et des caractères de contrôle : des données', JSON.stringify({ iss: HOSTILE, role: 'anon' }), HOSTILE],
+    ['cent caractères : dit en entier', cent, cent, `\`${cent}\``],
+    ['cent un : coupé à cent, puis « … »', `${cent}x`, `${cent}…`, `\`${cent}…\``],
+    ['douze mille : coupé à cent, le jeton reste un JWT', 'a'.repeat(12000), `${'a'.repeat(100)}…`, `\`${'a'.repeat(100)}…\``],
+    ['une paire de substitution à cheval sur la coupe : sa moitié devient U+FFFD', `${'a'.repeat(99)}😀b`, `${'a'.repeat(99)}�…`, `\`${'a'.repeat(99)}�…\``],
+    ['une paire entière avant la coupe : gardée', `${'a'.repeat(98)}😀b`, `${'a'.repeat(98)}😀…`, `\`${'a'.repeat(98)}😀…\``],
+    ['une moitié de paire écrite seule par un échappement : U+FFFD', 'x\ud83dy', 'x�y', '`x�y`'],
+    ['du balisage, des guillemets, des guillemets inversés, des retours à la ligne et des caractères de contrôle : des données, citées', HOSTILE,
+      HOSTILE, '``<img src=x onerror=alert(1)>"\'`|\\u000a# titre\\u000d\\u000a| a | b |\\u0000\\u001b[31m</script><!--``'],
+    ['du texte très ordinaire : cité aussi, tel quel', 'supabase', 'supabase', '`supabase`'],
   ];
-  for (const [nom, charge, attendu] of cas) {
-    const jeton = jwtDeCharge(charge);
-    const a = await auditer({ 'app.js': `var cle = '${jeton}';\n` });
-    const [c, ...autres] = C_SECRET(a);
-    assert.equal(autres.length, 0, nom);
+  for (const [nom, iss, emetteur, cite] of cas) {
+    const { c, jeton, enJson, json, html, markdown } = await rapportDeJwt({ iss, role: 'anon' });
     assert.equal(etat(c), 'info', nom);
-    assert.equal(c.preuve.emetteur, attendu, nom);
-    assert.ok(attendu.isWellFormed(), nom);
-    // Les quatre rapports : le JSON porte l'émetteur comme une donnée (lu en retour à l'identique) ; ni HTML ni Markdown ne rendent la preuve, et le balisage de l'émetteur n'y est jamais à nu.
-    const notation = noter(a.constats, new Set(['D']));
-    const rapport = { ctx: a.ctx, notation, meta: { nomDepot: 'w', version: '0' } };
-    const dansLeJson = JSON.parse(genererJson(rapport)).axes.C.constats.find((x) => x.regle === 'C-SECRET-01');
-    assert.equal(dansLeJson.preuve.emetteur, attendu, `${nom} : le JSON`);
-    for (const [format, sortie] of [['HTML', genererHtml(rapport)], ['Markdown', genererMarkdown(rapport)]]) {
-      assert.ok(!sortie.includes('<img src=x'), `${nom} : ${format} rend le balisage de l'émetteur tel quel`);
-      assert.ok(!sortie.includes('</script><!--'), `${nom} : ${format} rend la fin de script de l'émetteur telle quelle`);
-      assert.ok(!sortie.includes('\n# titre'), `${nom} : ${format} rend le titre de l'émetteur tel quel`);
+    // Une donnée : la preuve garde l'émetteur tel quel (borné, bien formé), le JSON la porte, lue en retour à l'identique.
+    assert.equal(c.preuve.emetteur, emetteur, nom);
+    assert.ok(emetteur.isWellFormed(), nom);
+    assert.equal(enJson.preuve.emetteur, emetteur, `${nom} : le JSON`);
+    // Le texte du constat le cite, sans aucun caractère invisible, et c'est ce texte que disent toutes les sorties.
+    assert.equal(c.constat, dirAvecEmetteur(cite), nom);
+    assert.ok(!INVISIBLES.test(c.constat), `${nom} : le texte du constat porte un caractère invisible`);
+    assert.equal(enJson.constat, c.constat, `${nom} : le JSON`);
+    assert.ok(html.includes(`<p>${echapperHtml(dirAvecEmetteur(cite))}</p>`), `${nom} : la page HTML ne dit pas le texte, échappé`);
+    const lignes = markdown.split('\n');
+    assert.equal(lignes.filter((l) => l === dirAvecEmetteur(cite)).length, 1, `${nom} : le Markdown ne dit pas le texte sur une ligne à lui`);
+    // Ni la page HTML ni le Markdown ne lisent le texte de l'émetteur comme du balisage, du Markdown ou une suite d'échappement : aucune balise, aucun titre, aucun tableau, aucun commentaire
+    // ne commence une ligne ou n'existe hors d'un extrait de code, aucun caractère invisible ne traverse.
+    if (iss === HOSTILE) {
+      assert.ok(!html.includes('<img src=x'), 'la page HTML rend le balisage de l\'émetteur');
+      assert.ok(!html.includes('</script><!--'), 'la page HTML rend la fin de script de l\'émetteur');
+      assert.ok(!lignes.some((l) => l.startsWith('# titre') || l.startsWith('| a | b |')), 'le Markdown a une ligne de titre ou de tableau venue de l\'émetteur');
     }
+    for (const [sortie, texte] of [['le Markdown', markdown.replace(/\n/g, '')], ['la page HTML', html.replace(/\n/g, '')], ['le JSON', json.replace(/\n/g, '')]]) {
+      assert.ok(!INVISIBLES.test(texte), `${nom} : ${sortie} porte un caractère invisible (hors retour à la ligne)`);
+    }
+    // Et le jeton lui-même reste masqué partout.
+    for (const sortie of [json, html, markdown]) assert.ok(!sortie.includes(jeton), `${nom} : un jeton est dit en entier`);
+  }
+});
+
+test('six émetteurs hostiles : la page HTML, le Markdown et le texte du constat (ce que dit une console) ne les lisent que comme du texte, chacun à sa place', async () => {
+  for (const { nom, iss, cite, dansLeHtml, pasAuDebutDeLigne } of EMETTEURS_HOSTILES) {
+    const { c, enJson, json, html, markdown } = await rapportDeJwt({ iss, role: 'anon' });
+    const lignes = markdown.split('\n');
+    assert.equal(c.preuve.emetteur, iss, `${nom} : la preuve (une donnée) le garde tel quel`);
+    // Texte du constat : c'est lui qu'une console affiche, et le JSON le porte ; aucun caractère de contrôle n'y traverse.
+    assert.equal(c.constat, dirAvecEmetteur(cite), `${nom} : le texte du constat`);
+    assert.equal(enJson.constat, c.constat, `${nom} : le JSON`);
+    assert.ok(!INVISIBLES.test(c.constat), `${nom} : le texte du constat porte un caractère invisible`);
+    // Page HTML : le texte, échappé comme tout texte ; aucune balise, aucun commentaire n'en sort.
+    assert.ok(html.includes(`<p>${echapperHtml(TEXTE_ANONYME)} Son émetteur (champ iss) : ${dansLeHtml}.</p>`), `${nom} : la page HTML ne dit pas le texte échappé`);
+    assert.ok(!html.includes('<b>x</b>') && !html.includes('<!-- z') && !html.includes('--> y'), `${nom} : la page HTML rend du balisage ou un commentaire de l'émetteur`);
+    // Markdown : le texte entier tient sur une seule ligne, l'émetteur dans un extrait de code ; aucune ligne ne commence par ce que l'émetteur aurait ouvert.
+    assert.equal(lignes.filter((l) => l === dirAvecEmetteur(cite)).length, 1, `${nom} : une ligne, exactement le texte attendu`);
+    for (const debut of pasAuDebutDeLigne) assert.ok(!lignes.some((l) => l.startsWith(debut)), `${nom} : une ligne du Markdown commence par « ${debut} »`);
+    for (const [sortie, texte] of [['le Markdown', markdown.replace(/\n/g, '')], ['la page HTML', html.replace(/\n/g, '')], ['le JSON', json.replace(/\n/g, '')]]) {
+      assert.ok(!INVISIBLES.test(texte), `${nom} : ${sortie} porte un caractère invisible (hors retour à la ligne)`);
+    }
+  }
+});
+
+/** Un widget dont l'objet porte, sous un nom que lui seul choisit, une valeur : un fichier, un rapport. */
+async function rapportDeNom(nom, valeur) {
+  const a = await auditer({ 'app.js': `const o = { ${JSON.stringify(nom)}: ${JSON.stringify(valeur)} };\n` });
+  const rapport = { ctx: a.ctx, notation: noter(a.constats, new Set(['D'])), meta: { nomDepot: 'w', version: '0' } };
+  const [c, ...autres] = C_SECRET(a);
+  assert.equal(autres.length, 0);
+  return { c, json: genererJson(rapport), html: genererHtml(rapport), markdown: genererMarkdown(rapport) };
+}
+
+test('le nom qu\'un widget choisit pour une valeur est cité dans le titre et le constat : balisage, titre, barre verticale, guillemet inversé, retour à la ligne et caractère d\'échappement n\'en sortent pas ; un nom honnête est dit tel quel', async () => {
+  const HOSTILE = 'a`b\n\n# titre\n<img src=x onerror=1> -->| \u001b[31m token';
+  const CITE = '``a`b\\u000a\\u000a# titre\\u000a<img src=x onerror=1> -->| \\u001b[31m token``';
+  const CAS = [
+    // [valeur, ce que dit le titre, état]
+    [generee(32), `Secret potentiel versionné dans le dépôt (valeur d'allure générée dans « ${CITE} »)`, 'critique bloquant'],
+    ['Soleil2024!x', `Valeur en dur dans « ${CITE} » : un secret ou un exemple ? (à vérifier)`, 'majeur'],
+  ];
+  for (const [valeur, titre, attendu] of CAS) {
+    const { c, json, html, markdown } = await rapportDeNom(HOSTILE, valeur);
+    assert.equal(etat(c), attendu, titre);
+    assert.equal(c.titre, titre);
+    assert.ok(c.constat.startsWith(`« ${CITE} » reçoit un littéral de ${valeur.length} caractères`), c.constat);
+    assert.equal(c.preuve.nom, HOSTILE, 'la preuve, une donnée, garde le nom tel quel');
+    assert.ok(!INVISIBLES.test(c.titre) && !INVISIBLES.test(c.constat), 'un caractère invisible traverse');
+    const lignes = markdown.split('\n');
+    assert.ok(lignes.some((l) => l.startsWith('### ') && l.includes(titre)), 'le Markdown n\'a pas le titre sur une ligne à lui');
+    assert.equal(lignes.filter((l) => l.startsWith(`« ${CITE} » reçoit`)).length, 1, 'le Markdown n\'a pas le constat sur une ligne à lui');
+    assert.ok(!lignes.some((l) => l.startsWith('# titre') || l.startsWith('<img')), 'le Markdown a une ligne de titre ou de balise venue du nom');
+    assert.ok(html.includes(echapperHtml(titre)) && !html.includes('<img src=x'), 'la page HTML ne dit pas le titre échappé, ou rend la balise');
+    for (const [sortie, texte] of [['le Markdown', markdown.replace(/\n/g, '')], ['la page HTML', html.replace(/\n/g, '')], ['le JSON', json.replace(/\n/g, '')]]) {
+      // L'extrait garde le nom tel quel (le code du widget, replié sur une ligne) : seul le caractère d'échappement est dit par l'essai, non par le rapport.
+      assert.ok(!INVISIBLES.test(texte.replace(/\u001b\[31m token = /g, '')), `${sortie} porte un caractère invisible (hors l'extrait)`);
+    }
+  }
+  // Un nom honnête ne change pas : ni cité, ni neutralisé.
+  for (const nom of ['api_key', 'API-KEY', 'config.apiKey', 'x-api-key', 'mot_de_passe', 'db.password']) {
+    const { c } = await rapportDeNom(nom, generee(32));
+    assert.equal(c.titre, `Secret potentiel versionné dans le dépôt (valeur d'allure générée dans « ${nom} »)`, nom);
+    assert.ok(c.constat.startsWith(`« ${nom} » reçoit`), nom);
   }
 });
 
@@ -441,6 +534,14 @@ test('une valeur de remplacement, une phrase ou une adresse ne dit rien ; un lit
   assert.equal(cs[0].preuve.forme, 'code');
   assert.equal(cs[0].extrait, 'password = hu…r2 (14 caractères)');
   sansFuite(a, ['hunter2hunter2']);
+});
+
+test('l\'extrait d\'un constat de valeur masque la valeur entière, ponctuation finale comprise : le masque de constat() ne le refait pas', async () => {
+  // Le masque de constat() lit un « nom = valeur » sans sa ponctuation finale (une virgule ferme une ligne) : si l'extrait disait la valeur, il dirait une longueur de moins.
+  for (const [valeur, longueur] of [['Zq7Kp2Rm9x,', 11], ['Zq7Kp2Rm9x;', 11], ['Zq7Kp2Rm9x}', 11], ['Zq7Kp2Rm9x]', 11], ['Zq7Kp2Rm9x,;', 12]]) {
+    const a = await auditer({ 'app.js': `var c = { apiKey: '${valeur}' };\n` });
+    assert.deepEqual(C_SECRET(a).map((c) => c.extrait), [`apiKey = *** (${longueur} caractères)`], valeur);
+  }
 });
 
 test('un fichier que l\'arbre ne lit pas (TypeScript) n\'est lu que par les formats de fournisseur : la limite est dite, non cachée', async () => {
@@ -728,7 +829,7 @@ test('jugerValeur : l\'allure générée avant le remplacement, puis chaque rais
   assert.equal(typeof a.entropie, 'number');
   assert.equal(v('password', 'admin123').verdict, 'a_verifier', 'huit caractères : assez pour un mot de passe');
   assert.equal(v('password', 'super_secret').verdict, 'a_verifier', 'deux mots joints ne font pas une phrase');
-  assert.equal(v('password', 'Passwort').verdict, 'a_verifier');
+  assert.deepEqual(v('password', 'Passwort'), { verdict: 'aucun', pourquoi: 'libelle' }, 'un mot de langue à capitale initiale est le libellé d\'un champ, non un mot de passe choisi (tests/c-secret-leurres.test.mjs)');
   for (const valeur of ['mockingbird', 'stubborn99', 'barcelona1985', 'football2024', 'fakery123', 'samples-2024', 'fooling99', 'bazaar2024', 'mockup-2024']) {
     assert.equal(v('password', valeur).verdict, 'a_verifier', `${valeur} : un mot qui commence comme un mot de remplacement n'en est pas un`);
   }

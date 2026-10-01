@@ -134,7 +134,7 @@ const MUTANTS = [
   [P, "(attribut(balise, 'encoding') ?? '')", "(attribut(balise, 'encoding') ?? '').trim()", 'annotation-xml : encoding rogné'],
 
   // --- extrait borné autour de la référence, numéro de ligne, temps des constats
-  [M, "String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT).replace(", "String(c.extrait).replace(", 'extrait : replié en entier avant la coupe (quadratique)'],
+  [M, "masquerLesSecrets(String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT)).replace(", "masquerLesSecrets(String(c.extrait)).replace(", 'extrait : replié en entier avant la coupe (quadratique)'],
   [M, "const LONGUEUR_LUE_EXTRAIT = 4096;", "const LONGUEUR_LUE_EXTRAIT = 1 << 30;", 'extrait : longueur lue sans borne'],
   [M, ".replace(/\\s+/g, ' ').slice(0, 300)", ".replace(/\\s+/g, ' ')", 'extrait : plus coupé à 300 caractères'],
   [M, ".replace(/\\s+/g, ' ').slice(0, 300)", ".slice(0, 300)", 'extrait : blancs non repliés'],

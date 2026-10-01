@@ -12,16 +12,28 @@
  *     fichier JS (déclaration, propriété, affectation : le texte d'un message qui cite `token: 'ma-cle'` n'est pas une
  *     affectation), et ligne à ligne dans les fichiers de configuration (`.env`, `.json`, `.yml`, `.ini`…). Jamais dans
  *     une carte de sources ni un README, qui citent du code sans en être. La valeur est jugée, dans cet ordre :
- *       a. allure d'une valeur générée : critique, bloquant ;
- *       b. valeur de remplacement ou phrase : rien ;
- *       c. autre chose (un mot de passe choisi à la main, une clé d'essai) : majeur « à vérifier », non bloquant.
+ *       a. un leurre manifeste (un seul caractère répété, une suite, des mots joints dont l'un est un mot de remplacement, derrière le
+ *          préfixe d'une clé : `ghp_xxxx…`, `xoxb-your-bot-token`, l'UUID nul) : rien, avant le format comme avant l'allure générée. Ce qui
+ *          n'est pas tiré au hasard n'est pas un secret, et un vrai secret n'a pas cette forme : la forme de mots seule ne fait pas un leurre
+ *          (des mots joints sans mot de remplacement, que le hasard forme parfois en lettres seules, n'en sont pas). Limite : une clé tirée au
+ *          hasard dont l'un des morceaux est, par hasard, un mot de remplacement entier, et dont les autres ont la forme de mots, passe pour
+ *          un leurre, donc n'est ni signalée ni masquée ; `scripts/mesurer-leurres-au-hasard.mjs` compte ces tirages, par forme de fournisseur ;
+ *       b. allure d'une valeur générée : critique, bloquant ;
+ *       c. valeur de remplacement, phrase ou libellé (`Passwort`, `Contraseña` : un mot de langue écrit avec une capitale, sans
+ *          chiffre ni symbole) : rien ;
+ *       d. autre chose (un mot de passe choisi à la main, une clé d'essai) : majeur « à vérifier », non bloquant, sauf dans un fichier
+ *          de configuration d'exemple (`.env.example`, `.sample`, `.template` ; jamais un script), où seuls un format à corps aléatoire et l'allure
+ *          générée comptent.
  *
  * Aucun constat, aucun extrait, aucune preuve ne redit la valeur en entier : l'extrait est masqué, la preuve garde le
- * nom, la longueur et les mesures qui ont fait juger la valeur.
+ * nom, la longueur et les mesures qui ont fait juger la valeur. Le masque vaut pour tout constat de toute règle, qui le
+ * traverse à sa création (`constat()` appelle `masquerLesSecrets`) : une règle qui recopie un jeton dans son extrait ne
+ * le porte jamais dans un rapport.
  */
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs, chaineLitterale } from '../moteur/analyse-js.js';
 import { numeroLigne } from '../moteur/lignes.js';
+import { citer, citerSiBesoin } from '../moteur/texte-du-widget.js';
 
 /**
  * Le début d'une suite de caractères de base64 URL. Les formats dont la queue est une suite longue ne se cherchent qu'à son
@@ -42,30 +54,46 @@ const DEBUT_DE_SUITE = '(?<![A-Za-z0-9_-])';
  * documentation du fournisseur publie, qui n'ouvre rien. `valide` : ce que le motif ne dit pas et que le format garantit
  * (une clé tirée au hasard n'est pas un mot). `extrait` : ce qu'on montre de la valeur, quand la masquer ne dit rien.
  * `lire` : ce que la valeur dit d'elle-même et que son motif ne dit pas (`null` : rien, le format vaut ce qu'il vaut) ; c'est
- * par là qu'un JWT de rôle anonyme devient une clé publique par conception.
+ * par là qu'un JWT de rôle anonyme devient une clé publique par conception. `indice` : un texte que toute valeur du format contient, pour
+ * n'appliquer le motif qu'aux textes qui le portent (le masque des secrets passe par chaque constat). `aleatoire` : ce que le fournisseur
+ * tire au hasard derrière son préfixe est la preuve : une valeur dont cette partie se voit fausse (`ghp_xxxx…`, `xoxb-your-bot-token`)
+ * n'est pas une clé, même au bon format.
  */
 export const FORMATS = [
-  { id: 'aws', libelle: "clé d'accès AWS", re: /\bAKIA[0-9A-Z]{16}\b/g, exemple: (t) => /EXAMPLE$/.test(t) },
-  { id: 'github', libelle: 'jeton personnel GitHub', re: /\bghp_[A-Za-z0-9]{36}\b/g },
-  { id: 'github-pat', libelle: 'jeton personnel GitHub (format récent)', re: /\bgithub_pat_[A-Za-z0-9_]{50,512}\b/g },
+  { id: 'aws', libelle: "clé d'accès AWS", indice: 'AKIA', aleatoire: true, re: /\bAKIA[0-9A-Z]{16}\b/g, exemple: (t) => /EXAMPLE$/.test(t) },
+  { id: 'github', libelle: 'jeton personnel GitHub', indice: 'ghp_', aleatoire: true, re: /\bghp_[A-Za-z0-9]{36}\b/g },
+  { id: 'github-pat', libelle: 'jeton personnel GitHub (format récent)', indice: 'github_pat_', aleatoire: true, re: /\bgithub_pat_[A-Za-z0-9_]{50,512}\b/g },
   // `sk-` suivi d'une suite alphanumérique (les clés d'origine) ou d'un type (`sk-proj-`, `sk-svcacct-`, `sk-admin-`) puis d'une suite à tirets et soulignés (les clés actuelles).
   // Une clé tirée au hasard a des minuscules, des majuscules et des chiffres : `sk-` suivi d'un long mot en casse mixte n'en est pas une.
-  { id: 'openai', libelle: "clé d'API de type OpenAI", re: /\bsk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_-]{40,512}|[A-Za-z0-9]{32,512})\b/g, valide: (t) => classesDe(t.replace(/^sk-(?:(?:proj|svcacct|admin)-)?/, '')) >= 3 },
-  { id: 'slack', libelle: 'jeton Slack', re: /\bxox[baprs]-[A-Za-z0-9-]{10,512}\b/g },
+  { id: 'openai', libelle: "clé d'API de type OpenAI", indice: 'sk-', aleatoire: true, re: /\bsk-(?:(?:proj|svcacct|admin)-[A-Za-z0-9_-]{40,512}|[A-Za-z0-9]{32,512})\b/g, valide: (t) => classesDe(t.replace(/^sk-(?:(?:proj|svcacct|admin)-)?/, '')) >= 3 },
+  { id: 'slack', libelle: 'jeton Slack', indice: 'xox', aleatoire: true, re: /\bxox[baprs]-[A-Za-z0-9-]{10,512}\b/g },
   // L'en-tête seul n'est pas une clé : une bibliothèque qui lit des clés PEM le cite. Le corps (une suite de base64 que l'en-tête annonce, d'au plus 120 caractères de séparation : retours à la ligne, échappés ou non, guillemets, concaténation) est la preuve.
-  { id: 'pem', libelle: 'clé privée', extrait: (t) => `${t} (corps non reproduit)`, re: /-----BEGIN (?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP) )?PRIVATE KEY(?: BLOCK)?-----(?=[\s\S]{0,120}?[A-Za-z0-9+/]{40})/g },
-  { id: 'jwt', libelle: 'jeton JWT', re: new RegExp(`${DEBUT_DE_SUITE}eyJ[A-Za-z0-9_-]{10,16384}\\.[A-Za-z0-9_-]{10,16384}\\.[A-Za-z0-9_-]{10,16384}\\b`, 'g'), lire: lireJwt },
-  { id: 'google', libelle: "clé d'API Google", re: /\bAIza[0-9A-Za-z_-]{35}\b/g, publique: true },
-  { id: 'stripe', libelle: 'clé publique Stripe', re: /\bpk_(?:live|test)_[A-Za-z0-9]{16,512}\b/g, publique: true },
-  { id: 'mapbox', libelle: 'jeton public Mapbox', re: /\bpk\.eyJ[A-Za-z0-9_-]{10,16384}\.[A-Za-z0-9_-]{10,16384}\b/g, publique: true },
+  { id: 'pem', libelle: 'clé privée', indice: '-----BEGIN', extrait: (t) => `${t} (corps non reproduit)`, re: /-----BEGIN (?:(?:RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP) )?PRIVATE KEY(?: BLOCK)?-----(?=[\s\S]{0,120}?[A-Za-z0-9+/]{40})/g },
+  { id: 'jwt', libelle: 'jeton JWT', indice: 'eyJ', re: new RegExp(`${DEBUT_DE_SUITE}eyJ[A-Za-z0-9_-]{10,16384}\\.[A-Za-z0-9_-]{10,16384}\\.[A-Za-z0-9_-]{10,16384}\\b`, 'g'), lire: lireJwt },
+  { id: 'google', libelle: "clé d'API Google", indice: 'AIza', aleatoire: true, re: /\bAIza[0-9A-Za-z_-]{35}\b/g, publique: true },
+  { id: 'stripe', libelle: 'clé publique Stripe', indice: 'pk_', aleatoire: true, re: /\bpk_(?:live|test)_[A-Za-z0-9]{16,512}\b/g, publique: true },
+  { id: 'mapbox', libelle: 'jeton public Mapbox', indice: 'pk.eyJ', re: /\bpk\.eyJ[A-Za-z0-9_-]{10,16384}\.[A-Za-z0-9_-]{10,16384}\b/g, publique: true },
 ];
 
-/** Les valeurs d'un texte qui ont le format d'un fournisseur : `{ format, valeur, index, lu }`, dans l'ordre du texte. `lu` : ce que la valeur dit d'elle-même quand son format sait la lire (`null` sinon). */
-export function formatsDans(texte) {
+/**
+ * Le début fixe d'une clé, celui qui dit son fournisseur, par opposition à ce que le fournisseur tire au hasard derrière lui : les
+ * préfixes des formats ci-dessus, et ceux de clés que l'outil ne reconnaît pas encore comme un format (Stripe `sk_live_` et `sk_test_`,
+ * Anthropic `sk-ant-`, Slack `xapp-`, les autres jetons GitHub). Ce qui les suit est jugé de la même façon, que la clé soit un format ou non.
+ */
+const PREFIXE_DE_CLE = /^(?:AKIA|AIza|gh[pousr]_|github_pat_|xox[baprs]-|xapp-(?:\d+-)?|sk-(?:(?:proj|svcacct|admin)-|ant-(?:api\d+-)?)?|[sr]k_(?:live|test)_|pk_(?:live|test)_)/;
+
+/**
+ * Les valeurs d'un texte qui ont le format d'un fournisseur : `{ format, valeur, index, lu }`, dans l'ordre du texte. `lu` : ce que la valeur
+ * dit d'elle-même quand son format sait la lire (`null` sinon). Une valeur dont la partie tirée au hasard se voit fausse (`estCorpsDeLeurre`)
+ * n'est pas une clé : elle n'est pas rendue.
+ */
+export function formatsDans(texte, formats = FORMATS) {
   const trouves = [];
-  for (const format of FORMATS) {
+  for (const format of formats) {
+    if (!texte.includes(format.indice)) continue;
     for (const m of texte.matchAll(format.re)) {
       if (format.exemple?.(m[0]) || format.valide?.(m[0]) === false) continue;
+      if (format.aleatoire && estCorpsDeLeurre(m[0].replace(PREFIXE_DE_CLE, ''))) continue;
       trouves.push({ format, valeur: m[0], index: m.index, lu: format.lire?.(m[0]) ?? null });
     }
   }
@@ -93,9 +121,11 @@ function chargeDeRoleAnonyme(jeton) {
 }
 
 /**
- * L'émetteur (`iss`) d'un jeton de rôle anonyme : un nom de projet ou une adresse, qui ne porte aucun secret et se dit en clair. C'est un texte que le
- * widget choisit : il est borné (cent caractères, puis `…`), comme le nom d'une affectation, et rendu bien formé (une paire de substitution coupée en
- * deux, ou écrite seule par un échappement `\ud83d`, devient U+FFFD : JSON, HTML et Markdown savent tous la montrer).
+ * L'émetteur (`iss`) d'un jeton de rôle anonyme : un nom de projet ou une adresse, qui ne porte aucun secret et se dit en clair, dans la preuve (une
+ * donnée : le JSON le porte) comme dans le texte du constat, que la page HTML et le Markdown rendent. C'est un texte que le widget choisit : il est
+ * borné (cent caractères, puis `…`), comme le nom d'une affectation, et rendu en Unicode bien formé (une paire de substitution coupée en deux, ou
+ * écrite seule par un échappement `\ud83d`, devient U+FFFD). Le texte du constat le cite par `citer` (voir `src/moteur/texte-du-widget.js`) : aucune
+ * sortie ne le lit comme du balisage, du Markdown ou une suite d'échappement du terminal.
  */
 const LONGUEUR_D_EMETTEUR = 100;
 const emetteurDit = (iss) => (iss.length > LONGUEUR_D_EMETTEUR ? `${iss.slice(0, LONGUEUR_D_EMETTEUR)}…` : iss).toWellFormed();
@@ -103,14 +133,15 @@ const emetteurDit = (iss) => (iss.length > LONGUEUR_D_EMETTEUR ? `${iss.slice(0,
 function lireJwt(jeton) {
   const charge = chargeDeRoleAnonyme(jeton);
   if (!charge) return null;
+  const emetteur = typeof charge.iss === 'string' && charge.iss !== '' ? emetteurDit(charge.iss) : null;
   return {
     publique: true,
     libelle: 'jeton JWT de rôle anonyme',
-    constat: "Un jeton JWT dont la charge utile dit « role: anon » est présent. C'est la clé que des fournisseurs (Supabase) publient pour être embarquée dans une page : ce n'est pas un secret, et elle donne les droits du rôle anonyme de son projet.",
+    constat: `Un jeton JWT dont la charge utile dit « role: anon » est présent. C'est la clé que des fournisseurs (Supabase) publient pour être embarquée dans une page : ce n'est pas un secret, et elle donne les droits du rôle anonyme de son projet.${emetteur === null ? '' : ` Son émetteur (champ iss) : ${citer(emetteur)}.`}`,
     impact: "Quiconque ouvre le widget lit la clé et peut l'employer depuis un autre site, avec les droits du rôle anonyme : sa seule protection est ce que le fournisseur accorde à ce rôle (politiques d'accès par ligne, API exposées, quotas), jamais son secret.",
     remediation: "Vérifier chez le fournisseur que le rôle anonyme ne peut lire ou écrire que ce que tout visiteur du widget peut lire ou écrire (par exemple, les politiques d'accès par ligne activées sur chaque table), et que son quota est plafonné.",
     // Le rôle est ce qui décide, l'émetteur dit de quel projet vient la clé : tous deux en clair, le jeton seul reste masqué.
-    preuve: { role: 'anon', ...(typeof charge.iss === 'string' && charge.iss !== '' ? { emetteur: emetteurDit(charge.iss) } : {}) },
+    preuve: { role: 'anon', ...(emetteur === null ? {} : { emetteur }) },
   };
 }
 
@@ -226,12 +257,21 @@ export function motsDeLaValeur(valeur) {
   return mots;
 }
 
-/** Une valeur qui se voit fausse : un seul caractère répété, ou une suite (`abcdef…`, `123456…`). */
+/** Ce qui sépare les morceaux d'une valeur composée (`00000000-0000-…`, `xoxb-…-…`, `mon_mot_de_passe`). */
+const SEPARATEURS = /[-_.\s]+/;
+
+/**
+ * Une valeur qui se voit fausse : un seul caractère répété, y compris par morceaux que des séparateurs coupent (`0000-0000-0000`, l'UUID nul,
+ * `xxxx-0000`), ou une suite (`abcdef…`, `123456…`, un UUID qui compte).
+ */
 function suiteManifeste(valeur) {
-  if (/^(.)\1+$/.test(valeur)) return true;
+  const morceaux = valeur.split(SEPARATEURS).filter((m) => m !== '');
+  if (morceaux.every((m) => /^(.)\1+$/.test(m))) return true;
+  // Les pas se comptent sans les séparateurs : l'UUID `12345678-1234-1234-1234-123456789012` est une suite comme `12345678123412341234123456789012`.
+  const noyau = morceaux.join('');
   let pas = 0;
-  for (let i = 1; i < valeur.length; i++) if (Math.abs(valeur.charCodeAt(i) - valeur.charCodeAt(i - 1)) === 1) pas++;
-  return pas / (valeur.length - 1) >= 0.8;
+  for (let i = 1; i < noyau.length; i++) if (Math.abs(noyau.charCodeAt(i) - noyau.charCodeAt(i - 1)) === 1) pas++;
+  return pas / (noyau.length - 1) >= 0.8;
 }
 
 const ADRESSE = /^[a-z][a-z0-9+.-]*:\/\//i;
@@ -245,11 +285,48 @@ const IDENTIFIANT_POINTE = /^[a-z]+(\.[a-z]+)+$/i;
  * signes plafonne l'entropie à 4 bits.
  */
 export function estGeneree(valeur) {
+  // Avant l'hexadécimal : trente-deux `0`, trente-deux `f` ou l'UUID nul ont l'alphabet d'une valeur générée, non son allure.
+  if (suiteManifeste(valeur)) return false;
   if (HEXADECIMAL.test(valeur) || UUID.test(valeur)) return true;
   if (valeur.length < LONGUEUR_GENEREE || /\s/.test(valeur)) return false;
-  if (ADRESSE.test(valeur) || CHEMIN.test(valeur) || suiteManifeste(valeur) || motsDeLaValeur(valeur)) return false;
+  if (ADRESSE.test(valeur) || CHEMIN.test(valeur) || motsDeLaValeur(valeur)) return false;
   return classesDe(valeur) >= CLASSES_GENEREES || entropieDe(valeur) >= ENTROPIE_GENEREE;
 }
+
+/**
+ * Les mots qu'on écrit à la place d'une clé (`your-bot-token`, `YOUR_API_KEY_HERE`, `replace-with-your-key`), en minuscules et en lettres ASCII, de quatre lettres
+ * au moins. C'est ce qui sépare des mots joints d'une clé tirée au hasard en lettres seules : la casse la coupe en morceaux qui ont la forme de mots (une clé AWS
+ * dont le premier signe est un chiffre et les quinze autres des lettres, cas fréquent ; `motsDeLaValeur` ne juge que la forme). Un mot y est entier, non un
+ * morceau d'un autre : `yourx` n'en est pas un. Les mots de trois lettres n'y sont pas (`key`, `api`, `bot`, `foo`) : un morceau de trois lettres d'une clé tirée au
+ * hasard en est un trop souvent. La liste est courte et ouverte : des mots joints qui n'en contiennent aucun ne sont pas un leurre, et la valeur qui les porte reste
+ * signalée (un faux constat, que le lecteur écarte d'un coup d'œil, plutôt qu'une clé qui passe).
+ */
+const LEURRES_EN = 'your yours this here insert enter paste fill replace change example sample test demo dummy fake mock stub placeholder lorem redacted hidden removed todo fixme none null empty unset undefined blank';
+const LEURRES_DU_SECRET = 'token secret password passwd pass private client access';
+const LEURRES_FR = 'votre jeton passe remplacer remplacez exemple essai bidon';
+const LEURRES_AUTRES = 'dein deine hier geheim passwort clave aqui secreto jouw sleutel wachtwoord';
+export const MOTS_DE_LEURRE = new Set(`${LEURRES_EN} ${LEURRES_DU_SECRET} ${LEURRES_FR} ${LEURRES_AUTRES}`.split(' '));
+
+/**
+ * La partie qu'un fournisseur tire au hasard derrière le préfixe de sa clé, quand elle se voit fausse : un seul caractère répété, une suite, ou des mots
+ * joints dont l'un est un mot de remplacement (`your-bot-token`). Une clé tirée au hasard n'a jamais les deux premières formes ni, avec un mot de
+ * remplacement en plus, la troisième (aucune sur les millions de tirages mesurés, par alphabet et par longueur) : ce test retire ce que personne n'a
+ * pu émettre, avant le format comme avant l'allure générée.
+ */
+export function estCorpsDeLeurre(corps) {
+  if (corps.length < LONGUEUR_MINIMALE) return false;
+  if (suiteManifeste(corps)) return true;
+  return motsDeLaValeur(corps)?.some((mot) => MOTS_DE_LEURRE.has(mot.toLowerCase())) ?? false;
+}
+
+/**
+ * Un mot de langue écrit comme un libellé : une capitale initiale (`Passwort`, `Contraseña`, `Wachtwoord`) ou un sigle (`API-Schlüssel`), puis des
+ * lettres, ou une écriture sans capitales (`パスワード`) ; ni chiffre ni symbole. Le libellé d'un champ d'un fichier de traduction porte le
+ * nom du secret qu'il désigne, dans la langue du fichier : ce n'est pas un mot de passe choisi. Un mot de passe faible écrit ainsi (`Sunshine`)
+ * n'est plus signalé ; un mot de passe d'un seul mot en minuscules, ou qui a un chiffre ou un symbole, l'est toujours.
+ */
+const LIBELLE = /^(?:\p{Lu}(?:\p{Ll}|\p{M})+|\p{Lu}{2,5}|(?:\p{Lo}|\p{Lm}|\p{M})+)(?:-(?:\p{L}|\p{M})+)*$/u;
+export const estLibelle = (valeur) => LIBELLE.test(valeur);
 
 /** Les clés d'exemple de la documentation d'AWS (la clé d'accès finit par `EXAMPLE`, la clé secrète par `EXAMPLEKEY`) : publiées, elles n'ouvrent rien. */
 const EXEMPLE_AWS = /EXAMPLE(?:KEY)?$/;
@@ -274,13 +351,16 @@ const reprendLeNom = (valeur, nom) => nom.length <= APERCU && normaliser(valeur)
 /**
  * Ce que la valeur d'un nom qui évoque un secret dit d'elle : `{ verdict, pourquoi, classes, entropie }`.
  * `verdict` : `generee` (critique, bloquant), `a_verifier` (majeur), `aucun` (rien, `pourquoi` dit la raison).
- * L'ordre est celui de la décision : l'allure générée d'abord, pour qu'un préfixe de remplacement (`test_…`) n'absolve pas
- * une valeur tirée au hasard ; puis le remplacement ; puis le reste.
+ * L'ordre est celui de la décision : ce qui se voit faux d'abord (derrière un préfixe de clé : `sk-xxxx…`, `AKIAXXXX…`, `xoxb-your-bot-token`),
+ * puis l'allure générée, pour qu'un préfixe de remplacement (`test_…`) n'absolve pas une valeur tirée au hasard ; puis le remplacement ;
+ * puis le reste. `fichierDExemple` : dans un fichier d'exemple, ce reste ne dit rien (un mot seul y est un exemple).
  */
-export function jugerValeur(nom, valeur) {
+export function jugerValeur(nom, valeur, { fichierDExemple = false } = {}) {
   const v = valeur.slice(0, APERCU);
   if (v === '') return { verdict: 'aucun', pourquoi: 'vide' };
   if (EXEMPLE_AWS.test(v)) return { verdict: 'aucun', pourquoi: 'exemple' };
+  const corps = v.replace(PREFIXE_DE_CLE, '');
+  if (corps !== v && estCorpsDeLeurre(corps)) return { verdict: 'aucun', pourquoi: 'leurre' };
   if (estGeneree(v)) return { verdict: 'generee', pourquoi: 'generee', classes: classesDe(v), entropie: Number(entropieDe(v).toFixed(2)) };
   if (REMPLACEMENT.test(v) || MOT_DE_REMPLACEMENT.test(minusculesSeparees(v))) return { verdict: 'aucun', pourquoi: 'remplacement' };
   if (reprendLeNom(v, nom)) return { verdict: 'aucun', pourquoi: 'nom' };
@@ -289,6 +369,8 @@ export function jugerValeur(nom, valeur) {
   if ((motsDeLaValeur(v)?.length ?? 0) >= 3) return { verdict: 'aucun', pourquoi: 'phrase' };
   if (/\s/.test(v)) return { verdict: 'aucun', pourquoi: 'blancs' };
   if (v.length < LONGUEUR_MINIMALE) return { verdict: 'aucun', pourquoi: 'court' };
+  if (estLibelle(v)) return { verdict: 'aucun', pourquoi: 'libelle' };
+  if (fichierDExemple) return { verdict: 'aucun', pourquoi: 'fichier-exemple' };
   return { verdict: 'a_verifier', pourquoi: 'a_verifier', classes: classesDe(v), entropie: Number(entropieDe(v).toFixed(2)) };
 }
 
@@ -305,6 +387,49 @@ export function masquer(valeur) {
   const t = String(valeur);
   const visibles = t.length >= 20 ? 4 : t.length >= 13 ? 2 : 0;
   return visibles ? `${t.slice(0, visibles)}…${t.slice(-visibles)} (${t.length} caractères)` : `*** (${t.length} caractères)`;
+}
+
+/** Où finit le corps d'une clé privée que son en-tête annonce : à la fin de son pied (`-----END … -----`), ou du texte quand il n'y en a pas. */
+function finDUneClePrivee(texte, depuis) {
+  const pied = texte.indexOf('-----END', depuis);
+  if (pied === -1) return texte.length;
+  const fermeture = texte.indexOf('-----', pied + '-----END'.length);
+  return fermeture === -1 ? texte.length : fermeture + '-----'.length;
+}
+
+/**
+ * Le texte d'un constat sans aucun secret en entier. Chaque constat, de toute règle, le traverse à sa création (`constat()`) : un rapport
+ * n'est pas un deuxième endroit où un secret fuit (il est publié, et lu par qui n'a jamais eu le dépôt).
+ *  - Toute valeur au format d'un fournisseur, dans tout texte, devient `masquer(valeur)` (`ghp_…aB9z (40 caractères)`) ; une clé privée perd son corps ;
+ *    une clé publique par conception reste telle quelle : ce n'est pas un secret.
+ *  - Dans du code (`code` : l'extrait et la preuve d'un constat, non sa prose), la valeur d'un « nom = valeur » que la règle C-SECRET-01 signalerait (allure
+ *    générée ou « à vérifier ») devient `masquer(valeur)` aussi. Une valeur déjà masquée (qui porte `…`) n'est pas masquée une seconde fois.
+ * Le texte qui ne dit aucun secret est rendu tel quel, sans copie.
+ */
+export function masquerLesSecrets(texte, { code = true } = {}) {
+  if (typeof texte !== 'string' || texte.length < LONGUEUR_MINIMALE) return texte;
+  const intervalles = [];
+  for (const { format, valeur, index, lu } of formatsDans(texte)) {
+    if (format.publique || lu?.publique) continue;
+    if (format.id === 'pem') intervalles.push([index, finDUneClePrivee(texte, index + valeur.length), format.extrait(valeur)]);
+    else intervalles.push([index, index + valeur.length, masquer(valeur)]);
+  }
+  if (code && /[:=]/.test(texte) && MOTIF_DE_SECRET.test(texte)) {
+    for (const { nom, valeur, debutDeValeur } of affectationsDeConfiguration(texte)) {
+      if (valeur.includes('…') || formatsDans(valeur).length || jugerValeur(nom, valeur).verdict === 'aucun') continue;
+      intervalles.push([debutDeValeur, debutDeValeur + valeur.length, masquer(valeur)]);
+    }
+  }
+  if (!intervalles.length) return texte;
+  intervalles.sort((a, b) => a[0] - b[0]);
+  let sortie = '';
+  let position = 0;
+  for (const [debut, fin, rendu] of intervalles) {
+    if (debut < position) continue; // déjà couvert par ce qui précède
+    sortie += texte.slice(position, debut) + rendu;
+    position = fin;
+  }
+  return sortie + texte.slice(position);
 }
 
 const IMPACT = "Un secret dans un dépôt public est compromis dès sa publication, et le reste après suppression du fichier : il demeure dans l'historique Git. Pour un widget, un secret est en outre livré au navigateur de chaque agent.";
@@ -342,6 +467,8 @@ function constatDeNomValeur(f, ligne, forme, nomLu, valeur, jugement) {
   const generee = jugement.verdict === 'generee';
   // Un identifiant de plusieurs Mio ne se recopie pas dans chaque texte du constat : on en garde la fin, où est le mot qui a décidé.
   const nom = nomLu.length > LONGUEUR_DE_NOM ? `…${nomLu.slice(-LONGUEUR_DE_NOM)}` : nomLu;
+  // Le nom est un texte que le widget choisit (une clé d'objet peut porter des balises, des guillemets inversés, des retours à la ligne) : cité, il ne change rien d'un rapport ; honnête, il est dit tel quel.
+  const nomDit = citerSiBesoin(nom);
   const base = {
     regle: 'C-SECRET-01', axe: 'C', fichier: f.chemin, ligne, extrait: `${nom} = ${masquer(valeur)}`,
     preuve: { forme, nom, longueur: valeur.length, classes: jugement.classes, entropie: jugement.entropie },
@@ -349,15 +476,15 @@ function constatDeNomValeur(f, ligne, forme, nomLu, valeur, jugement) {
   if (generee) {
     return constat({
       ...base, severite: 'critique', bloquant: true, confiance: 'probable', referentiels: REFERENTIELS,
-      titre: `Secret potentiel versionné dans le dépôt (valeur d'allure générée dans « ${nom} »)`,
-      constat: `« ${nom} » reçoit un littéral de ${valeur.length} caractères qui a l'allure d'une valeur générée (${POURQUOI.generee(jugement)}).`,
+      titre: `Secret potentiel versionné dans le dépôt (valeur d'allure générée dans « ${nomDit} »)`,
+      constat: `« ${nomDit} » reçoit un littéral de ${valeur.length} caractères qui a l'allure d'une valeur générée (${POURQUOI.generee(jugement)}).`,
       impact: IMPACT, remediation: REMEDIATION,
     });
   }
   return constat({
     ...base, severite: 'majeur', confiance: 'a_verifier', referentiels: REFERENTIELS,
-    titre: `Valeur en dur dans « ${nom} » : un secret ou un exemple ? (à vérifier)`,
-    constat: `« ${nom} » reçoit un littéral de ${valeur.length} caractères qui n'a pas l'allure d'une valeur générée, ni d'un texte de remplacement (vide, YOUR_…, changeme…) : un mot de passe ou une clé choisis à la main le sont aussi.`,
+    titre: `Valeur en dur dans « ${nomDit} » : un secret ou un exemple ? (à vérifier)`,
+    constat: `« ${nomDit} » reçoit un littéral de ${valeur.length} caractères qui n'a pas l'allure d'une valeur générée, ni d'un texte de remplacement (vide, YOUR_…, changeme…) : un mot de passe ou une clé choisis à la main le sont aussi.`,
     impact: "Si la valeur est réelle, c'est un secret versionné : il est lisible par quiconque voit le dépôt et par le navigateur de chaque agent. Si c'est un exemple, il invite à copier le même schéma avec une vraie valeur.",
     remediation: "Retirer la valeur du dépôt. Un widget est du code exécuté côté client : il ne peut pas détenir de secret. S'il s'agit d'un exemple, l'écrire comme tel (`YOUR_API_KEY`).",
   });
@@ -380,6 +507,16 @@ export function estFichierDeConfiguration(f) {
   return EXTENSIONS_DE_CONFIGURATION.has(f.ext) || nom === '.env' || nom.startsWith('.env.') || nom === '.npmrc';
 }
 
+/**
+ * Un fichier de configuration qui montre à quoi ressemble une configuration sans la porter : `.env.example`, `.env.sample`, `.env.template`,
+ * `config.example.json`, `exemple.env`. Le mot (`example`, `sample`, `template`, `exemple`) est un mot entier du nom, séparé par un point, un
+ * tiret ou un souligné. Un mot seul y est un exemple : seuls un format à corps aléatoire et l'allure générée y comptent (`jugerValeur`).
+ * Seuls les fichiers lus ligne à ligne (`estFichierDeConfiguration`) sont jugés ainsi : le nom d'un fichier est le choix de son auteur, et un script
+ * nommé `config.example.js` que la page charge est du code que le navigateur exécute, dont un mot de passe faible se dit comme ailleurs.
+ */
+const MOT_DE_FICHIER_D_EXEMPLE = /(?:^|[._-])(?:example|sample|template|exemple)(?:[._-]|$)/;
+export const estFichierDExemple = (f) => MOT_DE_FICHIER_D_EXEMPLE.test(f.chemin.split('/').pop().toLowerCase());
+
 const CARACTERES_DE_NOM = new Uint8Array(128);
 for (const c of 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-') CARACTERES_DE_NOM[c.charCodeAt(0)] = 1;
 const estDeNom = (texte, i) => CARACTERES_DE_NOM[texte.charCodeAt(i)] === 1;
@@ -394,7 +531,7 @@ function sansPonctuationFinale(texte) {
 
 /**
  * Les « nom = valeur » d'un fichier de configuration (`KEY=valeur`, `"clé": "valeur"`, `clé: valeur`, `clé = "valeur"`) :
- * `{ index, nom, valeur }`, rendus un à un (un fichier de plusieurs Mio peut en porter des millions, et la règle n'a pas à les
+ * `{ index, nom, valeur, debutDeValeur }` (`debutDeValeur` : la place de la valeur dans le texte, après son guillemet), rendus un à un (un fichier de plusieurs Mio peut en porter des millions, et la règle n'a pas à les
  * garder). Chaque occurrence d'un mot de secret est prise comme centre d'un nom, que l'on étend à la main
  * de quelques dizaines de caractères de chaque côté, puis on lit l'affectation qui le suit : le travail de chaque
  * occurrence est borné, donc le total est linéaire, quelle que soit la longueur de la ligne (un JSON minifié tient sur une
@@ -419,19 +556,22 @@ export function* affectationsDeConfiguration(texte) {
     while (texte[i] === ' ' || texte[i] === '\t') i++;
     const guillemet = texte[i];
     let valeur;
+    let debutDeValeur;
     if (guillemet === '"' || guillemet === "'" || guillemet === '`') {
       let j = i + 1;
       while (j - i <= LONGUEUR_DE_VALEUR && texte[j] !== guillemet && texte[j] !== '\n') j++;
       if (texte[j] !== guillemet) continue;
       valeur = texte.slice(i + 1, j);
+      debutDeValeur = i + 1;
       dernierFin = j;
     } else {
       let j = i;
       while (j - i < LONGUEUR_DE_VALEUR && !estBlanc(texte, j)) j++;
       valeur = sansPonctuationFinale(texte.slice(i, j));
+      debutDeValeur = i;
       dernierFin = j;
     }
-    yield { index: m.index, nom, valeur };
+    yield { index: m.index, nom, valeur, debutDeValeur };
   }
 }
 
@@ -500,8 +640,9 @@ export function analyserSecrets(ctx) {
 
     // 2. « nom = valeur » : en configuration, ligne à ligne ; en JS, par l'arbre (plus bas).
     if (estFichierDeConfiguration(f)) {
+      const fichierDExemple = estFichierDExemple(f);
       for (const { index, nom, valeur } of affectationsDeConfiguration(f.contenu)) {
-        const jugement = jugerValeur(nom, valeur);
+        const jugement = jugerValeur(nom, valeur, { fichierDExemple });
         if (jugement.verdict === 'aucun' || formatsDans(valeur).length) continue; // rien à dire, ou dit par le format
         const ligne = numeroLigne(f.contenu, index);
         noter(f, ligne, index, constatDeNomValeur(f, ligne, 'configuration', nom, valeur, jugement));
@@ -513,6 +654,7 @@ export function analyserSecrets(ctx) {
   // Seuls les fichiers qui parlent d'un secret (un mot de secret dans le texte) sont lus par l'arbre : c'est le même résultat,
   // sans relire les autres. Les lectures refusées se disent là où les autres règles les disent (`releverDans`).
   pourChaqueUniteJs({ fichiers: aLire }, { releverDans: ctx }, ({ ast, walk, ligneDe, fichier, unite }) => {
+    // Un script se juge comme un autre, quel que soit son nom : la page le charge et le navigateur l'exécute (voir `estFichierDExemple`).
     for (const { noeud, nom, valeur } of affectationsDeCode(ast, walk)) {
       const jugement = jugerValeur(nom, valeur);
       if (jugement.verdict === 'aucun' || formatsDans(valeur).length) continue; // rien à dire, ou dit par le format

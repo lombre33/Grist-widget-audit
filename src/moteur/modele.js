@@ -5,6 +5,9 @@
  * dynamique, ne produit que des constats : c'est ce qui permet de scorer,
  * filtrer et exporter de façon homogène.
  */
+// La règle C-SECRET-01 sait reconnaître un secret ; chaque constat, de toute règle, passe par son masque (voir `constat`). Cet import est
+// circulaire (la règle importe `constat`) et sans danger : aucun des deux modules n'emploie l'autre à son chargement, seulement dans ses fonctions.
+import { masquerLesSecrets } from '../regles/c-secrets.js';
 
 /** Les six axes d'audit. Les lettres A à E reprennent la demande initiale. */
 export const AXES = {
@@ -64,6 +67,38 @@ function preuveBornee(preuve) {
 }
 
 /**
+ * Les textes d'une preuve, masqués des secrets (voir `masquerLesSecrets`) : un texte de D-RESEAU-01 ou de C-EXFIL-01 recopie l'adresse d'une requête, qui
+ * peut porter un jeton. Une preuve qui ne dit aucun secret est rendue telle quelle, sans copie ; sinon seuls les objets et listes qui portent un
+ * texte changé sont copiés, et la preuve de la règle n'est jamais modifiée. Une preuve est une donnée (objets simples, listes, textes) : ce qui n'en
+ * est pas (une classe, une fonction) est laissé. Elle se lit sur trente-deux niveaux : aucune règle n'en pose davantage, et ce qui serait plus
+ * profond (ou qui boucle sur lui-même) est remplacé par `[trop profond]`, jamais rendu tel quel : une donnée que la lecture n'a pas pu parcourir n'est
+ * pas une donnée qu'elle a pu masquer.
+ */
+const PROFONDEUR_DE_PREUVE = 32;
+const TROP_PROFOND = '[trop profond]';
+function preuveMasquee(valeur, profondeur = 0) {
+  if (typeof valeur === 'string') return masquerLesSecrets(valeur);
+  if (valeur === null || typeof valeur !== 'object') return valeur;
+  if (profondeur >= PROFONDEUR_DE_PREUVE) return TROP_PROFOND;
+  if (Array.isArray(valeur)) {
+    let copie = null;
+    for (let i = 0; i < valeur.length; i++) {
+      const v = preuveMasquee(valeur[i], profondeur + 1);
+      if (v !== valeur[i]) { copie ??= valeur.slice(); copie[i] = v; }
+    }
+    return copie ?? valeur;
+  }
+  const proto = Object.getPrototypeOf(valeur);
+  if (proto !== Object.prototype && proto !== null) return valeur;
+  let copie = null;
+  for (const cle of Object.keys(valeur)) {
+    const v = preuveMasquee(valeur[cle], profondeur + 1);
+    if (v !== valeur[cle]) { copie ??= { ...valeur }; copie[cle] = v; }
+  }
+  return copie ?? valeur;
+}
+
+/**
  * Un `extrait` est replié (blancs) puis coupé à 300 caractères, mais seul son
  * début est lu : replier tout un texte de plusieurs Mio (une ligne CSS
  * minifiée, une balise énorme) pour chacun de milliers de constats coûtait un
@@ -115,18 +150,19 @@ export function constat(c) {
     uid: `${c.regle}#${++compteur}`,
     regle: c.regle,
     axe: c.axe,
-    titre: c.titre,
+    titre: masquerLesSecrets(c.titre, { code: false }),
     severite: c.severite,
     bloquant: Boolean(c.bloquant),
-    constat: c.constat,
-    impact: c.impact ?? null,
-    remediation: c.remediation ?? null,
+    constat: masquerLesSecrets(c.constat, { code: false }),
+    impact: c.impact == null ? null : masquerLesSecrets(c.impact, { code: false }),
+    remediation: c.remediation == null ? null : masquerLesSecrets(c.remediation, { code: false }),
     fichier: c.fichier ?? null,
     ligne: c.ligne ?? null,
-    extrait: c.extrait ? String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT).replace(/\s+/g, ' ').slice(0, 300) : null,
+    // Masqué avant d'être coupé : un jeton que la coupe partagerait en deux ne serait plus reconnu, et sa moitié resterait dans le rapport.
+    extrait: c.extrait ? masquerLesSecrets(String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT)).replace(/\s+/g, ' ').slice(0, 300) : null,
     referentiels: c.referentiels ?? [],
     confiance: c.confiance ?? 'probable',
-    preuve: preuveBornee(c.preuve),
+    preuve: preuveMasquee(preuveBornee(c.preuve)), // bornée d'abord : les emplacements omis ne se parcourent pas
     mesurePartielle: Boolean(c.mesurePartielle),
     axesEmpeches,
   };

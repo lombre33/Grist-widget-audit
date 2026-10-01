@@ -85,7 +85,7 @@ const MUTANTS = [
   dansLigne(M, 'emplacementsOmis: emplacements.length', 'slice(0, MAX_EMPLACEMENTS)', 'slice(0, MAX_EMPLACEMENTS - 1)', 'emplacements : 499 gardés'),
   dansLigne(M, 'emplacementsOmis: emplacements.length', 'emplacements.length - MAX_EMPLACEMENTS', 'emplacements.length', 'emplacements : le nombre d\'omis est le total'),
   dansLigne(M, 'emplacementsOmis: emplacements.length', 'emplacements.length - MAX_EMPLACEMENTS', 'emplacements.length - MAX_EMPLACEMENTS + 1', 'emplacements : le nombre d\'omis est trop grand d\'un'),
-  dansLigne(M, 'preuve: preuveBornee(c.preuve),', 'preuveBornee(c.preuve)', 'c.preuve ?? null', 'emplacements : la borne n\'est pas appliquée'),
+  dansLigne(M, 'preuve: preuveMasquee(preuveBornee(c.preuve)),', 'preuveBornee(c.preuve)', 'c.preuve ?? null', 'emplacements : la borne n\'est pas appliquée'),
 ];
 
 const { partie, restants } = lireArguments(process.argv.slice(2));

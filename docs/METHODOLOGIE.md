@@ -95,31 +95,84 @@ règle cherche deux choses, et ne les mélange pas.
   autre rôle (`service_role` compris), une charge sans rôle ou qui n'est pas du
   JSON, un rôle qui n'est pas au premier niveau, le dernier de deux rôles qui
   se contredisent, laissent le jeton critique et bloquant. L'émetteur (`iss`) et
-  le rôle sont dits en clair dans la preuve (l'émetteur ne porte aucun secret ;
-  le widget le choisit, il est donc borné à cent caractères et rendu bien
-  formé), le jeton seul reste masqué. Les clés d'exemple de la documentation
-  d'AWS ne disent rien.
+  le rôle sont dits en clair dans la preuve, et l'émetteur aussi dans le texte
+  du constat (l'émetteur ne porte aucun secret ; le widget le choisit, il est
+  donc borné à cent caractères, rendu en Unicode bien formé et cité dans un
+  extrait de code, après que chaque caractère qu'on ne voit pas a été écrit en
+  clair : ni la page HTML, ni le Markdown, ni une console, ni le JSON ou le SARIF
+  ne le lisent comme du balisage, du Markdown ou une suite d'échappement ; le
+  nom d'une affectation qui porte un tel caractère est cité de la même façon, un
+  nom honnête est dit tel quel), le jeton seul reste masqué. Les clés d'exemple de la documentation
+  d'AWS ne disent rien. Un format dont la partie que le fournisseur tire au
+  hasard se voit fausse n'est pas une clé : `ghp_` suivi de trente-six `x`,
+  `xoxb-your-bot-token`, `AKIA` suivi de seize `X`, `sk_test_` suivi de `x`
+  (un seul caractère répété, une suite, ou des mots joints dont l'un est un mot
+  de remplacement d'une liste courte de quatre lettres au moins, `your`, `token`,
+  `here`, `example`, derrière le préfixe du fournisseur). La forme de mots seule
+  ne fait pas un leurre : une clé n'est ni un caractère répété ni une suite, et
+  des mots joints sans mot de remplacement n'en sont pas (la forme seule ne
+  suffisait pas : une clé AWS sur cent, un chiffre puis quinze majuscules, se
+  coupe en morceaux qui ont la forme de mots). Il passe avant le format et avant
+  l'allure générée. Deux limites, dites pour que personne n'en croie une levée.
+  Un leurre écrit avec d'autres mots, sans aucun mot de la liste, reste signalé,
+  un faux constat que le lecteur écarte d'un coup d'œil, plutôt qu'une clé qui
+  passe. Et une clé tirée au hasard dont l'un des morceaux est, par hasard, un
+  mot de remplacement entier (`TEST`, `here`), et dont les autres morceaux ont la
+  forme de mots, passe pour un leurre : elle n'est ni signalée ni masquée, une
+  absence. Le hasard le fait rarement, et `node
+  scripts/mesurer-leurres-au-hasard.mjs --tirages=4000000` le compte, par forme de
+  fournisseur, avec les mêmes tirages à chaque lancement ; son code de sortie est 1
+  au-delà d'un tirage sur cent mille. Le reste du préfixe (`fake_`, `stub-`,
+  `test_` suivis d'une valeur tirée au hasard) n'absout rien.
 - **Un « nom = valeur »** : un littéral affecté à un nom dont le **dernier mot**
   est un secret (`apiKey`, `DB_PASSWORD`, `authToken`, `mot_de_passe`), car
   `tokenUrl` ou `passwordLabel` disent ce que la valeur décrit, non ce
   qu'elle est. En JavaScript, par l'arbre (déclaration, affectation, propriété
   d'objet, champ de classe) ; dans un fichier de configuration (`.env`, JSON,
   YAML, INI, properties, TOML, `.npmrc`), ligne à ligne. La valeur se juge
-  dans cet ordre : d'allure générée (du hasard plutôt que des mots : assez de
+  dans cet ordre : ce qui se voit faux (le leurre ci-dessus, derrière le
+  préfixe d'une clé ou seul : trente-deux `0`, l'UUID nul, une suite) ne dit
+  rien ; d'allure générée (du hasard plutôt que des mots : assez de
   caractères, trois classes ou une entropie haute ; un hexadécimal long, un
-  UUID) c'est un critique bloquant ; une valeur de remplacement (`xxxx`,
-  `changeme`, `${VAR}`, `process.env…`, `example`), une phrase ou une adresse ne
-  dit rien ; le reste, assez long pour être autre chose qu'un mot, est « à
+  UUID qui n'est pas une suite) c'est un critique bloquant ; une valeur de
+  remplacement (`xxxx`, `changeme`, `${VAR}`, `process.env…`, `example`), une phrase
+  ou une adresse ne dit rien ; un libellé de traduction (`Passwort`,
+  `Contraseña`, `API-Schlüssel`, `パスワード` : un mot de langue à capitale
+  initiale ou un sigle, en lettres seules, sans chiffre ni symbole) ne dit rien,
+  c'est le champ d'un fichier de langue, non un mot de passe choisi ; dans un
+  fichier de configuration d'exemple (`.env.example`, `.env.sample`,
+  `.env.template`, `config.example.json`, `exemple.env` : le mot est un mot
+  entier du nom du fichier ; jamais un script, que la page charge et que le
+  navigateur exécute, quel que soit son nom) un mot seul ne dit rien non plus,
+  seuls un format et l'allure générée y comptent ; le reste, assez long pour être autre chose qu'un mot, est « à
   vérifier » : majeur, non bloquant, car ce peut être un exemple.
 
 Le constat ne reproduit jamais la valeur (quatre caractères de chaque côté au
 plus, moins pour une valeur courte), et redit au plus une fois ce qu'un littéral
 exécuté (`eval`, `Function`) reprend d'un fichier déjà lu.
 
+**Aucun texte d'un rapport ne redit un secret, quelle que soit la règle qui
+l'écrit.** Une règle qui recopie du code ou une adresse (C-EXFIL-01, C-XSS-01,
+C-XSS-03, D-RESEAU-01…) recopie aussi ce qu'ils portent : un jeton dans
+l'adresse d'un `fetch` se retrouvait en entier dans `rapport.json`, `rapport.html`
+et `rapport.md`. `constat()` masque donc, à la création de chaque constat de toute
+règle : tout format de fournisseur (titre, constat, impact, remédiation, extrait,
+preuve), le corps d'une clé privée, et, dans le code que montrent l'extrait et la
+preuve (non la prose), la valeur d'un « nom = valeur » que C-SECRET-01 signalerait.
+Le masque passe avant la coupe de l'extrait (un jeton que la coupe partagerait
+ne serait plus reconnu), une clé publique par conception et un leurre restent tels
+quels, et la preuve se lit sur trente-deux niveaux : ce qui est plus profond, ou
+qui boucle, est remplacé par `[trop profond]`, jamais rendu tel quel. Limites : le
+chemin du fichier (`fichier`) n'est pas masqué, et un jeton collé à un caractère de
+mot (sans frontière) n'est reconnu ni par la règle ni par le masque.
+
 **Limites assumées** : la règle dit ce qu'elle voit, elle ne prouve pas qu'un
 secret est valide ; un mot de passe choisi par une personne (`Soleil2024!`, sans
 allure de hasard) n'est dit que « à vérifier », sous un nom qui évoque un
-secret, et il n'est pas dit du tout sous huit caractères ; un fichier
+secret, et il n'est pas dit du tout sous huit caractères ; un mot de passe faible
+écrit comme un libellé (`Sunshine`, une capitale puis des lettres) n'est plus
+signalé, et un libellé écrit en minuscules (`wachtwoord`) ou en majuscules de
+six lettres et plus (`PASSWORT`) l'est encore ; un fichier
 TypeScript ou un code illisible n'est lu que par les formats de fournisseur
 (et, quand une page l'exécute, dit illisible par C-SURFACE-03) ; un format de
 fournisseur absent de la liste (clés Stripe secrètes, Anthropic, jetons Slack

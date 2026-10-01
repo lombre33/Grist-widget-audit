@@ -22,21 +22,54 @@
  *     les résultats : ce sont les mutants qui suivent.
  * Chronométrés à part, sur des entrées piégées de 16 Mio, au message du commit.
  *
- * Deux groupes d'essais : `tests/c-secret-bornes.test.mjs` est lancé le premier. La borne de 4 096 caractères de la lecture d'une
+ * Hors du lot aussi (v23 : le jugement des leurres, les fichiers d'exemple, les libellés, le masque), pour la même raison :
+ *   - `if (!texte.includes(format.indice)) continue;` de `formatsDans` : l'indice est un texte que toute valeur du format contient, le motif ne trouverait rien sans lui (le temps) ;
+ *   - `/[:=]/.test(texte) && ` et `&& MOTIF_DE_SECRET.test(texte)` de `masquerLesSecrets` : `affectationsDeConfiguration` ne trouve rien sans « : » ni « = », ni sans un
+ *     mot de secret (le temps) ;
+ *   - `if (!intervalles.length) return texte;` : la boucle qui suit recompose le même texte (une chaîne se compare par sa valeur) ;
+ *   - `texte.length < LONGUEUR_MINIMALE` remplacé par `false`, ou par un seuil de 9 à 14 : aucun texte de moins de quatorze caractères ne porte un secret (le plus court
+ *     est `token=` suivi de huit caractères) ; seul le seuil de quinze en est un, que `token=…` tue ;
+ *   - `+` de `SEPARATEURS` retiré : les morceaux vides que cela laisse sont écartés par le `filter` qui suit, les morceaux sont les mêmes.
+ * Ce que le temps seul juge, dans ce lot, est chronométré à part (`scripts/chronometrer-pieges.mjs`), sans budget dans la suite.
+ *
+ * Trois groupes d'essais, lancés dans cet ordre (le premier qui échoue tue le mutant) : `tests/c-secret-bornes.test.mjs`, les essais de la règle et du masque, puis les
+ * sorties du binaire. Les mutants de l'ordre du jugement (libellé « ordre du jugement ») se comptent à part : `node scripts/mutants-c-secret.mjs '^ordre du jugement'`.
+ *
+ * `tests/c-secret-bornes.test.mjs` est lancé le premier. La borne de 4 096 caractères de la lecture d'une
  * valeur est aussi ce qui l'arrête à la fin du texte : sans elle, un mutant ne s'arrêterait jamais sur les textes des autres essais
  * (tué par un délai). Les essais du premier groupe ferment chacun leurs valeurs, et tuent ces mutants par un essai.
  *
  * Usage : node scripts/mutants-c-secret.mjs [expression régulière sur le libellé] [--part=i/n] [--valider]
  */
-import { lireArguments, rejouerMutants, dansLigne } from './lib/rejouer-mutants.mjs';
+import fs from 'node:fs';
+import { lireArguments, rejouerMutants, dansLigne, DOSSIERS_COPIES } from './lib/rejouer-mutants.mjs';
 
 const S = 'src/regles/c-secrets.js';
-const BORNES = ['tests/c-secret-bornes.test.mjs'];
-const TESTS = ['tests/c-secret.test.mjs'];
+/** Le module qui cite un texte que le widget choisit (`citer`, `citerSiBesoin`), et le texte du constat qui s'en sert. */
+const W = 'src/moteur/texte-du-widget.js';
+const widget = (motif, de, par, libelle) => dansLigne(W, motif, de, par, libelle);
+const BORNES = ['tests/c-secret-bornes.test.mjs', 'tests/texte-du-widget.test.mjs'];
+const TESTS = ['tests/c-secret.test.mjs', 'tests/c-secret-leurres.test.mjs', 'tests/c-secret-hasard.test.mjs', 'tests/masque-des-secrets.test.mjs'];
+/** Les sorties du binaire : le masque vu de bout en bout, dans chaque format de rapport (le binaire est lancé pour de vrai). */
+const SORTIES_DU_BINAIRE = ['tests/masque-des-secrets-cli.test.mjs'];
 
 /** Une chaîne qui s'étend sur plusieurs lignes, ou qui n'est unique qu'avec sa voisine : `[fichier, chaîne d'origine, chaîne mutée, libellé]`. */
 const brut = (ancien, nouveau, libelle) => [S, ancien, nouveau, libelle];
 const dans = (motif, de, par, libelle, sans) => dansLigne(S, motif, de, par, libelle, sans);
+/** Le fichier qui fait de chaque constat un texte masqué (`constat()`, `preuveMasquee`). */
+const M = 'src/moteur/modele.js';
+const modele = (motif, de, par, libelle) => dansLigne(M, motif, de, par, libelle);
+const brutModele = (ancien, nouveau, libelle) => [M, ancien, nouveau, libelle];
+/** Les mots de remplacement, tels que la règle les écrit (une constante par famille de mots) : un mutant retire chacun. Une règle écrite autrement fait échouer le lot, non pas l'affaiblir sans le dire. */
+const LISTES_DE_LEURRES = [...fs.readFileSync(S, 'utf8').matchAll(/^const (LEURRES_\w+) = '([^']*)';$/gm)].map(([, constante, mots]) => [constante, mots.split(' ')]);
+if (LISTES_DE_LEURRES.length !== 4) throw new Error(`mots de remplacement : quatre listes attendues dans ${S}, ${LISTES_DE_LEURRES.length} trouvées`);
+/** Les lignes de `jugerValeur` et d'`estGeneree` dont l'ordre est la décision : deux lignes voisines dont on échange la place. */
+const LIGNE_LEURRE = "  if (corps !== v && estCorpsDeLeurre(corps)) return { verdict: 'aucun', pourquoi: 'leurre' };";
+const LIGNE_GENEREE = "  if (estGeneree(v)) return { verdict: 'generee', pourquoi: 'generee', classes: classesDe(v), entropie: Number(entropieDe(v).toFixed(2)) };";
+const LIGNE_REMPLACEMENT = "  if (REMPLACEMENT.test(v) || MOT_DE_REMPLACEMENT.test(minusculesSeparees(v))) return { verdict: 'aucun', pourquoi: 'remplacement' };";
+const LIGNE_SUITE = '  if (suiteManifeste(valeur)) return false;';
+const LIGNE_HEXADECIMAL = '  if (HEXADECIMAL.test(valeur) || UUID.test(valeur)) return true;';
+const permuter = (a, b) => [`${a}\n${b}`, `${b}\n${a}`];
 /** Une borne déplacée d'un cran de chaque côté : `{36}` devient `{35}` puis `{37}`. */
 const bornes = (motif, de, moins, plus, libelle) => [
   dans(motif, de, moins, `${libelle} : une de moins`),
@@ -55,12 +88,12 @@ const MUTANTS = [
   dans("id: 'aws',", '/EXAMPLE$/.test(t)', 'false', 'format AWS : la clé d\'exemple de la documentation est un secret'),
   dans("id: 'aws',", '/EXAMPLE$/.test(t)', 'true', 'format AWS : toute clé est un exemple'),
 
-  dans("id: 'github',", 'ghp_', 'ghq_', 'format GitHub : le préfixe n\'est plus celui d\'un jeton'),
+  dans("id: 'github',", '\\bghp_', '\\bghq_', 'format GitHub : le préfixe n\'est plus celui d\'un jeton'),
   ...bornes("id: 'github',", '{36}', '{35}', '{37}', 'format GitHub : longueur du jeton'),
   dans("id: 'github',", '\\bghp_', 'ghp_', 'format GitHub : plus de frontière avant le jeton'),
   dans("id: 'github',", '{36}\\b', '{36}', 'format GitHub : plus de frontière après le jeton'),
 
-  dans("id: 'github-pat',", 'github_pat_', 'github_pax_', 'format GitHub récent : le préfixe n\'est plus celui d\'un jeton'),
+  dans("id: 'github-pat',", '\\bgithub_pat_', '\\bgithub_pax_', 'format GitHub récent : le préfixe n\'est plus celui d\'un jeton'),
   ...bornes("id: 'github-pat',", '{50,', '{49,', '{51,', 'format GitHub récent : longueur minimale'),
   ...bornes("id: 'github-pat',", ',512}', ',511}', ',513}', 'format GitHub récent : longueur maximale'),
   dans("id: 'github-pat',", ',512}', ',}', 'format GitHub récent : plus de longueur maximale (la suite d\'une donnée fait échouer la règle)'),
@@ -91,7 +124,7 @@ const MUTANTS = [
   dans("id: 'slack',", '\\bxox', 'xox', 'format Slack : plus de frontière avant le jeton'),
 
   dans("id: 'pem',", 'PRIVATE KEY(', 'PRIVATE KEZ(', 'format PEM : l\'en-tête n\'est plus celui d\'une clé privée'),
-  dans("id: 'pem',", '-----BEGIN', '---BEGIN', 'format PEM : le début de l\'en-tête perd des tirets'),
+  dans("id: 'pem',", '/-----BEGIN', '/---BEGIN', 'format PEM : le début de l\'en-tête perd des tirets'),
   dans("id: 'pem',", '(?: BLOCK)?-----', '(?: BLOCK)?---', 'format PEM : la fin de l\'en-tête perd des tirets'),
   dans("id: 'pem',", '(?: BLOCK)?', '', 'format PEM : PGP PRIVATE KEY BLOCK n\'est plus reconnu'),
   ...['RSA', 'EC', 'DSA', 'OPENSSH', 'ENCRYPTED', 'PGP'].map((t) => dans("id: 'pem',", '(?:RSA|EC|DSA|OPENSSH|ENCRYPTED|PGP)', `(?:${['RSA', 'EC', 'DSA', 'OPENSSH', 'ENCRYPTED', 'PGP'].filter((x) => x !== t).join('|')})`, `format PEM : ${t} PRIVATE KEY n'est plus reconnu`)),
@@ -127,7 +160,7 @@ const MUTANTS = [
   brut("const DEBUT_DE_SUITE = '(?<![A-Za-z0-9_-])';", "const DEBUT_DE_SUITE = '(?<![A-Za-z0-9-])';", 'format JWT : le souligné ne fait plus partie de la suite qui précède'),
   brut("const DEBUT_DE_SUITE = '(?<![A-Za-z0-9_-])';", "const DEBUT_DE_SUITE = '(?<![A-Za-z_-])';", 'format JWT : un chiffre ne fait plus partie de la suite qui précède'),
 
-  dans("id: 'google',", 'AIza', 'AIzb', 'format Google : le préfixe n\'est plus celui d\'une clé'),
+  dans("id: 'google',", '\\bAIza', '\\bAIzb', 'format Google : le préfixe n\'est plus celui d\'une clé'),
   ...bornes("id: 'google',", '{35}', '{34}', '{36}', 'format Google : longueur de la clé'),
   dans("id: 'google',", '\\bAIza', 'AIza', 'format Google : plus de frontière avant la clé'),
   dans("id: 'google',", '{35}\\b', '{35}', 'format Google : plus de frontière après la clé'),
@@ -170,8 +203,8 @@ const MUTANTS = [
   dans("typeof charge.iss === 'string' && charge.iss !== ''", "typeof charge.iss === 'string' && charge.iss !== ''", 'charge.iss !== undefined', 'JWT de rôle anonyme : un émetteur qui n\'est pas un texte est dit'),
   dans("typeof charge.iss === 'string' && charge.iss !== ''", " && charge.iss !== ''", '', 'JWT de rôle anonyme : un émetteur vide est dit'),
   dans("typeof charge.iss === 'string' && charge.iss !== ''", "typeof charge.iss === 'string' && ", '', 'JWT de rôle anonyme : l\'absence d\'émetteur est dite comme un émetteur'),
-  dans('emetteur: emetteurDit(charge.iss)', 'emetteurDit(charge.iss)', 'masquer(charge.iss)', 'JWT de rôle anonyme : l\'émetteur est masqué comme le jeton'),
-  dans('emetteur: emetteurDit(charge.iss)', 'emetteurDit(charge.iss)', 'charge.iss', 'JWT de rôle anonyme : l\'émetteur n\'est pas borné'),
+  dans('const emetteur = typeof charge.iss', 'emetteurDit(charge.iss)', 'masquer(charge.iss)', 'JWT de rôle anonyme : l\'émetteur est masqué comme le jeton'),
+  dans('const emetteur = typeof charge.iss', 'emetteurDit(charge.iss)', 'charge.iss', 'JWT de rôle anonyme : l\'émetteur n\'est pas borné'),
   dans('const LONGUEUR_D_EMETTEUR = 100;', '100', '99', 'émetteur : coupé un caractère trop tôt'),
   dans('const LONGUEUR_D_EMETTEUR = 100;', '100', '101', 'émetteur : coupé un caractère trop tard'),
   dans('const emetteurDit = ', 'iss.length > LONGUEUR_D_EMETTEUR ? ', 'true ? ', 'émetteur : tout émetteur est suivi de « … »'),
@@ -285,13 +318,13 @@ const MUTANTS = [
   dans('if (mots.some((m) => m.length >= 3', '/[aeiouy]/i', '/[aeiouy]/', 'mots de la valeur : une voyelle majuscule n\'est pas une voyelle'),
   dans('if (mots.some((m) => m.length >= 3', '!/[aeiouy]/i', '/[aeiouy]/i', 'mots de la valeur : un mot n\'est pas un mot s\'il a une voyelle'),
 
-  dans('if (/^(.)\\1+$/.test(valeur)) return true;', 'return true', 'return false', 'suite manifeste : un seul caractère répété n\'est pas une suite'),
-  dans('if (Math.abs(valeur.charCodeAt(i)', '=== 1', '<= 1', 'suite manifeste : un caractère répété est un pas de la suite'),
-  dans('if (Math.abs(valeur.charCodeAt(i)', '=== 1', '=== 2', 'suite manifeste : deux caractères qui se suivent de deux en deux font une suite'),
-  dans('return pas / (valeur.length - 1)', '>= 0.8', '> 0.8', 'suite manifeste : quatre pas sur cinq ne font pas une suite'),
-  dans('return pas / (valeur.length - 1)', '>= 0.8', '>= 0.7', 'suite manifeste : sept pas sur dix font une suite'),
-  dans('return pas / (valeur.length - 1)', '>= 0.8', '>= 0.9', 'suite manifeste : neuf pas sur dix sont exigés'),
-  dans('return pas / (valeur.length - 1)', 'valeur.length - 1', 'valeur.length', 'suite manifeste : le dénominateur compte un pas de trop'),
+  dans('if (morceaux.every((m) => /^(.)\\1+$/.test(m))) return true;', 'return true', 'return false', 'suite manifeste : un seul caractère répété n\'est pas une suite'),
+  dans('if (Math.abs(noyau.charCodeAt(i)', '=== 1', '<= 1', 'suite manifeste : un caractère répété est un pas de la suite'),
+  dans('if (Math.abs(noyau.charCodeAt(i)', '=== 1', '=== 2', 'suite manifeste : deux caractères qui se suivent de deux en deux font une suite'),
+  dans('return pas / (noyau.length - 1)', '>= 0.8', '> 0.8', 'suite manifeste : quatre pas sur cinq ne font pas une suite'),
+  dans('return pas / (noyau.length - 1)', '>= 0.8', '>= 0.7', 'suite manifeste : sept pas sur dix font une suite'),
+  dans('return pas / (noyau.length - 1)', '>= 0.8', '>= 0.9', 'suite manifeste : neuf pas sur dix sont exigés'),
+  dans('return pas / (noyau.length - 1)', 'noyau.length - 1', 'noyau.length', 'suite manifeste : le dénominateur compte un pas de trop'),
 
   dans('const ADRESSE =', ':\\/\\/', ':', 'adresse : un mot suivi de deux-points est une adresse'),
   dans('const ADRESSE =', '/i;', '/;', 'adresse : le schéma d\'une adresse est en minuscules'),
@@ -312,7 +345,7 @@ const MUTANTS = [
   dans('if (valeur.length < LONGUEUR_GENEREE', ' || /\\s/.test(valeur)', '', 'allure générée : une valeur avec des blancs peut être générée'),
   dans('if (ADRESSE.test(valeur) || CHEMIN.test(valeur)', 'ADRESSE.test(valeur) || ', '', 'allure générée : une adresse peut être générée'),
   dans('if (ADRESSE.test(valeur) || CHEMIN.test(valeur)', 'CHEMIN.test(valeur) || ', '', 'allure générée : un chemin peut être généré'),
-  dans('if (ADRESSE.test(valeur) || CHEMIN.test(valeur)', 'suiteManifeste(valeur) || ', '', 'allure générée : une suite manifeste peut être générée'),
+  dans('if (suiteManifeste(valeur)) return false;', 'suiteManifeste(valeur)', 'false', 'allure générée : une suite manifeste peut être générée'),
   dans('if (ADRESSE.test(valeur) || CHEMIN.test(valeur)', ' || motsDeLaValeur(valeur)', '', 'allure générée : des mots joints peuvent être générés'),
   dans('return classesDe(valeur) >= CLASSES_GENEREES', '>= CLASSES_GENEREES', '> CLASSES_GENEREES', 'allure générée : trois classes exactement ne suffisent pas'),
   dans('return classesDe(valeur) >= CLASSES_GENEREES', '>= ENTROPIE_GENEREE', '> ENTROPIE_GENEREE', 'allure générée : quatre bits exactement ne suffisent pas'),
@@ -510,15 +543,15 @@ const MUTANTS = [
   dans('if (texte[j] !== guillemet) continue;', 'texte[j] !== guillemet', 'false', 'lecture de configuration : une valeur jamais fermée est lue'),
   dans('valeur = texte.slice(i + 1, j);', 'i + 1', 'i', 'lecture de configuration : le guillemet ouvrant fait partie de la valeur'),
   dans('valeur = texte.slice(i + 1, j);', 'texte.slice(i + 1, j)', 'texte.slice(i + 1, j + 1)', 'lecture de configuration : le guillemet fermant fait partie de la valeur'),
-  brut("      valeur = texte.slice(i + 1, j);\n      dernierFin = j;", "      valeur = texte.slice(i + 1, j);", 'lecture de configuration : après une valeur entre guillemets, le texte de la valeur est relu comme une configuration'),
+  brut("      debutDeValeur = i + 1;\n      dernierFin = j;", "      debutDeValeur = i + 1;", 'lecture de configuration : après une valeur entre guillemets, le texte de la valeur est relu comme une configuration'),
   dans('while (j - i < LONGUEUR_DE_VALEUR && !estBlanc(texte, j)) j++;', 'j - i < LONGUEUR_DE_VALEUR', 'j - i <= LONGUEUR_DE_VALEUR', 'lecture de configuration : une valeur sans guillemets est lue sur 4 097 caractères'),
   dans('while (j - i < LONGUEUR_DE_VALEUR && !estBlanc(texte, j)) j++;', 'j - i < LONGUEUR_DE_VALEUR', 'j - i < LONGUEUR_DE_VALEUR - 1', 'lecture de configuration : une valeur sans guillemets est lue sur 4 095 caractères'),
   dans('while (j - i < LONGUEUR_DE_VALEUR && !estBlanc(texte, j)) j++;', 'j - i < LONGUEUR_DE_VALEUR && ', '', 'lecture de configuration : une valeur sans guillemets se lit sans borne'),
   dans('while (j - i < LONGUEUR_DE_VALEUR && !estBlanc(texte, j)) j++;', ' && !estBlanc(texte, j)', '', 'lecture de configuration : une valeur sans guillemets ne s\'arrête pas au blanc'),
   dans('valeur = sansPonctuationFinale(texte.slice(i, j));', 'sansPonctuationFinale(texte.slice(i, j))', 'texte.slice(i, j)', 'lecture de configuration : la ponctuation qui suit une valeur en fait partie'),
-  brut("      valeur = sansPonctuationFinale(texte.slice(i, j));\n      dernierFin = j;", "      valeur = sansPonctuationFinale(texte.slice(i, j));", 'lecture de configuration : après une valeur sans guillemets, le texte de la valeur est relu comme une configuration'),
-  dans('yield { index: m.index, nom, valeur };', 'index: m.index', 'index: 0', 'lecture de configuration : toute valeur est à l\'index 0'),
-  dans('yield { index: m.index, nom, valeur };', 'index: m.index', 'index: fin', 'lecture de configuration : la valeur est à la fin du nom'),
+  brut("      debutDeValeur = i;\n      dernierFin = j;", "      debutDeValeur = i;", 'lecture de configuration : après une valeur sans guillemets, le texte de la valeur est relu comme une configuration'),
+  dans('yield { index: m.index, nom, valeur, debutDeValeur };', 'index: m.index', 'index: 0', 'lecture de configuration : toute valeur est à l\'index 0'),
+  dans('yield { index: m.index, nom, valeur, debutDeValeur };', 'index: m.index', 'index: fin', 'lecture de configuration : la valeur est à la fin du nom'),
 
   // L'arbre d'un fichier JavaScript : chaque forme d'affectation --------------------------------------------------------------------------
   dans("if (!nomEvoqueUnSecret(nom)) return;", '!nomEvoqueUnSecret(nom)', 'false', 'arbre : tout nom qui reçoit un littéral est lu'),
@@ -565,8 +598,8 @@ const MUTANTS = [
   dans('noter(f, numeroLigne(f.contenu, trouve.index), trouve.index,', 'trouve.index, constatDeFormat', '0, constatDeFormat', 'règle : les secrets de fournisseur n\'ont pas de place dans la ligne'),
   dans('if (estFichierDeConfiguration(f)) {', 'estFichierDeConfiguration(f)', 'false', 'règle : aucun fichier n\'est lu comme une configuration'),
   dans('if (estFichierDeConfiguration(f)) {', 'estFichierDeConfiguration(f)', 'true', 'règle : tout fichier est lu comme une configuration'),
-  brut("        const jugement = jugerValeur(nom, valeur);\n        if (jugement.verdict === 'aucun' || formatsDans(valeur).length) continue; // rien à dire, ou dit par le format", "        const jugement = jugerValeur(nom, valeur);\n        if (formatsDans(valeur).length) continue; // rien à dire, ou dit par le format", 'règle : en configuration, une valeur dont il n\'y a rien à dire est un constat'),
-  brut("        const jugement = jugerValeur(nom, valeur);\n        if (jugement.verdict === 'aucun' || formatsDans(valeur).length) continue; // rien à dire, ou dit par le format", "        const jugement = jugerValeur(nom, valeur);\n        if (jugement.verdict === 'aucun') continue; // rien à dire, ou dit par le format", 'règle : en configuration, une valeur au format d\'un fournisseur est dite deux fois'),
+  brut("        const jugement = jugerValeur(nom, valeur, { fichierDExemple });\n        if (jugement.verdict === 'aucun' || formatsDans(valeur).length) continue; // rien à dire, ou dit par le format", "        const jugement = jugerValeur(nom, valeur, { fichierDExemple });\n        if (formatsDans(valeur).length) continue; // rien à dire, ou dit par le format", 'règle : en configuration, une valeur dont il n\'y a rien à dire est un constat'),
+  brut("        const jugement = jugerValeur(nom, valeur, { fichierDExemple });\n        if (jugement.verdict === 'aucun' || formatsDans(valeur).length) continue; // rien à dire, ou dit par le format", "        const jugement = jugerValeur(nom, valeur, { fichierDExemple });\n        if (jugement.verdict === 'aucun') continue; // rien à dire, ou dit par le format", 'règle : en configuration, une valeur au format d\'un fournisseur est dite deux fois'),
   brut("      const jugement = jugerValeur(nom, valeur);\n      if (jugement.verdict === 'aucun' || formatsDans(valeur).length) continue; // rien à dire, ou dit par le format", "      const jugement = jugerValeur(nom, valeur);\n      if (formatsDans(valeur).length) continue; // rien à dire, ou dit par le format", 'règle : dans l\'arbre, une valeur dont il n\'y a rien à dire est un constat'),
   brut("      const jugement = jugerValeur(nom, valeur);\n      if (jugement.verdict === 'aucun' || formatsDans(valeur).length) continue; // rien à dire, ou dit par le format", "      const jugement = jugerValeur(nom, valeur);\n      if (jugement.verdict === 'aucun') continue; // rien à dire, ou dit par le format", 'règle : dans l\'arbre, une valeur au format d\'un fournisseur est dite deux fois'),
   dans("noter(f, ligne, index, constatDeNomValeur(f, ligne, 'configuration'", "'configuration'", "'code'", 'règle : une valeur lue en configuration est dite lue dans le code'),
@@ -586,7 +619,258 @@ const MUTANTS = [
   dans('liste.sort((a, b) =>', 'a.ligne - b.ligne || ', '', 'règle : les constats d\'un fichier sortent dans l\'ordre du décalage seul'),
   dans('liste.sort((a, b) =>', 'liste.sort((a, b) => a.ligne - b.ligne || a.decalage - b.decalage);', '', 'règle : les constats d\'un fichier sortent dans l\'ordre où ils ont été trouvés'),
   dans('if (!liste) continue;', '!liste', 'false', 'règle : un fichier sans trouvaille fait échouer l\'audit'),
+
+  // ===== Ce qui se voit faux n'est jamais un secret (v23) : l'ordre du jugement, les préfixes de clé, les libellés, les fichiers d'exemple, le masque =====
+
+  // L'ordre du jugement. Chacun de ces mutants ne change que l'ordre de deux tests, à texte égal : ils se comptent à part (`node scripts/mutants-c-secret.mjs '^ordre du jugement'`),
+  // et chacun est tué par un essai, non par un délai.
+  brut(...permuter(LIGNE_LEURRE, LIGNE_GENEREE), 'ordre du jugement : l\'allure générée avant le leurre (des mots joints derrière un préfixe de clé ont, à trois classes de caractères, l\'allure d\'une clé)'),
+  brut(...permuter(LIGNE_GENEREE, LIGNE_REMPLACEMENT), 'ordre du jugement : le remplacement avant l\'allure générée (fake_ ou test_ suivi d\'une valeur tirée au hasard ne serait plus un secret)'),
+  brut(...permuter(LIGNE_SUITE, LIGNE_HEXADECIMAL), 'ordre du jugement : l\'hexadécimal avant la suite manifeste (trente-deux 0, trente-deux f et l\'UUID nul auraient l\'allure d\'une clé)'),
+  dans('if (format.aleatoire && estCorpsDeLeurre(', "if (format.aleatoire && estCorpsDeLeurre(m[0].replace(PREFIXE_DE_CLE, ''))) continue;", '', 'ordre du jugement : le format avant le leurre (ghp_ suivi de trente-six x serait un secret critique bloquant)'),
+  brut("  if (v === '') return { verdict: 'aucun', pourquoi: 'vide' };\n", "  if (v === '') return { verdict: 'aucun', pourquoi: 'vide' };\n  if (fichierDExemple) return { verdict: 'aucun', pourquoi: 'fichier-exemple' };\n", 'ordre du jugement : le fichier d\'exemple avant l\'allure générée (une valeur tirée au hasard d\'un .env.example ne serait plus un secret)'),
+
+  // Le leurre derrière le préfixe d'une clé -----------------------------------------------------------------------------------------------
+  dans("const corps = v.replace(PREFIXE_DE_CLE, '');", "v.replace(PREFIXE_DE_CLE, '')", 'v', 'leurre : le préfixe d\'une clé n\'est jamais retiré avant de chercher un leurre'),
+  dans('if (corps !== v && estCorpsDeLeurre(corps))', 'corps !== v && ', '', 'leurre : une valeur sans préfixe de clé est jugée leurre sur sa forme entière'),
+  dans('if (corps !== v && estCorpsDeLeurre(corps))', 'estCorpsDeLeurre(corps)', 'false', 'leurre : aucun leurre n\'est reconnu derrière un préfixe de clé'),
+  dans('if (corps !== v && estCorpsDeLeurre(corps))', 'corps !== v', 'corps === v', 'leurre : un leurre n\'est reconnu que sans préfixe de clé'),
+  dans('if (corps !== v && estCorpsDeLeurre(corps))', "pourquoi: 'leurre'", "pourquoi: 'suite'", 'leurre : un leurre est dit suite'),
+  dans('if (corps !== v && estCorpsDeLeurre(corps))', "verdict: 'aucun'", "verdict: 'a_verifier'", 'leurre : un leurre est « à vérifier »'),
+  dans('if (format.aleatoire && estCorpsDeLeurre(', 'format.aleatoire && ', '', 'format : le leurre est cherché dans tout format, même dans l\'en-tête d\'une clé privée, qui se lit comme des mots'),
+  dans('if (format.aleatoire && estCorpsDeLeurre(', "m[0].replace(PREFIXE_DE_CLE, '')", 'm[0]', 'format : le préfixe de la clé n\'est pas retiré avant de chercher un leurre'),
+  dans('if (format.aleatoire && estCorpsDeLeurre(', 'estCorpsDeLeurre(', '!estCorpsDeLeurre(', 'format : seule une valeur qui n\'est pas un leurre est écartée'),
+  ...[['aws', 'AKIA'], ['github', 'ghp_'], ['github-pat', 'github_pat_'], ['openai', 'sk-'], ['slack', 'xox'], ['pem', '-----BEGIN'], ['jwt', 'eyJ'], ['google', 'AIza'], ['stripe', 'pk_'], ['mapbox', 'pk.eyJ']]
+    .map(([id, indice]) => dans(`id: '${id}',`, `indice: '${indice}'`, `indice: '${indice}#'`, `format ${id} : l'indice n'est pas dans la valeur, le format n'est jamais lu`)),
+  ...['aws', 'github', 'github-pat', 'openai', 'slack', 'google', 'stripe']
+    .map((id) => dans(`id: '${id}',`, 'aleatoire: true, ', '', `format ${id} : la partie tirée au hasard n'est pas jugée (un leurre de ce format est une clé)`)),
+  dans("id: 'pem',", "indice: '-----BEGIN',", "indice: '-----BEGIN', aleatoire: true,", 'format pem : l\'en-tête d\'une clé privée est jugé comme une partie tirée au hasard (il se lit comme des mots)'),
+
+  // Les préfixes de clé que l'outil connaît : chaque branche, chaque lettre, chaque variante ---------------------------------------------
+  ...[['AKIA|', 'AKIA'], ['AIza|', 'AIza'], ['gh[pousr]_|', 'gh[pousr]_'], ['github_pat_|', 'github_pat_'], ['xox[baprs]-|', 'xox[baprs]-'], ['xapp-(?:\\d+-)?|', 'xapp-'],
+    ['sk-(?:(?:proj|svcacct|admin)-|ant-(?:api\\d+-)?)?|', 'sk-'], ['|[sr]k_(?:live|test)_', 'sk_ et rk_'], ['|pk_(?:live|test)_', 'pk_']]
+    .map(([de, nom]) => dans('const PREFIXE_DE_CLE =', de, '', `préfixe de clé : ${nom} n'est plus le début d'une clé`)),
+  ...['p', 'o', 'u', 's', 'r'].map((c) => dans('const PREFIXE_DE_CLE =', 'gh[pousr]_', `gh[${'pousr'.replace(c, '')}]_`, `préfixe de clé : gh${c}_ n'est plus le début d'un jeton GitHub`)),
+  ...['b', 'a', 'p', 'r', 's'].map((c) => dans('const PREFIXE_DE_CLE =', 'xox[baprs]-', `xox[${'baprs'.replace(c, '')}]-`, `préfixe de clé : xox${c}- n'est plus le début d'un jeton Slack`)),
+  dans('const PREFIXE_DE_CLE =', '(?:\\d+-)?', '', 'préfixe de clé : xapp-1- perd son numéro d\'application'),
+  dans('const PREFIXE_DE_CLE =', '[sr]k_(?:live|test)_', '[s]k_(?:live|test)_', 'préfixe de clé : rk_ n\'est plus le début d\'une clé restreinte Stripe'),
+  dans('const PREFIXE_DE_CLE =', '[sr]k_(?:live|test)_', '[r]k_(?:live|test)_', 'préfixe de clé : sk_ n\'est plus le début d\'une clé secrète Stripe'),
+  dans('const PREFIXE_DE_CLE =', '[sr]k_(?:live|test)_', '[sr]k_(?:live)_', 'préfixe de clé : sk_test_ et rk_test_ ne sont plus le début d\'une clé Stripe'),
+  dans('const PREFIXE_DE_CLE =', '[sr]k_(?:live|test)_', '[sr]k_(?:test)_', 'préfixe de clé : sk_live_ et rk_live_ ne sont plus le début d\'une clé Stripe'),
+  dans('const PREFIXE_DE_CLE =', 'pk_(?:live|test)_', 'pk_(?:live)_', 'préfixe de clé : pk_test_ n\'est plus le début d\'une clé Stripe'),
+  dans('const PREFIXE_DE_CLE =', 'pk_(?:live|test)_', 'pk_(?:test)_', 'préfixe de clé : pk_live_ n\'est plus le début d\'une clé Stripe'),
+  dans('const PREFIXE_DE_CLE =', 'proj|svcacct|admin', 'svcacct|admin', 'préfixe de clé : sk-proj- n\'est plus le début d\'une clé OpenAI'),
+  dans('const PREFIXE_DE_CLE =', 'proj|svcacct|admin', 'proj|admin', 'préfixe de clé : sk-svcacct- n\'est plus le début d\'une clé OpenAI'),
+  dans('const PREFIXE_DE_CLE =', 'proj|svcacct|admin', 'proj|svcacct', 'préfixe de clé : sk-admin- n\'est plus le début d\'une clé OpenAI'),
+  dans('const PREFIXE_DE_CLE =', '|ant-(?:api\\d+-)?', '', 'préfixe de clé : sk-ant- n\'est plus le début d\'une clé Anthropic'),
+  dans('const PREFIXE_DE_CLE =', '(?:api\\d+-)?', '', 'préfixe de clé : sk-ant-api03- perd son type de clé'),
+  dans('const PREFIXE_DE_CLE =', ')?|[sr]k_', ')|[sr]k_', 'préfixe de clé : sk- seul n\'est plus le début d\'une clé OpenAI'),
+  dans('const PREFIXE_DE_CLE =', '/^(?:', '/(?:', 'préfixe de clé : un préfixe est retiré n\'importe où dans la valeur, non à son début'),
+
+  // Un leurre : un caractère répété, une suite, des mots joints --------------------------------------------------------------------------
+  dans('if (corps.length < LONGUEUR_MINIMALE) return false;', 'corps.length < LONGUEUR_MINIMALE', 'false', 'leurre : une partie de moins de huit caractères est un leurre'),
+  dans('if (corps.length < LONGUEUR_MINIMALE) return false;', 'corps.length < LONGUEUR_MINIMALE', 'corps.length <= LONGUEUR_MINIMALE', 'leurre : huit caractères ne suffisent pas à un leurre'),
+  dans('if (suiteManifeste(corps)) return true;', 'if (suiteManifeste(corps)) return true;', '', 'leurre : ni un caractère répété ni une suite ne sont un leurre'),
+  dans('return motsDeLaValeur(corps)?.some(', 'return motsDeLaValeur(corps)?.some((mot) => MOTS_DE_LEURRE.has(mot.toLowerCase())) ?? false;', 'return false;', 'leurre : des mots joints ne sont pas un leurre'),
+  dans('return motsDeLaValeur(corps)?.some(', '?? false', '?? true', 'leurre : tout ce qui n\'a pas la forme de mots joints est un leurre'),
+  dans('return motsDeLaValeur(corps)?.some(', '?.some((mot) => MOTS_DE_LEURRE.has(mot.toLowerCase())) ?? false', ' !== null', 'leurre : des mots joints suffisent, sans mot de remplacement (une clé AWS sur cent, tirée au hasard, a cette forme)'),
+  dans('return motsDeLaValeur(corps)?.some(', '.some(', '.every(', 'leurre : tous les mots joints doivent être des mots de remplacement'),
+  dans('return motsDeLaValeur(corps)?.some(', 'mot.toLowerCase()', 'mot', 'leurre : un mot de remplacement s\'écrit en minuscules'),
+  dans('return motsDeLaValeur(corps)?.some(', 'MOTS_DE_LEURRE.has(mot.toLowerCase())', '[...MOTS_DE_LEURRE].some((m) => mot.toLowerCase().includes(m))', 'leurre : un mot qui contient un mot de remplacement en est un'),
+  dans('return motsDeLaValeur(corps)?.some(', 'MOTS_DE_LEURRE.has(mot.toLowerCase())', '!MOTS_DE_LEURRE.has(mot.toLowerCase())', 'leurre : un mot qui n\'est pas un mot de remplacement suffit'),
+  // La limite que dit le dernier essai de `tests/c-secret-hasard.test.mjs` : un morceau qui est un mot de remplacement suffit, quels que soient ses voisins.
+  dans('return motsDeLaValeur(corps)?.some(', 'MOTS_DE_LEURRE.has(mot.toLowerCase())', 'MOTS_DE_LEURRE.has(mot.toLowerCase()) && /[-_. ]/.test(corps)', 'limite : un mot de remplacement ne compte que si un séparateur (-, _, un point, un blanc) coupe la valeur (une clé tirée au hasard dont un morceau est TEST ne passerait plus pour un leurre)'),
+  // La liste des mots de remplacement : chaque mot, chaque famille, et les mots de trois lettres qui n'en font pas partie.
+  ...LISTES_DE_LEURRES.flatMap(([constante, mots]) => mots.map((mot) => dans(`const ${constante} = `, `'${mots.join(' ')}'`, `'${mots.filter((m) => m !== mot).join(' ')}'`, `mot de remplacement : « ${mot} » n'en est plus un`))),
+  ...['${LEURRES_EN} ', ' ${LEURRES_DU_SECRET}', ' ${LEURRES_FR}', ' ${LEURRES_AUTRES}']
+    .map((famille) => dans('export const MOTS_DE_LEURRE =', famille, famille.startsWith(' ') ? ' ' : '', `mot de remplacement : la famille ${famille.trim().replace(/[${}]/g, '')} est retirée de la liste`)),
+  dans('const LEURRES_EN = ', "'your ", "'foo bar baz your ", 'mot de remplacement : foo, bar et baz en font partie (trois lettres : un morceau d\'une clé tirée au hasard en est un trop souvent)'),
+  dans('const LEURRES_DU_SECRET = ', "'token ", "'key api bot token ", 'mot de remplacement : key, api et bot en font partie (trois lettres : un morceau d\'une clé tirée au hasard en est un trop souvent)'),
+  dans('const morceaux = valeur.split(SEPARATEURS)', ".filter((m) => m !== '')", '', 'suite manifeste : un séparateur en tête ou en queue fait un morceau vide, qui n\'est pas un caractère répété'),
+  dans('const morceaux = valeur.split(SEPARATEURS)', 'valeur.split(SEPARATEURS)', 'valeur.split(/[-_.]+/)', 'suite manifeste : un blanc ne sépare pas les morceaux'),
+  dans('if (morceaux.every((m) =>', 'morceaux.every(', 'morceaux.some(', 'suite manifeste : un seul morceau répété suffit'),
+  dans('if (morceaux.every((m) =>', '\\1+$', '\\1*$', 'suite manifeste : un morceau d\'un seul caractère est un caractère répété'),
+  dans('const SEPARATEURS =', '-_.', '_.', 'séparateurs : un tiret ne sépare pas les morceaux d\'une valeur composée'),
+  dans('const SEPARATEURS =', '-_.', '-.', 'séparateurs : un souligné ne sépare pas les morceaux d\'une valeur composée'),
+  dans('const SEPARATEURS =', '-_.', '-_', 'séparateurs : un point ne sépare pas les morceaux d\'une valeur composée'),
+  dans('const noyau = morceaux.join', "morceaux.join('')", 'valeur', 'suite manifeste : les séparateurs comptent dans les pas de la suite'),
+
+  // Un libellé de traduction ------------------------------------------------------------------------------------------------------------
+  dans('export const estLibelle =', 'LIBELLE.test(valeur)', 'true', 'libellé : toute valeur est un libellé'),
+  dans('export const estLibelle =', 'LIBELLE.test(valeur)', 'false', 'libellé : aucune valeur n\'est un libellé'),
+  dans('const LIBELLE =', '\\p{Lu}(?:\\p{Ll}|\\p{M})+|', '', 'libellé : un mot à capitale initiale n\'est plus un libellé'),
+  dans('const LIBELLE =', '\\p{Ll}|\\p{M}', '\\p{Ll}', 'libellé : une marque combinante après une minuscule n\'est pas une lettre d\'un libellé (Contraseña)'),
+  dans('const LIBELLE =', '(?:\\p{Ll}|\\p{M})+', '(?:\\p{Ll}|\\p{M})*', 'libellé : une capitale seule est un libellé'),
+  dans('const LIBELLE =', '|\\p{Lu}{2,5}', '', 'libellé : un sigle n\'est plus un libellé'),
+  dans('const LIBELLE =', '{2,5}', '{2,4}', 'libellé : un sigle de cinq lettres n\'est pas un libellé'),
+  dans('const LIBELLE =', '{2,5}', '{2,6}', 'libellé : un sigle de six lettres est un libellé'),
+  dans('const LIBELLE =', '{2,5}', '{1,5}', 'libellé : une capitale seule est un sigle'),
+  dans('const LIBELLE =', '{2,5}', '{3,5}', 'libellé : un sigle de deux lettres n\'est pas un libellé'),
+  dans('const LIBELLE =', '|(?:\\p{Lo}|\\p{Lm}|\\p{M})+', '', 'libellé : un mot d\'une écriture sans capitales n\'est plus un libellé'),
+  dans('const LIBELLE =', '(?:\\p{Lo}|\\p{Lm}|\\p{M})+', '(?:\\p{Lm}|\\p{M})+', 'libellé : une lettre sans casse (Lo) n\'est pas une lettre d\'un libellé'),
+  dans('const LIBELLE =', '(?:\\p{Lo}|\\p{Lm}|\\p{M})+', '(?:\\p{Lo}|\\p{M})+', 'libellé : une lettre modificative (Lm : la marque d\'allongement du japonais) n\'est pas une lettre d\'un libellé'),
+  dans('const LIBELLE =', '(?:\\p{Lo}|\\p{Lm}|\\p{M})+', '(?:\\p{Lo}|\\p{Lm})+', 'libellé : une marque combinante (M) n\'est pas une lettre d\'un libellé sans capitales'),
+  dans('const LIBELLE =', '(?:\\p{Lo}|\\p{Lm}|\\p{M})+', '(?:\\p{Lo}|\\p{Lm}|\\p{M})*', 'libellé : un mot sans capitales peut être vide'),
+  dans('const LIBELLE =', ')*$/u', ')?$/u', 'libellé : trois mots joints par des tirets ne sont pas un libellé'),
+  dans('const LIBELLE =', ')*$/u', ')+$/u', 'libellé : un mot seul n\'est pas un libellé'),
+  dans('const LIBELLE =', '-(?:\\p{L}|\\p{M})+', '-(?:\\p{L}|\\p{M})*', 'libellé : un tiret qui ne précède rien finit un libellé'),
+  dans('const LIBELLE =', '-(?:\\p{L}|\\p{M})+', '-(?:\\p{L})+', 'libellé : une marque combinante après un tiret n\'est pas une lettre'),
+  dans('const LIBELLE =', '-(?:\\p{L}|\\p{M})+', '-(?:\\p{Ll}|\\p{M})+', 'libellé : une capitale après un tiret n\'est pas une lettre d\'un libellé'),
+  dans('const LIBELLE =', '/^(?:', '/(?:', 'libellé : un libellé peut être précédé d\'autre chose'),
+  dans('const LIBELLE =', '*$/u', '*/u', 'libellé : un libellé peut être suivi d\'autre chose'),
+  dans('const LIBELLE =', '$/u;', '$/;', 'libellé : les classes Unicode (\\p{…}) ne sont pas lues'),
+
+  // Un fichier d'exemple ----------------------------------------------------------------------------------------------------------------
+  ...['example|', 'sample|', 'template|'].map((m) => dans('const MOT_DE_FICHIER_D_EXEMPLE =', m, '', `fichier d'exemple : ${m.replace('|', '')} n'est plus le mot d'un fichier d'exemple`)),
+  dans('const MOT_DE_FICHIER_D_EXEMPLE =', '|exemple)', ')', 'fichier d\'exemple : exemple n\'est plus le mot d\'un fichier d\'exemple'),
+  dans('const MOT_DE_FICHIER_D_EXEMPLE =', '^|', '', 'fichier d\'exemple : le mot ne peut plus commencer le nom (example.env)'),
+  dans('const MOT_DE_FICHIER_D_EXEMPLE =', '|$)', ')', 'fichier d\'exemple : le mot ne peut plus finir le nom (.env.example)'),
+  dans('const MOT_DE_FICHIER_D_EXEMPLE =', '^|[._-]', '^|[_-]', 'fichier d\'exemple : un point ne sépare pas le mot du début du nom (.env.example)'),
+  dans('const MOT_DE_FICHIER_D_EXEMPLE =', '^|[._-]', '^|[.-]', 'fichier d\'exemple : un souligné ne sépare pas le mot du début du nom (my_example.env)'),
+  dans('const MOT_DE_FICHIER_D_EXEMPLE =', '^|[._-]', '^|[._]', 'fichier d\'exemple : un tiret ne sépare pas le mot du début du nom (my-sample.json)'),
+  dans('const MOT_DE_FICHIER_D_EXEMPLE =', '[._-]|$', '[_-]|$', 'fichier d\'exemple : un point ne sépare pas le mot de la fin du nom (example.env)'),
+  dans('const MOT_DE_FICHIER_D_EXEMPLE =', '[._-]|$', '[.-]|$', 'fichier d\'exemple : un souligné ne sépare pas le mot de la fin du nom (example_config.js)'),
+  dans('const MOT_DE_FICHIER_D_EXEMPLE =', '[._-]|$', '[._]|$', 'fichier d\'exemple : un tiret ne sépare pas le mot de la fin du nom (example-config.js)'),
+  dans('export const estFichierDExemple =', ".split('/').pop()", '', 'fichier d\'exemple : le mot est cherché dans tout le chemin, non dans le nom du fichier'),
+  dans('export const estFichierDExemple =', '.toLowerCase()', '', 'fichier d\'exemple : la casse du nom compte (.ENV.EXAMPLE)'),
+  dans('export const estFichierDExemple =', 'MOT_DE_FICHIER_D_EXEMPLE.test(', '!MOT_DE_FICHIER_D_EXEMPLE.test(', 'fichier d\'exemple : tout fichier qui n\'est pas un exemple en est un'),
+  dans('export function jugerValeur(', '{ fichierDExemple = false }', '{ fichierDExemple = true }', 'jugement : tout fichier est un fichier d\'exemple tant qu\'on ne dit pas le contraire'),
+  dans('export function jugerValeur(', ' = {}', '', 'jugement : les options sont obligatoires'),
+  dans('if (fichierDExemple) return', 'if (fichierDExemple)', 'if (!fichierDExemple)', 'jugement : un fichier qui n\'est pas un exemple en est un'),
+  dans('if (fichierDExemple) return', 'if (fichierDExemple)', 'if (false)', 'jugement : un fichier d\'exemple n\'est pas un exemple'),
+  dans('if (fichierDExemple) return', "verdict: 'aucun'", "verdict: 'a_verifier'", 'jugement : un mot seul d\'un fichier d\'exemple est « à vérifier »'),
+  dans('const fichierDExemple = estFichierDExemple(f);', 'estFichierDExemple(f)', 'false', 'règle : un fichier de configuration d\'exemple n\'est pas un exemple'),
+  brut("affectationsDeCode(ast, walk)) {\n      const jugement = jugerValeur(nom, valeur);", "affectationsDeCode(ast, walk)) {\n      const jugement = jugerValeur(nom, valeur, { fichierDExemple: estFichierDExemple(fichier) });", 'règle : un script nommé comme un fichier d\'exemple est jugé comme un fichier d\'exemple'),
+  brut("affectationsDeConfiguration(f.contenu)) {\n        const jugement = jugerValeur(nom, valeur, { fichierDExemple });", "affectationsDeConfiguration(f.contenu)) {\n        const jugement = jugerValeur(nom, valeur);", 'règle : en configuration, le fichier d\'exemple n\'est pas dit au jugement'),
+  brut("affectationsDeCode(ast, walk)) {\n      const jugement = jugerValeur(nom, valeur);", "affectationsDeCode(ast, walk)) {\n      const jugement = jugerValeur(nom, valeur, { fichierDExemple: true });", 'règle : tout script est jugé comme un fichier d\'exemple'),
+
+  // Le masque des secrets (c-secrets.js) ---------------------------------------------------------------------------------------------
+  dans("if (typeof texte !== 'string' || texte.length < LONGUEUR_MINIMALE) return texte;", "typeof texte !== 'string' || ", '', 'masque : ce qui n\'est pas un texte est lu comme un texte'),
+  dans("if (typeof texte !== 'string' || texte.length < LONGUEUR_MINIMALE) return texte;", 'texte.length < LONGUEUR_MINIMALE', 'texte.length < 15', 'masque : un texte de quatorze caractères qui porte un secret (token=…) n\'est pas lu'),
+  dans('if (format.publique || lu?.publique) continue;', 'format.publique || lu?.publique', 'false', 'masque : une clé publique par conception est masquée comme un secret'),
+  dans('if (format.publique || lu?.publique) continue;', 'format.publique || ', '', 'masque : une clé d\'un fournisseur qui la publie est masquée'),
+  dans('if (format.publique || lu?.publique) continue;', ' || lu?.publique', '', 'masque : un JWT de rôle anonyme est masqué'),
+  dans("if (format.id === 'pem') intervalles.push(", "'pem'", "'pex'", 'masque : une clé privée est masquée comme une clé de fournisseur, son corps reste'),
+  dans("if (format.id === 'pem') intervalles.push(", 'finDUneClePrivee(texte, index + valeur.length)', 'index + valeur.length', 'masque : le corps d\'une clé privée n\'est pas retiré'),
+  dans("if (format.id === 'pem') intervalles.push(", 'format.extrait(valeur)', 'masquer(valeur)', 'masque : l\'en-tête d\'une clé privée est masqué comme une valeur'),
+  dans('else intervalles.push([index, index + valeur.length, masquer(valeur)]);', 'index + valeur.length', 'index', 'masque : un format de fournisseur est précédé de son masque, non remplacé par lui'),
+  dans('else intervalles.push([index, index + valeur.length, masquer(valeur)]);', 'masquer(valeur)', 'valeur', 'masque : un format de fournisseur est rendu tel quel'),
+  dans('if (code && /[:=]/.test(texte) && MOTIF_DE_SECRET.test(texte)) {', 'code && ', '', 'masque : la prose a des « nom = valeur »'),
+  dans('if (code && /[:=]/.test(texte) && MOTIF_DE_SECRET.test(texte)) {', 'code && ', 'false && ', 'masque : le code n\'a pas de « nom = valeur »'),
+  dans("if (valeur.includes('…') ||", "valeur.includes('…') || ", '', 'masque : une valeur déjà masquée l\'est une seconde fois'),
+  dans("if (valeur.includes('…') ||", ' || formatsDans(valeur).length', '', 'masque : une valeur qui contient un format est masquée en entier, non le format seul'),
+  dans("if (valeur.includes('…') ||", "jugerValeur(nom, valeur).verdict === 'aucun'", "jugerValeur(nom, valeur).verdict !== 'aucun'", 'masque : seule une valeur dont il n\'y a rien à dire est masquée'),
+  dans("if (valeur.includes('…') ||", "jugerValeur(nom, valeur).verdict === 'aucun'", "jugerValeur(nom, valeur).verdict !== 'generee'", 'masque : seule une valeur d\'allure générée est masquée'),
+  dans("if (valeur.includes('…') ||", "jugerValeur(nom, valeur).verdict === 'aucun'", "jugerValeur(nom, valeur).verdict !== 'a_verifier'", 'masque : seule une valeur « à vérifier » est masquée'),
+  dans('intervalles.push([debutDeValeur, debutDeValeur + valeur.length, masquer(valeur)]);', 'debutDeValeur + valeur.length', 'debutDeValeur', 'masque : une valeur de « nom = valeur » est précédée de son masque, non remplacée par lui'),
+  dans('intervalles.push([debutDeValeur, debutDeValeur + valeur.length, masquer(valeur)]);', '[debutDeValeur,', '[debutDeValeur + 1,', 'masque : le premier caractère d\'une valeur de « nom = valeur » reste'),
+  dans('intervalles.push([debutDeValeur, debutDeValeur + valeur.length, masquer(valeur)]);', 'masquer(valeur)', 'valeur', 'masque : une valeur de « nom = valeur » est rendue telle quelle'),
+  dans('intervalles.sort((a, b) => a[0] - b[0]);', 'intervalles.sort((a, b) => a[0] - b[0]);', '', 'masque : les secrets sont masqués dans l\'ordre où la lecture les a trouvés, non dans l\'ordre du texte'),
+  dans('intervalles.sort((a, b) => a[0] - b[0]);', 'a[0] - b[0]', 'b[0] - a[0]', 'masque : les secrets sont masqués de la fin du texte au début'),
+  dans('if (debut < position) continue;', 'if (debut < position) continue;', '', 'masque : un secret déjà couvert (dans le corps d\'une clé privée) est masqué une seconde fois'),
+  dans('if (debut < position) continue;', 'debut < position', 'debut <= position', 'masque : un secret que le précédent touche (le jeton qui suit le pied d\'une clé privée) n\'est pas masqué'),
+  dans('sortie += texte.slice(position, debut) + rendu;', 'texte.slice(position, debut) + ', '', 'masque : le texte entre deux secrets est perdu'),
+  dans('position = fin;', 'fin', 'debut', 'masque : le secret n\'est pas retiré du texte'),
+  dans('return sortie + texte.slice(position);', ' + texte.slice(position)', '', 'masque : le texte qui suit le dernier secret est perdu'),
+  dans("const pied = texte.indexOf('-----END', depuis);", 'depuis', '0', 'masque : le pied d\'une clé privée est cherché depuis le début du texte, non depuis son en-tête'),
+  dans('if (pied === -1) return texte.length;', 'texte.length', 'depuis', 'masque : une clé privée sans pied garde son corps'),
+  dans("const fermeture = texte.indexOf('-----', pied + '-----END'.length);", "pied + '-----END'.length", 'pied', 'masque : le pied d\'une clé privée se ferme sur ses propres tirets'),
+  dans("return fermeture === -1 ? texte.length : fermeture + '-----'.length;", " + '-----'.length", '', 'masque : les tirets de fin du pied d\'une clé privée restent'),
+  dans("return fermeture === -1 ? texte.length : fermeture + '-----'.length;", ': fermeture +', ': 0 +', 'masque : un pied que rien ne ferme est lu comme fermé au début du texte'),
+  dans("return fermeture === -1 ? texte.length : fermeture + '-----'.length;", 'texte.length', 'pied', 'masque : un pied que rien ne ferme garde son texte'),
+
+  // Le masque, à la création de chaque constat (modele.js) ------------------------------------------------------------------------------
+  ...[['titre: masquerLesSecrets(c.titre', 'c.titre', 'titre'], ['constat: masquerLesSecrets(c.constat', 'c.constat', 'constat'],
+    ['impact: c.impact == null ?', 'c.impact', 'impact'], ['remediation: c.remediation == null ?', 'c.remediation', 'remédiation']]
+    .flatMap(([motif, champ, nom]) => [
+      modele(motif, `masquerLesSecrets(${champ}, { code: false })`, champ, `constat() : le ${nom} n'est pas masqué`),
+      modele(motif, '{ code: false }', '{}', `constat() : le ${nom} est lu comme du code (ses « nom = valeur » sont masqués)`),
+    ]),
+  modele('impact: c.impact == null ?', 'c.impact == null ? null : ', '', 'constat() : un impact absent est undefined, non null'),
+  modele('remediation: c.remediation == null ?', 'c.remediation == null ? null : ', '', 'constat() : une remédiation absente est undefined, non null'),
+  modele('extrait: c.extrait ?', 'masquerLesSecrets(String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT))', 'String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT)', 'constat() : l\'extrait n\'est pas masqué'),
+  modele('extrait: c.extrait ?', "masquerLesSecrets(String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT)).replace(/\\s+/g, ' ').slice(0, 300)", "masquerLesSecrets(String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT).replace(/\\s+/g, ' ').slice(0, 300))", 'constat() : l\'extrait est masqué après la coupe à trois cents caractères'),
+  modele('extrait: c.extrait ?', ' : null', ' : undefined', 'constat() : un extrait absent est undefined, non null'),
+  modele('preuve: preuveMasquee(preuveBornee(c.preuve))', 'preuveMasquee(preuveBornee(c.preuve))', 'preuveBornee(c.preuve)', 'constat() : la preuve n\'est pas masquée'),
+  modele('preuve: preuveMasquee(preuveBornee(c.preuve))', 'preuveMasquee(preuveBornee(c.preuve))', 'preuveBornee(preuveMasquee(c.preuve))', 'constat() : la preuve est masquée avant d\'être bornée (les emplacements omis sont lus pour rien)'),
+  modele('const PROFONDEUR_DE_PREUVE =', '32', '31', 'preuve : trente et un niveaux seulement sont lus'),
+  modele('const PROFONDEUR_DE_PREUVE =', '32', '33', 'preuve : trente-trois niveaux sont lus'),
+  modele('const TROP_PROFOND =', "'[trop profond]'", "'…'", 'preuve : ce qui est trop profond est remplacé par un texte qui ne le dit pas'),
+  modele("if (typeof valeur === 'string') return masquerLesSecrets(valeur);", 'masquerLesSecrets(valeur)', 'valeur', 'preuve : les textes d\'une preuve ne sont pas masqués'),
+  modele("if (valeur === null || typeof valeur !== 'object') return valeur;", 'valeur === null || ', '', 'preuve : null est un objet à parcourir'),
+  modele("if (valeur === null || typeof valeur !== 'object') return valeur;", "typeof valeur !== 'object'", "typeof valeur === 'object'", 'preuve : seuls les objets sont rendus tels quels'),
+  modele('if (profondeur >= PROFONDEUR_DE_PREUVE) return TROP_PROFOND;', 'return TROP_PROFOND', 'return valeur', 'preuve : ce qui est trop profond est rendu tel quel, sans masque'),
+  modele('if (profondeur >= PROFONDEUR_DE_PREUVE) return TROP_PROFOND;', '>=', '>', 'preuve : le niveau trente-deux est encore lu'),
+  modele('if (profondeur >= PROFONDEUR_DE_PREUVE) return TROP_PROFOND;', 'if (profondeur >= PROFONDEUR_DE_PREUVE) return TROP_PROFOND;', '', 'preuve : aucune borne de profondeur (une preuve qui boucle fait déborder la pile)'),
+  modele('if (Array.isArray(valeur)) {', 'Array.isArray(valeur)', 'false', 'preuve : une liste est lue comme un objet d\'une classe, elle est rendue telle quelle'),
+  modele('const v = preuveMasquee(valeur[i], profondeur + 1);', 'profondeur + 1', 'profondeur', 'preuve : les niveaux d\'une liste ne comptent pas'),
+  modele('copie ??= valeur.slice()', 'v !== valeur[i]', 'true', 'preuve : toute liste est copiée, même sans secret'),
+  modele('copie ??= valeur.slice()', 'copie ??= valeur.slice()', 'copie = valeur.slice()', 'preuve : une liste qui a deux textes à masquer perd le premier masque'),
+  modele('copie ??= valeur.slice()', 'copie[i] = v;', '', 'preuve : une liste copiée garde ses textes d\'origine'),
+  brutModele("    return copie ?? valeur;\n  }\n  const proto", "    return copie;\n  }\n  const proto", 'preuve : une liste sans secret disparaît de la preuve'),
+  brutModele("  }\n  return copie ?? valeur;\n}", "  }\n  return copie;\n}", 'preuve : un objet sans secret disparaît de la preuve'),
+  modele('if (proto !== Object.prototype && proto !== null) return valeur;', ' && proto !== null', '', 'preuve : un objet sans prototype est rendu tel quel, sans masque'),
+  modele('if (proto !== Object.prototype && proto !== null) return valeur;', 'proto !== Object.prototype && ', '', 'preuve : une instance de classe est parcourue comme un objet simple'),
+  modele('if (proto !== Object.prototype && proto !== null) return valeur;', 'return valeur', 'return null', 'preuve : une instance de classe disparaît de la preuve'),
+  modele('const v = preuveMasquee(valeur[cle], profondeur + 1);', 'profondeur + 1', 'profondeur', 'preuve : les niveaux d\'un objet ne comptent pas'),
+  modele('copie ??= { ...valeur }', 'v !== valeur[cle]', 'true', 'preuve : tout objet est copié, même sans secret'),
+  modele('copie ??= { ...valeur }', 'copie ??= { ...valeur }', 'copie ??= valeur', 'preuve : la preuve de la règle est modifiée en place'),
+  modele('copie ??= { ...valeur }', 'copie ??= { ...valeur }', 'copie = { ...valeur }', 'preuve : un objet qui a deux textes à masquer perd le premier masque'),
+  modele('copie ??= { ...valeur }', 'copie[cle] = v;', '', 'preuve : un objet copié garde ses textes d\'origine'),
 ];
+
+
+// --- le texte que le widget choisit, cité dans le texte d'un constat : l'émetteur d'un JWT de rôle anonyme, le nom d'une affectation ---------------------------------------------------
+const CLASSE_DES_FRAGILES = ['`', '<', '>', '&', '|', '*', '[', '\\]', '\\\\', '~', '#', '!', '(', ')', '{', '}', '$', '@'];
+const FRAGILES = `/[${CLASSE_DES_FRAGILES.join('')}]|[`;
+MUTANTS.push(
+  // Ce qu'on ne voit pas : chaque famille de caractères de la définition.
+  ...['Cc', 'Cf', 'Zl', 'Zp'].map((famille) => widget('const INVISIBLE =', `\\p{${famille}}`, '', `texte du widget : les caractères ${{ Cc: 'de contrôle (retour à la ligne, échappement, C1)', Cf: 'de format (sens d\'écriture, largeur nulle, marque d\'ordre des octets)', Zl: 'séparateur de ligne', Zp: 'séparateur de paragraphe' }[famille]} passent`)),
+  widget('const INVISIBLE =', 'gu;', 'u;', 'texte du widget : seul le premier caractère invisible est écrit en clair'),
+  widget('return hexa.length <= 4', 'hexa.length <= 4', 'hexa.length < 4', 'texte du widget : un caractère de quatre chiffres hexadécimaux s\'écrit à la façon des astraux'),
+  widget('return hexa.length <= 4', 'hexa.length <= 4', 'hexa.length <= 5', 'texte du widget : un astral de cinq chiffres s\'écrit à la façon du plan de base'),
+  widget('return hexa.length <= 4', 'padStart(4, \'0\')', 'padStart(2, \'0\')', 'texte du widget : l\'écriture d\'un caractère du plan de base n\'a pas quatre chiffres'),
+  widget('const hexa = ', 'toString(16)', 'toString(10)', 'texte du widget : le code d\'un caractère s\'écrit en décimal'),
+  widget('const hexa = ', 'codePointAt(0)', 'charCodeAt(0)', 'texte du widget : le code d\'un astral est celui de sa moitié de paire'),
+  widget('return hexa.length <= 4', '`\\\\u{${hexa}}`', '`\\\\u${hexa}`', 'texte du widget : un astral s\'écrit sans accolades'),
+  widget('return texte.toWellFormed()', '.toWellFormed()', '', 'texte du widget : une moitié de paire de substitution reste telle quelle'),
+  widget('return texte.toWellFormed()', '.replace(INVISIBLE, ecritureVisible)', '', 'texte du widget : un caractère invisible traverse'),
+  widget('return texte.toWellFormed()', 'ecritureVisible', '(c) => c', 'texte du widget : un caractère invisible est remplacé par lui-même'),
+  // La citation : la barre, la cale, ce qu'elle entoure.
+  widget('const barre = ', 'plusLongue + 1', '1', 'texte du widget : la barre de l\'extrait de code n\'est jamais plus longue qu\'un guillemet inversé'),
+  widget('const barre = ', 'plusLongue + 1', 'plusLongue', 'texte du widget : la barre de l\'extrait de code est aussi longue que la plus longue suite du texte'),
+  widget('let plusLongue = 0;', '0', '1', 'texte du widget : la barre a toujours deux guillemets inversés'),
+  widget('for (const suite of t.matchAll(', '/`+/g', '/`/g', 'texte du widget : la barre ne compte que des guillemets inversés isolés'),
+  widget('const cale = ', '!/^ *$/.test(t) && ', '', 'texte du widget : un texte d\'espaces seules est calé, le Markdown n\'en retire aucune'),
+  widget('const cale = ', '/^[ `]|[ `]$/', '/^`|[ `]$/', 'texte du widget : un texte qui commence par une espace n\'est pas calé'),
+  widget('const cale = ', '/^[ `]|[ `]$/', '/^ |[ `]$/', 'texte du widget : un texte qui commence par un guillemet inversé n\'est pas calé'),
+  widget('const cale = ', '/^[ `]|[ `]$/', '/^[ `]|`$/', 'texte du widget : un texte qui finit par une espace n\'est pas calé'),
+  widget('const cale = ', '/^[ `]|[ `]$/', '/^[ `]| $/', 'texte du widget : un texte qui finit par un guillemet inversé n\'est pas calé'),
+  widget('const cale = ', '? \' \' : \'\'', '? \'\' : \' \'', 'texte du widget : le texte est calé quand il ne le faut pas, et pas quand il le faut'),
+  widget('return `${barre}${cale}${t}${cale}${barre}`;', '${t}${cale}${barre}', '${t}${barre}', 'texte du widget : la cale de fin manque'),
+  widget('return `${barre}${cale}${t}${cale}${barre}`;', '${barre}${cale}${t}', '${barre}${t}', 'texte du widget : la cale de début manque'),
+  widget('return `${barre}${cale}${t}${cale}${barre}`;', '${t}', '${texte}', 'texte du widget : le texte cité n\'est pas neutralisé'),
+  widget('const t = neutraliser(texte);', 'neutraliser(texte)', 'texte', 'texte du widget : la citation ne neutralise rien'),
+  // Cité seulement quand il le faut : chaque caractère de la définition, chaque famille d'invisibles, et la condition.
+  ...CLASSE_DES_FRAGILES.map((jeton) => widget('const FRAGILE =', FRAGILES, `/[${CLASSE_DES_FRAGILES.filter((j) => j !== jeton).join('')}]|[`, `texte du widget : ${jeton === '\\]' ? ']' : jeton === '\\\\' ? 'la barre oblique inverse' : jeton} n'est plus un caractère fragile`)),
+  ...['Cc', 'Cf', 'Zl', 'Zp'].map((famille) => widget('const FRAGILE =', `\\p{${famille}}`, '', `texte du widget : un caractère invisible (${famille}) n'est plus fragile`)),
+  widget('return FRAGILE.test(texte)', 'FRAGILE.test(texte)', 'false', 'texte du widget : aucun nom n\'est cité'),
+  widget('return FRAGILE.test(texte)', 'FRAGILE.test(texte)', 'true', 'texte du widget : tout nom est cité, même honnête'),
+  widget('return FRAGILE.test(texte)', 'citer(texte) : texte', 'texte : citer(texte)', 'texte du widget : un nom honnête est cité, un autre ne l\'est pas'),
+);
+
+MUTANTS.push(
+  dans('constat: `Un jeton JWT dont la charge utile dit', "${emetteur === null ? '' : ` Son émetteur (champ iss) : ${citer(emetteur)}.`}", '', 'JWT de rôle anonyme : l\'émetteur n\'est pas dit dans le texte du constat'),
+  dans('constat: `Un jeton JWT dont la charge utile dit', "emetteur === null ? '' :", 'false ? \'\' :', 'JWT de rôle anonyme : un jeton sans émetteur le dit'),
+  dans('constat: `Un jeton JWT dont la charge utile dit', 'citer(emetteur)', 'charge.iss', 'JWT de rôle anonyme : le texte dit l\'émetteur du jeton, non borné'),
+  dans('constat: `Un jeton JWT dont la charge utile dit', 'citer(emetteur)', 'emetteur', 'JWT de rôle anonyme : l\'émetteur est dit dans le texte tel quel, non cité'),
+  dans('const nomDit = ', 'citerSiBesoin(nom)', 'nom', 'nom d\'une affectation : cité nulle part'),
+  dans('const nomDit = ', 'citerSiBesoin(nom)', 'citer(nom)', 'nom d\'une affectation : tout nom est cité, même honnête'),
+  dans("titre: `Secret potentiel versionné dans le dépôt (valeur d'allure générée dans", '${nomDit}', '${nom}', 'nom d\'une affectation : le titre d\'une valeur générée dit le nom tel quel'),
+  dans("constat: `« ${nomDit} » reçoit un littéral de ${valeur.length} caractères qui a l'allure", '${nomDit}', '${nom}', 'nom d\'une affectation : le constat d\'une valeur générée dit le nom tel quel'),
+  dans('titre: `Valeur en dur dans', '${nomDit}', '${nom}', 'nom d\'une affectation : le titre d\'une valeur à vérifier dit le nom tel quel'),
+  dans("constat: `« ${nomDit} » reçoit un littéral de ${valeur.length} caractères qui n'a pas l'allure", '${nomDit}', '${nom}', 'nom d\'une affectation : le constat d\'une valeur à vérifier dit le nom tel quel'),
+);
 
 const { partie, restants } = lireArguments(process.argv.slice(2));
 const filtre = restants.length ? new RegExp(restants.join(' ')) : null;
@@ -596,7 +880,12 @@ const mutants = MUTANTS
 
 process.exitCode = rejouerMutants({
   mutants,
-  groupes: [{ nom: 'bornes de lecture de C-SECRET-01', fichiers: BORNES }, { nom: 'essais de C-SECRET-01', fichiers: TESTS }],
+  groupes: [
+    { nom: 'bornes de lecture de C-SECRET-01', fichiers: BORNES },
+    { nom: 'essais de C-SECRET-01', fichiers: TESTS },
+    { nom: 'sorties du binaire', fichiers: SORTIES_DU_BINAIRE },
+  ],
+  dossiers: [...DOSSIERS_COPIES, 'bin'], // l'essai des sorties lance `bin/gwaudit.js`
   exigerChromium: false,
   delaiMs: 60_000, // les deux groupes ensemble durent moins de deux secondes : un mutant qui boucle sans fin est tué par ce délai, dit comme tel, sans faire attendre dix minutes
   partie,
