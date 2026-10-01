@@ -11,9 +11,11 @@ import path from 'node:path';
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs, nomPointe, aCommentaireDansPortee } from '../moteur/analyse-js.js';
 import { numeroLigne } from '../moteur/lignes.js';
+import { mesurerFonction, nomDeFonction, estAutoAppelee } from '../moteur/fonctions.js';
+import { mesurerLignes, NOTE_LIGNES_APPROCHEES } from '../moteur/lignes-de-code.js';
 
 const SEUILS = {
-  fichierLong: 600,        // lignes significatives
+  fichierLong: 600,        // lignes de code
   fichierTresLong: 1200,
   fonctionLongue: 80,
   fonctionTresLongue: 200,
@@ -31,20 +33,22 @@ const SEUILS = {
  */
 const estCarteDeSources = (f) => f.ext === '.map';
 
-/** Taille des fichiers du code exécuté. */
+/** Taille des fichiers du code exécuté, en lignes de code (ni lignes vides, ni commentaires seuls). */
 export function analyserTailleFichiers(ctx) {
   const constats = [];
   const gros = ctx.fichiers
-    .filter((f) => f.executee && !f.vendorise && !f.dossierExclu && ['.js', '.mjs'].includes(f.ext) && (f.locSignificatives ?? 0) > SEUILS.fichierLong)
-    .sort((a, b) => b.locSignificatives - a.locSignificatives);
+    .filter((f) => f.executee && !f.vendorise && !f.dossierExclu && ['.js', '.mjs'].includes(f.ext) && f.contenu)
+    .map((f) => ({ f, ...mesurerLignes(f) }))
+    .filter((m) => m.code > SEUILS.fichierLong)
+    .sort((a, b) => b.code - a.code);
 
-  for (const f of gros) {
-    const tresLong = f.locSignificatives > SEUILS.fichierTresLong;
+  for (const { f, code, exacte } of gros) {
+    const tresLong = code > SEUILS.fichierTresLong;
     constats.push(constat({
       regle: 'A-TAILLE-01', axe: 'A', severite: tresLong ? 'majeur' : 'mineur', confiance: 'certain',
-      titre: `Fichier de ${f.locSignificatives} lignes significatives : ${f.chemin}`,
+      titre: `Fichier de ${code} lignes de code : ${f.chemin}`,
       fichier: f.chemin,
-      constat: `Le fichier dépasse le seuil de ${tresLong ? SEUILS.fichierTresLong : SEUILS.fichierLong} lignes significatives.`,
+      constat: `Le fichier dépasse le seuil de ${tresLong ? SEUILS.fichierTresLong : SEUILS.fichierLong} lignes de code (hors commentaires et lignes vides).${exacte ? '' : NOTE_LIGNES_APPROCHEES}`,
       impact: "Le guide demande qu'un relecteur puisse lire la logique du widget « en une seule fois ». Au-delà d'un millier de lignes dans un fichier, la revue devient un survol : c'est souvent là que passent les défauts.",
       remediation: 'Découper par responsabilité (rendu, accès aux données, export…) en modules ES importés depuis un point d\'entrée.',
       referentiels: ['Guide de contribution Grist.Gouv — « Reviewers should be able to read your widget\'s logic in one sitting »'],
@@ -53,92 +57,71 @@ export function analyserTailleFichiers(ctx) {
   return constats;
 }
 
-/** Longueur, complexité cyclomatique et imbrication des fonctions. */
+/** Le groupe nominal d'une fonction (« la fonction `f` »), mis au début d'une phrase. */
+const enPhrase = (groupe) => groupe.charAt(0).toUpperCase() + groupe.slice(1);
+
+/**
+ * Longueur, complexité cyclomatique et imbrication des fonctions, chacune sur son propre corps (voir `moteur/fonctions.js`). Une fonction
+ * appelée là où elle est écrite, l'enveloppe d'un module `(function () { … })()`, ne se mesure en longueur que sur ses lignes propres : celles
+ * des fonctions qu'elle contient sont comptées pour chacune, et la taille du fichier est dite par A-TAILLE-01. Une enveloppe de dix lignes qui
+ * contient trente fonctions n'est pas « une fonction de neuf cents lignes ».
+ */
 export function analyserFonctions(ctx) {
   const constats = [];
 
   pourChaqueUniteJs(ctx, { surfaceSeulement: true, ignorerVendorise: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
-    const visiter = (n) => {
-      const debut = n.loc?.start?.line, fin = n.loc?.end?.line;
-      if (debut == null) return;
-      const lignes = fin - debut + 1;
-      const { complexite, imbrication } = mesurer(n, walk);
-      const nom = n.id?.name ?? n.key?.name ?? '(fonction anonyme)';
+    const visiter = (n, _etat, ancetres) => {
+      const { complexite, imbrication, etendue, lignesPropres } = mesurerFonction(n);
+      const autoAppelee = estAutoAppelee(n, ancetres);
+      const lignes = autoAppelee ? lignesPropres : etendue;
 
       if (lignes > SEUILS.fonctionLongue) {
         const tres = lignes > SEUILS.fonctionTresLongue;
+        const nom = nomDeFonction(n, ancetres);
         constats.push(constat({
           regle: 'A-FONC-01', axe: 'A', severite: tres ? 'majeur' : 'mineur', confiance: 'certain',
-          titre: `Fonction de ${lignes} lignes : ${nom}`,
+          titre: `Fonction de ${lignes} lignes : ${nom.titre}`,
           fichier: unite.chemin, ligne: ligneDe(n),
-          constat: `\`${nom}\` s'étend sur ${lignes} lignes.`,
+          constat: etendue > lignes
+            ? `${enPhrase(nom.groupe)} occupe ${lignes} lignes en propre, sans compter les ${etendue - lignes} lignes des fonctions qu'elle contient, mesurées chacune à part.`
+            : `${enPhrase(nom.groupe)} s'étend sur ${lignes} lignes.`,
           impact: "Une fonction trop longue ne tient pas dans un écran ni dans la tête du relecteur : on ne peut plus vérifier qu'elle fait bien ce que son nom annonce, ni la tester unitairement.",
           remediation: 'Extraire les étapes internes en fonctions nommées, chacune testable isolément.',
         }));
       }
       if (complexite > SEUILS.complexite) {
         const forte = complexite > SEUILS.complexiteForte;
+        const nom = nomDeFonction(n, ancetres);
         constats.push(constat({
           regle: 'A-FONC-02', axe: 'A', severite: forte ? 'majeur' : 'mineur', confiance: 'certain',
-          titre: `Complexité cyclomatique de ${complexite} : ${nom}`,
+          titre: `Complexité cyclomatique de ${complexite} : ${nom.titre}`,
           fichier: unite.chemin, ligne: ligneDe(n),
-          constat: `\`${nom}\` comporte ${complexite} chemins d'exécution indépendants (seuil retenu : ${SEUILS.complexite}).`,
+          constat: `${enPhrase(nom.groupe)} comporte ${complexite} chemins d'exécution indépendants (seuil retenu : ${SEUILS.complexite}).`,
           impact: `Il faut au minimum ${complexite} cas de test pour couvrir cette fonction. En pratique elle ne sera pas testée exhaustivement, et les branches rares porteront les défauts.`,
           remediation: 'Extraire les branches en fonctions distinctes, ou remplacer les cascades de conditions par une table de correspondance.',
           referentiels: ['Métrique de McCabe'],
         }));
       }
       if (imbrication > SEUILS.imbrication) {
+        const nom = nomDeFonction(n, ancetres);
         constats.push(constat({
           regle: 'A-FONC-03', axe: 'A', severite: 'mineur', confiance: 'certain',
-          titre: `Imbrication de profondeur ${imbrication} : ${nom}`,
+          titre: `Imbrication de profondeur ${imbrication} : ${nom.titre}`,
           fichier: unite.chemin, ligne: ligneDe(n),
-          constat: `Le corps de \`${nom}\` atteint ${imbrication} niveaux de blocs imbriqués.`,
+          constat: `Le corps de ${nom.groupe} atteint ${imbrication} niveaux de blocs imbriqués.`,
           impact: "Au-delà de quatre ou cinq niveaux, le lecteur perd le fil des conditions actives à un point donné.",
           remediation: 'Sortir tôt (`return` anticipé), extraire les blocs internes.',
         }));
       }
     };
-    walk.simple(ast, {
+    walk.ancestor(ast, {
       FunctionDeclaration: visiter,
       FunctionExpression: visiter,
-      ArrowFunctionExpression: (n) => { if (n.body.type === 'BlockStatement') visiter(n); },
+      ArrowFunctionExpression: visiter,
     });
   });
   return constats;
-}
-
-function mesurer(noeud, walk) {
-  let complexite = 1;
-  walk.simple(noeud, {
-    IfStatement() { complexite++; },
-    ForStatement() { complexite++; },
-    ForInStatement() { complexite++; },
-    ForOfStatement() { complexite++; },
-    WhileStatement() { complexite++; },
-    DoWhileStatement() { complexite++; },
-    SwitchCase(n) { if (n.test) complexite++; },
-    CatchClause() { complexite++; },
-    ConditionalExpression() { complexite++; },
-    LogicalExpression(n) { if (n.operator === '&&' || n.operator === '||' || n.operator === '??') complexite++; },
-  });
-  let imbrication = 0;
-  const profondeur = (n, d) => {
-    if (!n || typeof n !== 'object') return;
-    const bloquant = ['IfStatement', 'ForStatement', 'ForInStatement', 'ForOfStatement',
-      'WhileStatement', 'DoWhileStatement', 'SwitchStatement', 'TryStatement'].includes(n.type);
-    const d2 = bloquant ? d + 1 : d;
-    if (d2 > imbrication) imbrication = d2;
-    for (const k of Object.keys(n)) {
-      if (k === 'loc' || k === 'parent') continue;
-      const v = n[k];
-      if (Array.isArray(v)) v.forEach((x) => profondeur(x, d2));
-      else if (v && typeof v.type === 'string') profondeur(v, d2);
-    }
-  };
-  profondeur(noeud.body, 0);
-  return { complexite, imbrication };
 }
 
 /** Gestion d'erreur silencieuse : `catch` vide ou qui avale l'erreur. */

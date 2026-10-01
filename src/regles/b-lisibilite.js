@@ -15,6 +15,7 @@ import path from 'node:path';
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs } from '../moteur/analyse-js.js';
 import { numeroLigne } from '../moteur/lignes.js';
+import { mesurerLignes, NOTE_LIGNES_APPROCHEES } from '../moteur/lignes-de-code.js';
 
 const REF_GUIDE_LISIBILITE = 'Guide de contribution Grist.Gouv — « The code is readable by a human developer without needing an AI tool to understand it »';
 
@@ -132,22 +133,22 @@ export function analyserReadme(ctx) {
   return constats;
 }
 
-/** Densité de commentaires rapportée à la complexité du fichier. */
+/** Densité de commentaires rapportée à la complexité du fichier : les lignes de commentaire seul pour les lignes de code (voir `mesurerLignes`). */
 export function analyserCommentaires(ctx) {
   const constats = [];
   for (const f of ctx.fichiers) {
     if (!f.executee || f.vendorise || f.dossierExclu || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;
-    if ((f.locSignificatives ?? 0) < 200) continue;
+    const { code, commentaire, exacte } = mesurerLignes(f);
+    if (code < 200) continue;
 
-    const lignesCommentees = f.lignes.filter((l) => /^\s*(\/\/|\/\*|\*)/.test(l)).length;
-    const densite = lignesCommentees / Math.max(1, f.locSignificatives);
+    const densite = commentaire / Math.max(1, code);
     if (densite >= 0.04) continue;
 
     constats.push(constat({
       regle: 'B-COM-01', axe: 'B', severite: 'mineur', confiance: 'probable',
-      titre: `Fichier de ${f.locSignificatives} lignes quasiment sans commentaire : ${f.chemin}`,
+      titre: `Fichier de ${code} lignes quasiment sans commentaire : ${f.chemin}`,
       fichier: f.chemin,
-      constat: `${lignesCommentees} ligne(s) de commentaire pour ${f.locSignificatives} lignes de code (${Math.round(densite * 100)} %).`,
+      constat: `${commentaire} ligne(s) de commentaire pour ${code} lignes de code (${Math.round(densite * 100)} %).${exacte ? '' : NOTE_LIGNES_APPROCHEES}`,
       impact: "Sur un fichier de cette taille, l'absence de commentaire oblige le relecteur à reconstituer l'intention à partir du code seul — exactement ce que le guide cherche à éviter.",
       remediation: "Documenter l'intention, pas la mécanique : pourquoi ce traitement existe, quels cas limites il couvre, quelles hypothèses il fait sur les données Grist.",
       referentiels: [REF_GUIDE_LISIBILITE],
@@ -252,7 +253,7 @@ export function analyserSignauxGeneration(ctx) {
 export function analyserVerbosite(ctx) {
   const constats = [];
   const surface = ctx.fichiers.filter((f) => f.executee && !f.vendorise && !f.dossierExclu && ['.js', '.mjs'].includes(f.ext));
-  const loc = surface.reduce((s, f) => s + (f.locSignificatives ?? 0), 0);
+  const loc = surface.reduce((s, f) => s + (f.contenu ? mesurerLignes(f).code : 0), 0);
   const html = ctx.fichiers.filter((f) => f.executee && ['.html', '.htm'].includes(f.ext))
     .reduce((s, f) => s + (f.locSignificatives ?? 0), 0);
 
@@ -261,7 +262,7 @@ export function analyserVerbosite(ctx) {
     constats.push(constat({
       regle: 'B-VERB-01', axe: 'B', severite: loc + html > 12000 ? 'majeur' : 'mineur', confiance: 'certain',
       titre: `${loc + html} lignes de code exécuté : le widget dépasse ce qu'une revue bénévole absorbe`,
-      constat: `${surface.length} fichier(s) JavaScript pour ${loc} lignes significatives, plus ${html} lignes de HTML.`,
+      constat: `${surface.length} fichier(s) JavaScript pour ${loc} lignes de code, plus ${html} lignes de HTML.`,
       impact: "Le guide demande un périmètre fonctionnel « clairement défini et raisonnablement étroit », et prévient : « si votre widget semble faire plusieurs métiers différents, envisagez de le découper ». Un volume de cet ordre allonge la revue de plusieurs jours et réduit mécaniquement la profondeur de l'examen sécurité.",
       remediation: "Deux voies : réduire le périmètre fonctionnel, ou découper en plusieurs widgets partageant un module commun. À défaut, fournir dans le README une carte du code (quel fichier fait quoi, par où commencer) pour guider le relecteur.",
       referentiels: ['Guide de contribution Grist.Gouv — « clearly defined and reasonably narrow functional scope »'],

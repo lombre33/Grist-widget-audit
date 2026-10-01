@@ -48,6 +48,29 @@ vide), traces de développement, duplication inter-fichiers, présence de
 tests. Le guide de contribution n'impose aucun style : ces règles ne jugent
 pas un style, elles mesurent ce qui coûte cher à un relecteur bénévole.
 
+Deux mesures se font sur ce que le code est, non sur ce qu'il ressemble.
+- **Une fonction se mesure sur son propre corps** (complexité de McCabe,
+  imbrication, lignes) : les fonctions qu'elle contient, rappels, fonctions
+  internes, méthodes d'une classe qu'elle déclare, ont chacune leur mesure et
+  ne s'ajoutent pas à la sienne. Une fermeture qui enveloppe tout un widget,
+  `(function () { … })()`, n'est donc pas « une fonction de neuf cents lignes
+  et de trente et un chemins » : trente fonctions de deux chemins ne font pas
+  une fonction de trente et un. Pour la longueur, une fonction appelée là où
+  elle est écrite ne compte que ses lignes propres, et la taille du fichier
+  est dite par la règle de taille de fichier. Un `else if` prolonge la chaîne
+  d'un `if` au même niveau : huit `else if` à la suite sont à plat, non à
+  huit niveaux. Le constat nomme la fonction (`render`, `Carte.constructor`,
+  « le rappel passé à `grist.onRecords` ») ; un nom que le widget choisit est cité
+  et borné comme tout texte qui en vient.
+- **Les lignes d'un fichier se comptent d'après les commentaires que lit
+  `acorn`**, non d'après le premier caractère de chaque ligne : une ligne est
+  du code dès qu'un caractère qui n'est pas un blanc est hors de tout
+  commentaire, un commentaire quand elle n'a que des blancs et des caractères
+  de commentaire, vide quand elle n'a que des blancs. Les lignes d'un
+  commentaire de bloc sans étoile en tête sont des commentaires, `/* x */ f();`
+  est du code. Un fichier qu'`acorn` ne lit pas (JSX, TypeScript, erreur de
+  syntaxe) se compte encore d'après le premier caractère, et le constat le dit.
+
 ## Axe B — Lisibilité humaine
 
 C'est l'axe le plus spécifique au guide Grist.Gouv, qui pose une exigence

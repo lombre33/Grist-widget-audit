@@ -100,6 +100,15 @@ const CAS = [
   ['analyse : 20 000 fetch d\'une adresse qui porte un jeton GitHub (un constat de C-EXFIL-01 chacun, masqué)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(20000, (i) => `fetch('https://api.example.com/x?t=gh${'p_'}${hasard(36, i)}');\n`) })],
   ['analyse : 20 000 eval d\'un jeton GitHub (un constat de C-XSS-03 chacun, masqué)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(20000, (i) => `eval("var t = 'gh${'p_'}${hasard(36, i)}'");\n`) })],
 
+  // --- analyse complète : la mesure du code (longueur, complexité, imbrication et nom de chaque fonction ; lignes de code d'un fichier).
+  //     Des fonctions emboîtées : chaque fonction reparcourait tout son sous-arbre, le temps suivait le produit du nombre de fonctions par la profondeur.
+  ['analyse : 400 fonctions emboîtées de 20 conditions chacune (A-FONC)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': `${N(400, (i) => `function f${i}(x) {\n${N(20, (k) => `  if (x > ${k}) { g(${k}); }\n`)}`)}g();\n${'}\n'.repeat(400)}` })],
+  ['analyse : 800 fonctions emboîtées de 20 conditions chacune (A-FONC)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': `${N(800, (i) => `function f${i}(x) {\n${N(20, (k) => `  if (x > ${k}) { g(${k}); }\n`)}`)}g();\n${'}\n'.repeat(800)}` })],
+  ['analyse : une enveloppe auto-appelée de 50 000 fonctions de deux lignes (lignes propres)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': `(function () {\n${N(50000, (i) => `function f${i}(x) {\n  return x ? ${i} : 0;\n}\n`)}})();\n` })],
+  ['analyse : 4 Mio de commentaires /**/ collés sur une ligne (lignes de code)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': `${'/**/'.repeat(MIO)}\nf();\n` })],
+  ['analyse : 3 Mio de texte, 1 048 576 lignes dont une sur deux vide et une sur deux commentée (lignes de code)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': `${'// c\n\n'.repeat(MIO / 2)}f();\n` })],
+  ['analyse : 20 000 fonctions de complexité 17 nommées par une affectation à un chemin de propriétés (noms)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(20000, (i) => `a.b.c.d.e.f.g.h.i.m${i} = function (x) { return ${'x && '.repeat(16)}x; };\n`) })],
+
   // --- analyse complète : CSS (lecteur, conversion en constats, extraits, numéros de ligne)
   ['analyse : .css, 40 000 url() externes sur une ligne', 'analyse', () => ({ 'index.html': `${TETE}<link rel=stylesheet href=a.css>`, 'a.css': N(40000, (i) => `.a${i}{background:url(https://e.example/${i}.png)}`) })],
   ['analyse : .css, 40 000 url() externes, une par ligne', 'analyse', () => ({ 'index.html': `${TETE}<link rel=stylesheet href=a.css>`, 'a.css': N(40000, (i) => `.a${i}{background:url(https://e.example/${i}.png)}\n`) })],
