@@ -6,7 +6,7 @@ import { analyserAccessibiliteStatique } from '../src/regles/f-conformite.js';
  * F-RGAA-01, 03, 04 et 05 lisent la page en une passe du découpeur de parse5
  * (relevé par la coordination le 2026-09-28). Chaque garde a sa paire : la
  * forme fautive est signalée, la forme honnête voisine ne l'est pas. Les
- * pages piégées vérifient que l'analyse ne redevient jamais quadratique.
+ * pages piégées (le temps de l'analyse, jamais quadratique) sont dans tests/budgets/accessibilite.budget.mjs.
  */
 
 function fichier(contenu) {
@@ -165,26 +165,3 @@ test('F-RGAA-04 : un champ dans son label, ou visé par label for, ou nommé par
   assert.equal(orphelins('<input id="n"><textarea></textarea>'), 2);
   assert.equal(orphelins('<input type=hidden><input type="submit"><input title="Nom">'), 0);
 });
-
-// Pages piégées -----------------------------------------------------------------------
-
-const MIO = 1024 * 1024;
-const PIEGES = {
-  'boutons non fermés': '<button>'.repeat(MIO / 8),
-  'boutons et icônes non fermés': '<button><i>'.repeat(MIO / 11),
-  'div imbriqués puis </p> sans p ouvert': '<div>'.repeat(MIO / 10) + '</p>'.repeat(MIO / 8),
-  'formatage non fermé puis </p>': '<b><i><u><s>'.repeat(MIO / 24) + '</p>'.repeat(MIO / 8),
-  'div imbriqués puis <p>': '<div>'.repeat(MIO / 10) + '<p>'.repeat(MIO / 6),
-  'une balise à des dizaines de milliers d\'attributs distincts': `<button ${Array.from({ length: MIO / 8 }, (_, i) => `a${i.toString(36)}`).join(' ')}>`,
-  'images, champs, labels et html sans >': '<img <input <label <html '.repeat(MIO / 26),
-  'svg et sorties vers le HTML': '<svg><g><div>'.repeat(MIO / 13),
-};
-
-for (const [nom, contenu] of Object.entries(PIEGES)) {
-  test(`pages piégées : ${nom} (environ 1 Mio) s'analysent en moins de 2 s`, () => {
-    const debut = performance.now();
-    analyserAccessibiliteStatique({ fichiers: [fichier(contenu)], entrees: ['index.html'] });
-    const duree = performance.now() - debut;
-    assert.ok(duree < 2000, `${Math.round(duree)} ms`);
-  });
-}

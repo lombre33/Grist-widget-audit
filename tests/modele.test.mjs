@@ -26,12 +26,8 @@ test("constat() : l'extrait est replié en blancs puis coupé à 300 caractères
   assert.equal(c(undefined).extrait, null);
 });
 
-test("constat() : l'extrait d'un texte de plusieurs Mio ne coûte pas le repli du texte entier (quadratique sur des milliers de constats)", () => {
+test("constat() : l'extrait d'un texte de plusieurs Mio est coupé sans replier le texte entier (le temps de 400 constats : tests/budgets/modele.budget.mjs)", () => {
   const enorme = 'x y '.repeat(768 * 1024);
-  const debut = performance.now();
-  let dernier;
-  for (let i = 0; i < 400; i++) dernier = constat({ regle: 'X', axe: 'A', titre: 't', severite: 'mineur', constat: 'c', extrait: enorme });
-  const duree = performance.now() - debut;
-  assert.equal(dernier.extrait, 'x y '.repeat(75));
-  assert.ok(duree < 1000, `${Math.round(duree)} ms`);
+  const c = constat({ regle: 'X', axe: 'A', titre: 't', severite: 'mineur', constat: 'c', extrait: enorme });
+  assert.equal(c.extrait, 'x y '.repeat(75));
 });

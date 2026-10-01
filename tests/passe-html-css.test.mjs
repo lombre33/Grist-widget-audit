@@ -365,63 +365,15 @@ test('la borne atteinte devient un constat C-EXFIL-03 critique et bloquant qui e
 });
 
 // ---------------------------------------------------------------------------
-// Pièges chronométrés : en V2, un quadratique est un déni de service
+// Pièges chronométrés : le temps s'éprouve dans tests/budgets/css.budget.mjs (scripts/verifier-budgets.mjs), pas ici
 // ---------------------------------------------------------------------------
 
 const MIO = 1 << 20;
-const PIEGES = {
-  'accolades ouvrantes': '{'.repeat(MIO),
-  'parenthèses ouvrantes': '('.repeat(MIO),
-  '@media imbriqués': '@media x{'.repeat(MIO / 9),
-  'url( sans fin': 'a{b:url('.repeat(MIO / 8),
-  '@import répétés': '@import url(a.css);'.repeat(MIO / 19),
-  '@import à chaînes': '@import "a.css" screen;'.repeat(MIO / 23),
-  'commentaires ouverts': '/*'.repeat(MIO / 2),
-  'échappements': '\\'.repeat(MIO),
-  'chaînes ouvertes': '"'.repeat(MIO),
-  'data: dans des url(': 'a{b:url(data:text/css,'.repeat(MIO / 22),
-  '@import data: de base64 invalide': '@import url("data:text/css;base64,!!!!");'.repeat(MIO / 40),
-};
-
-for (const [nom, css] of Object.entries(PIEGES)) {
-  test(`CSS piégé : ${nom} (environ 1 Mio) se lit en moins de 2 s, dans une page, un attribut style et un fichier .css`, () => {
-    for (const [contexte, f] of [
-      ['<style>', fichier('index.html', `<style>${css}</style>`)],
-      ['style=', fichier('index.html', `<p style='${css.replaceAll("'", '&#39;')}'>`)],
-      ['.css', fichier('style.css', css)],
-    ]) {
-      const debut = performance.now();
-      chargementsDeFichier(f);
-      const duree = performance.now() - debut;
-      assert.ok(duree < 2000, `${contexte} : ${Math.round(duree)} ms`);
-    }
-  });
-}
-
-test('pages piégées : des dizaines de milliers de <link>, <style> et d\'URL data: se lisent en moins de 2 s', () => {
-  const pieges = {
-    'link à srcset': '<link rel=preload as=image imagesrcset="a 1x, b 2x, c 3x">'.repeat(MIO / 60),
-    'candidats de srcset': `<link rel=preload as=image imagesrcset="${'a,'.repeat(MIO / 2)}">`,
-    'candidats à parenthèses': `<link rel=preload as=image imagesrcset="${'a ('.repeat(MIO / 3)}">`,
-    'style ouverts': '<style>@import url(a.css);'.repeat(MIO / 26),
-    'link data:': "<link rel=stylesheet href='data:text/css,@import url(a.css);'>".repeat(MIO / 60),
-    'attributs style': '<p style="background:url(a.png)">'.repeat(MIO / 34),
-    'gabarits de style': '<template><style>@import url(a.css);</style>'.repeat(MIO / 45),
-  };
-  for (const [nom, html] of Object.entries(pieges)) {
-    const debut = performance.now();
-    chargementsDeFichier(fichier('index.html', html));
-    const duree = performance.now() - debut;
-    assert.ok(duree < 2000, `${nom} : ${Math.round(duree)} ms`);
-  }
-});
 
 test('le volume relu dans des feuilles data: reste borné : au-delà d\'un Mio décodé, la borne de volume est dite', () => {
   const grosse = `@import url("data:text/css,${encodeURIComponent('/*' + 'x'.repeat(600 * 1024) + '*/')}");`;
   const html = `<style>${grosse}${grosse}${grosse}</style>`;
-  const debut = performance.now();
   const b = bornes(html);
-  assert.ok(performance.now() - debut < 2000);
   assert.equal(b[0]?.raison, 'volume', 'le budget de 1 Mio est épuisé au deuxième import : dit, pas silencieux');
 });
 
@@ -567,11 +519,9 @@ test('lireCss : @import valide seulement en tête de feuille ; url() seulement d
 // Feuille <link> data: trop grosse : la borne de volume est dite, seulement quand le navigateur l'applique
 // ---------------------------------------------------------------------------
 
-test('une feuille <link> data: de plus de 4 Mio de URL est bornée en volume, dite, et lue en moins de 2 s', () => {
+test('une feuille <link> data: de plus de 4 Mio de URL est bornée en volume et dite', () => {
   const geante = 'a'.repeat(4 * MIO + 1);
-  const debut = performance.now();
   const b = bornes(`<!doctype html><link rel=stylesheet href='data:text/css,${geante}'>`);
-  assert.ok(performance.now() - debut < 2000);
   assert.equal(b.length, 1);
   assert.equal(b[0].raison, 'volume');
   const juste = bornes(`<!doctype html><link rel=stylesheet href='data:text/css,${'a'.repeat(4 * MIO)}'>`);
@@ -657,30 +607,8 @@ test('un attribut en double : la première valeur gagne (href, style)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// Blancs de bord : rognés en temps linéaire
+// Blancs de bord : rognés en temps linéaire (le temps : tests/budgets/css.budget.mjs)
 // ---------------------------------------------------------------------------
-
-test('blancs de bord : des Mio de blancs dans une URL, un type, un rel, un href se lisent en moins de 2 s', () => {
-  const blancs = ' '.repeat(MIO);
-  const pieges = {
-    'url() entre guillemets': `<style>a{b:url("${blancs}x")}</style>`,
-    'url() sans guillemets': `<style>a{b:url(${blancs}x${blancs})}</style>`,
-    '@import': `<style>@import "${blancs}x";</style>`,
-    'data: à blancs': `<link rel=stylesheet href='data:text/css,${blancs}x'>`,
-    'href': `<link rel=stylesheet href="${blancs}x${blancs}">`,
-    'type': `<link rel=stylesheet type="${blancs}x" href=a.css>`,
-    'rel': `<link rel="${blancs}x${blancs}" href=a.css>`,
-    'imagesrcset': `<link rel=preload as=image imagesrcset="${','.repeat(MIO / 2)}x">`,
-    'style=': `<p style="${blancs}background:url(a.png)${blancs}">`,
-    '@import de blancs': `<style>${'@import "  ";'.repeat(MIO / 13)}</style>`,
-  };
-  for (const [nom, html] of Object.entries(pieges)) {
-    const debut = performance.now();
-    chargementsDeFichier(fichier('index.html', html));
-    const duree = performance.now() - debut;
-    assert.ok(duree < 2000, `${nom} : ${Math.round(duree)} ms`);
-  }
-});
 
 // ---------------------------------------------------------------------------
 // Des milliers de constats sur une seule ligne : extrait borné autour de la référence, ligne juste, temps linéaire
@@ -729,8 +657,8 @@ test('extraitAutour : borné à 60 caractères avant et 236 après, sans sortir 
   assert.equal(extraitAutour(`${'z'.repeat(300)}X`, 300), `…${'z'.repeat(60)}X`, 'à la fin du fichier : pas de … derrière');
 });
 
-test('40 000 références externes sur une ligne (.css, <style>, attributs style) : des constats en moins de 4 s, sans quadratique ni mémoire qui enfle', () => {
-  const N = 40000;
+test('2 000 références externes sur une ligne (.css, <style>, attributs style) : un constat par référence, extraits bornés (le temps, à 40 000 : tests/budgets/css.budget.mjs)', () => {
+  const N = 2000;
   const pieges = {
     '.css, une ligne': [fichier('a.css', jusqua(N, (i) => `.a${i}{background:url(https://e.example/${i}.png)}`).join(''))],
     '.css, une par ligne': [fichier('a.css', jusqua(N, (i) => `.a${i}{background:url(https://e.example/${i}.png)}\n`).join(''))],
@@ -741,11 +669,8 @@ test('40 000 références externes sur une ligne (.css, <style>, attributs style
     'imagesrcset de candidats externes': [fichier('index.html', `<!doctype html><link rel=preload as=image imagesrcset="${jusqua(N, (i) => `https://e.example/${i}.png ${i + 1}w`).join(',')}">`)],
   };
   for (const [nom, fichiers] of Object.entries(pieges)) {
-    const debut = performance.now();
     const constats = constatsExfil(fichiers);
-    const duree = performance.now() - debut;
     assert.equal(constats.length, N, `${nom} : un constat par référence`);
     assert.ok(constats.every((c) => c.extrait.length <= 300), `${nom} : extraits bornés`);
-    assert.ok(duree < 4000, `${nom} : ${Math.round(duree)} ms`);
   }
 });

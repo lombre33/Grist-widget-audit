@@ -5,6 +5,11 @@
  * méthode (copie temporaire, chaînes vérifiées d'avance, suite verte et
  * complète sur le code non muté).
  *
+ * Quatre mutants n'y sont plus : `rognerUrl` et `sansBlancsDeBord` en expressions régulières quadratiques, et les deux de `extrait` (replié sans
+ * borne, longueur lue sans borne) ne meurent que par l'horloge (un budget de temps, ou le délai du lot à 1 Mio). Aucun résultat faux ne les
+ * trahit : ils sont dans `scripts/mutants-budgets.mjs`, seuls, sur une machine au calme (méthode : aucun budget en temps réel dans la suite
+ * par défaut ni dans la base des mutants).
+ *
  * Usage : node scripts/mutants-css.mjs [expression régulière sur le libellé] [--part=i/n]
  * (`--part=1/3`, `--part=2/3`, `--part=3/3` dans trois processus : trois fois plus vite)
  * (aucun Chromium n'est nécessaire : le CSS est comparé à l'enregistrement
@@ -129,13 +134,9 @@ const MUTANTS = [
   [S, "let propre = rognerUrl(String(url)).replace(", "let propre = String(url).trim().replace(", 'data: rognage par trim() (NBSP rogné)'],
   [S, "const v = rognerUrl(valeur);", "const v = valeur.trim();", 'ajouterUrl : rognage par trim() (NBSP rogné)'],
   [S, "v = v.slice(1, -1);\n  return v;", "v = v.slice(1, -1);\n  return v.trim();", 'scanner : valeur rognée par trim() (NBSP rogné)'],
-  [S, "while (b > a && texte.charCodeAt(b - 1) <= 32) b--;", "{ const m = /[\\u0000- ]+$/.exec(texte.slice(a)); if (m) b = a + m.index; }", 'rognerUrl : regex quadratique'],
-  [P, "  while (b > a && espace(texte.charCodeAt(b - 1))) b--;\n  return texte.slice(a, b);", "  return texte.replace(/^[\\t\\n\\f\\r ]+|[\\t\\n\\f\\r ]+$/g, '');", 'sansBlancsDeBord : regex quadratique'],
   [P, "(attribut(balise, 'encoding') ?? '')", "(attribut(balise, 'encoding') ?? '').trim()", 'annotation-xml : encoding rogné'],
 
   // --- extrait borné autour de la référence, numéro de ligne, temps des constats
-  [M, "masquerLesSecrets(String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT)).replace(", "masquerLesSecrets(String(c.extrait)).replace(", 'extrait : replié en entier avant la coupe (quadratique)'],
-  [M, "const LONGUEUR_LUE_EXTRAIT = 4096;", "const LONGUEUR_LUE_EXTRAIT = 1 << 30;", 'extrait : longueur lue sans borne'],
   [M, ".replace(/\\s+/g, ' ').slice(0, 300)", ".replace(/\\s+/g, ' ')", 'extrait : plus coupé à 300 caractères'],
   [M, ".replace(/\\s+/g, ' ').slice(0, 300)", ".slice(0, 300)", 'extrait : blancs non repliés'],
   [C, "const debut = Math.max(0, decalage - 60);", "const debut = Math.max(0, decalage - 6);", 'extraitAutour : 6 caractères avant'],

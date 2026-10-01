@@ -1,0 +1,48 @@
+# Ce qui tourne à chaque poussée sur main. Aujourd'hui : les budgets de temps (tests/budgets/), et rien d'autre.
+#
+# Les budgets sont hors de la suite par défaut (`npm test`) : un test vert ne doit pas dépendre de l'horloge, et un mutant tué par
+# la charge d'une machine n'est pas un mutant tué (voir scripts/lib/budgets.mjs). Ils ont donc leur propre job, en mode CI
+# (`--ci`) : chaque budget est multiplié par dix et rien n'est refusé sous charge. Un runner partagé est bruyant ; ce mode ne
+# sert qu'à ce qu'un algorithme redevenu quadratique (un facteur cent et plus sur un mégaoctet) ne passe pas. Les budgets
+# fins se mesurent à la main, machine au calme : `node scripts/verifier-budgets.mjs`.
+#
+# Le cas de l'axe D (widget qui boucle) lance un vrai Chromium ; ce job n'en installe pas, le cas est dit ignoré (jamais passé
+# sous silence) et c'est image-v2.yml, « Plafond de durée et Chromium orphelin », qui éprouve ce plafond avec le vrai Chromium.
+name: Tests
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  budgets:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      # v6.1.0 ; épinglée par SHA, comme toute action tierce ici.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Environnement
+        run: |
+          node --version
+          npm --version
+          nproc
+
+      - name: Dépendances (npm ci)
+        run: npm ci
+
+      # Les essais de l'outillage lui-même (refus sous charge, tué à la limite dure, cas ignoré) ne mesurent aucun temps : ils
+      # sont dans la suite par défaut ; ici, seulement les budgets.
+      - name: Budgets de temps (mode CI, un budget multiplié par dix)
+        run: node scripts/verifier-budgets.mjs --ci
