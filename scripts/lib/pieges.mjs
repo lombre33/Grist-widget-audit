@@ -78,6 +78,15 @@ export const PIEGES_ACCESSIBILITE = [
   ['svg et sorties vers le HTML', '<svg><g><div>'.repeat(MIO / 13), 0],
 ];
 
+/** Des README de 1 Mio qui mettent en difficulté la recherche d'un titre de rubrique (blancs, marqueurs de titre, fins de ligne). `[nom, contenu]`. */
+export const PIEGES_README = [
+  ['de blancs sur deux lignes', `${' '.repeat(MIO)}\n`.repeat(2)],
+  ['de signes =', `${'='.repeat(MIO)}\n`],
+  ["d'étoiles et de blancs", `${'* '.repeat(MIO / 2)}\n`],
+  ['de dièses', `${'#'.repeat(MIO)}\n`],
+  ['de fins de ligne', '\n'.repeat(MIO)],
+];
+
 /** Trois feuilles `data:` de 600 Kio importées l'une après l'autre : au-delà d'un Mio décodé, la borne de volume est dite. */
 const FEUILLE_DATA = `@import url("data:text/css,${encodeURIComponent(`/*${'x'.repeat(600 * 1024)}*/`)}");`;
 export const PAGE_FEUILLES_DATA = `<style>${FEUILLE_DATA}${FEUILLE_DATA}${FEUILLE_DATA}</style>`;

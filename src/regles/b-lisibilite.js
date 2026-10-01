@@ -57,12 +57,26 @@ export function analyserNommage(ctx) {
   return constats;
 }
 
+/**
+ * Le nom d'un README à la racine d'un dépôt : `README` ou `LISEZMOI` (`LISEZ-MOI`, `LISEZ_MOI`), une langue facultative (deux lettres : `.fr`, `_en`,
+ * `-fr-CA` ; trois lettres seulement avant une extension : `README.fra.md`, car `README.png` n'est pas le README « png »), une extension de texte
+ * facultative (`.md`, `.rst`, `.adoc`, `.txt`…). `README.fr.md` est le README d'un widget français : le prendre pour l'absence de README ferait
+ * lever un bloquant sur un dépôt qui en a un. Le motif est ancré aux deux bouts et n'accepte aucun séparateur de dossier : `docs/README.md` n'est
+ * pas le README du dépôt (le guide le veut à la racine).
+ */
+const NOM_DE_README = /^(?:readme|lisez[-_]?moi)(?:[._-](?:[a-z]{2}|[a-z]{3}(?=\.))(?:[-_][a-z0-9]{2,8})?)?(?:\.(?:md|mdx|markdown|mdown|mkd|txt|text|rst|adoc|asciidoc|org|textile|html?))?$/i;
+
+/** `README.md` d'abord (le nom que le guide demande), puis les autres dans l'ordre des codes de leurs noms : le constat cite toujours le même fichier. */
+const rangDeReadme = (f) => (f.chemin.toLowerCase() === 'readme.md' ? 0 : 1);
+
 /** README : présence et couverture des trois points exigés par le guide. */
 export function analyserReadme(ctx) {
   const constats = [];
-  const readme = ctx.fichiers.find((f) => /^readme(\.md|\.txt)?$/i.test(path.basename(f.chemin)) && !f.chemin.includes('/'));
+  const readmes = ctx.fichiers
+    .filter((f) => NOM_DE_README.test(f.chemin))
+    .sort((a, b) => rangDeReadme(a) - rangDeReadme(b) || (a.chemin < b.chemin ? -1 : a.chemin > b.chemin ? 1 : 0));
 
-  if (!readme) {
+  if (!readmes.length) {
     constats.push(constat({
       regle: 'B-DOC-01', axe: 'B', severite: 'majeur', bloquant: true, confiance: 'certain',
       titre: 'Aucun README à la racine du dépôt',
@@ -74,12 +88,19 @@ export function analyserReadme(ctx) {
     return constats;
   }
 
-  const texte = readme.contenu.toLowerCase();
+  // Les rubriques se cherchent dans tous les README de la racine (`README.md` et `README.fr.md` : une information dite dans l'un est dite). Un README
+  // dont aucun texte n'est lu (un fichier trop gros, le plafond de lecture cumulé atteint, une lecture refusée) est reconnu comme présent, mais son contenu
+  // n'est pas jugé : lire `undefined` faisait échouer toute l'analyse, sans rapport.
+  const lisibles = readmes.filter((f) => typeof f.contenu === 'string');
+  if (!lisibles.length) return constats;
+  const readme = lisibles[0];
+  const texte = lisibles.map((f) => f.contenu).join('\n').toLowerCase();
   const attendus = [
     // `[^\S\n]*` et non `\s*` : un début de ligne suivi d'un mot de rubrique, sans que le blanc franchisse la
     // fin de ligne. Le résultat est le même (la dernière fin de ligne d'une suite de blancs est un départ qui
     // convient), mais `\s*` relisait toute la suite de lignes vides depuis chacune : quadratique.
-    { cle: 'role', libelle: 'ce que fait le widget', motifs: /(#|\n)[^\S\n]*(à quoi|a quoi|description|présentation|presentation|what|objectif|fonctionnalit|usage|utilisation)/i },
+    // Un titre se marque par `#` (Markdown), `=` (AsciiDoc, reStructuredText), `*` (Org) ou n'est que le début d'une ligne.
+    { cle: 'role', libelle: 'ce que fait le widget', motifs: /(^|#|=|\*|\n)[^\S\n]*(à quoi|a quoi|description|présentation|presentation|what|objectif|fonctionnalit|usage|utilisation)/i },
     { cle: 'config', libelle: 'comment le configurer', motifs: /(configur|installation|install|paramétr|parametr|mise en place|setup|requiredaccess|niveau d'accès|colonnes)/i },
     { cle: 'deps', libelle: 'ses dépendances', motifs: /(dépendance|dependance|dependenc|prérequis|prerequis|requirements|librairie|bibliothèque|aucune dépendance)/i },
   ];

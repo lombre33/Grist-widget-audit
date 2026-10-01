@@ -4,14 +4,14 @@
  *   - B-IA-01 (`src/regles/b-lisibilite.js`) : le blanc de ligne des motifs (ni `\s`, ni un blanc qui franchit \r, \n, U+2028 ou
  *     U+2029), le compte et la première ligne de chaque famille, le JSDoc générique (fenêtre et type bornés à 200 caractères, un
  *     seul par commentaire, ouverture cherchée avant le `@param`, non après) ;
- *   - B-DOC-02 : la rubrique « ce que fait le widget », que reconnaît `(#|\n)[^\S\n]*` ;
+ *   - B-DOC-02 : le blanc d'indentation d'une rubrique « ce que fait le widget » (les titres et le reste de la reconnaissance du README : `scripts/mutants-readme.mjs`) ;
  *   - A-DEV-03 (`src/regles/a-qualite.js`) : « À FAIRE » et sa borne (`MARQUEUR_INACHEVE`) ;
  *   - la borne des emplacements d'un constat (`src/moteur/modele.js`) : 500 gardés, le nombre d'omis dit.
  * Chaque mutant meurt par un essai déterministe (`tests/petits-motifs.test.mjs`) : aucun délai, aucun budget en temps réel.
  *
- * Mutant équivalent en sortie, laissé de côté : `[^\S\n]*` → `\s*` dans le motif de B-DOC-02. Le résultat est le même (la dernière fin
- * de ligne d'une suite de blancs est un départ qui convient), seul le temps change : il ne peut mourir que par un essai à budget en
- * temps réel, qui n'a pas sa place dans la suite par défaut (à ranger dans `tests/budgets/` et `scripts/mutants-budgets.mjs`).
+ * Mutant équivalent en sortie, laissé de côté ici : `[^\S\n]*` → `\s*` dans le motif de B-DOC-02. Le résultat est le même (la dernière fin
+ * de ligne d'une suite de blancs est un départ qui convient), seul le temps change : aucun essai de la suite ne juge le temps, et c'est le délai
+ * du rejeu de `scripts/mutants-readme.mjs` qui le tue, le bilan le dit (« par un délai »).
  * Autres équivalents : `fin = m.index + m[0].length` → `fin = m.index` ne change rien tant qu'aucun `/**` n'est écrit dans le type
  * entre accolades (l'essai en met un : le mutant meurt) ; un `\b` final de `MARQUEUR_INACHEVE` serait redondant avec `[ :]` (non muté).
  *
@@ -63,7 +63,6 @@ const MUTANTS = [
   dansLigne(B, 'fin = m.index + m[0].length;', 'm.index + m[0].length', '0', 'JSDoc : le texte d\'une occurrence n\'est pas consommé (deux `@param` d\'un commentaire comptent deux fois)'),
   // --- B-DOC-02
   dansLigne(B, "cle: 'role'", '[^\\S\\n]*', '[ \\t]*', 'B-DOC-02 : `[ \\t]*`, l\'espace insécable ne suffit plus comme indentation'),
-  dansLigne(B, "cle: 'role'", '(#|\\n)', '(\\n)', 'B-DOC-02 : le titre `#` ne suffit plus'),
   // --- A-DEV-03 : « À FAIRE »
   dansLigne(A, 'const MARQUEUR_INACHEVE = ', '(?<![\\p{L}\\p{N}_])', '', 'A-DEV-03 : « À FAIRE » sans borne devant lui'),
   dansLigne(A, 'const MARQUEUR_INACHEVE = ', '\\p{L}', '', 'A-DEV-03 : « À FAIRE » accolé à une lettre compte'),
