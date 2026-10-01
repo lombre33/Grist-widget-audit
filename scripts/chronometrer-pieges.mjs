@@ -16,7 +16,9 @@
  *   --delai   délai par cas (120 s par défaut) : au-delà, le cas est dit « dépassé », pas « lent »
  *   --liste   nomme les cas sans rien lancer
  * Les tailles sont celles où le défaut se voyait ; un cas qui ne dit rien de plus qu'un autre se retire, un défaut
- * trouvé s'y ajoute avec l'entrée qui l'a révélé.
+ * trouvé s'y ajoute avec l'entrée qui l'a révélé. Le temps ne se juge pas dans la suite d'essais (aucun budget en temps réel :
+ * sous charge, un essai flanche sans qu'un défaut ait paru) : c'est ici qu'il se mesure, et les entrées piégées que
+ * les essais lisent (`scripts/lib/pieges.mjs`) y sont reprises, une table pour les deux.
  */
 import fs from 'node:fs';
 import os from 'node:os';
@@ -24,6 +26,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { PIEGES_CSS, contextesCss, PIEGES_PAGES_CSS, PIEGES_BLANCS, PIEGES_ACCESSIBILITE, PAGE_FEUILLES_DATA, PAGE_LINK_DATA_GEANT } from './lib/pieges.mjs';
 
 const ICI = fileURLToPath(import.meta.url);
 const RACINE_PAR_DEFAUT = path.resolve(path.dirname(ICI), '..');
@@ -295,6 +298,18 @@ const CAS = [
   ['analyse : 200 000 lignes vides dans un .js, fins de ligne CRLF', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(200000, () => '\r\n') })],
   ['analyse : 40 000 `/** @param {` dans un .js', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(40000, () => '/** @param {') })],
   ['analyse : un README de 200 000 lignes vides', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': '1;', 'README.md': N(200000, () => '\n') })],
+
+  // --- analyse complète : les entrées piégées que les essais lisent sans en juger le temps (`scripts/lib/pieges.mjs`, une table pour les deux)
+  ...PIEGES_CSS.flatMap(([nom, css]) => contextesCss(css).map(([contexte, chemin, contenu]) => [
+    `analyse : CSS piégé « ${nom} » (1 Mio) dans ${contexte}`, 'analyse',
+    () => (chemin === 'style.css' ? { 'index.html': `${TETE}<link rel=stylesheet href=style.css>`, 'style.css': contenu } : { 'index.html': contenu }),
+  ])),
+  ...PIEGES_PAGES_CSS.map(([nom, html]) => [`analyse : page piégée « ${nom} »`, 'analyse', () => ({ 'index.html': html })]),
+  ...PIEGES_BLANCS.map(([nom, html]) => [`analyse : blancs de bord « ${nom} » (1 Mio)`, 'analyse', () => ({ 'index.html': html })]),
+  ...PIEGES_ACCESSIBILITE.map(([nom, html]) => [`analyse : page piégée « ${nom} » (accessibilité)`, 'analyse', () => ({ 'index.html': html })]),
+  ['analyse : trois feuilles data: de 600 Kio importées (borne de volume)', 'analyse', () => ({ 'index.html': PAGE_FEUILLES_DATA })],
+  ['analyse : une feuille <link> data: de plus de 4 Mio (borne de volume)', 'analyse', () => ({ 'index.html': PAGE_LINK_DATA_GEANT })],
+  ['analyse : un <button> jamais fermé suivi de 2 000 <i> (F-RGAA-05, retour arrière)', 'analyse', () => ({ 'index.html': `<!doctype html><html><body>\n<button>${'<i> '.repeat(2000)}X\n</body></html>` })],
 ];
 
 const { values, positionals } = parseArgs({

@@ -26,12 +26,15 @@ test("constat() : l'extrait est replié en blancs puis coupé à 300 caractères
   assert.equal(c(undefined).extrait, null);
 });
 
-test("constat() : l'extrait d'un texte de plusieurs Mio ne coûte pas le repli du texte entier (quadratique sur des milliers de constats)", () => {
+test("constat() : seul le début d'un extrait est lu, 4 096 caractères : replier un texte de plusieurs Mio pour chacun de milliers de constats était quadratique", () => {
+  const extrait = (texte) => constat({ regle: 'X', axe: 'A', titre: 't', severite: 'mineur', constat: 'c', extrait: texte }).extrait;
+  // Une suite de blancs qui n'en finit pas, puis `b` : lu en entier, le texte se replierait en `a b` ; le début lu s'arrête avant `b`.
+  assert.equal(extrait(`a${' '.repeat(4094)}b`), 'a b', '`b` est le 4 096e caractère : lu');
+  assert.equal(extrait(`a${' '.repeat(4095)}b`), 'a ', '`b` est le 4 097e : hors de ce qui est lu');
+  assert.equal(extrait(`a${' '.repeat(3 * 1024 * 1024)}b`), 'a ');
+  // Un texte de plusieurs Mio donne le même extrait que son début de 4 096 caractères, au contenu près des 300 premiers.
   const enorme = 'x y '.repeat(768 * 1024);
-  const debut = performance.now();
-  let dernier;
-  for (let i = 0; i < 400; i++) dernier = constat({ regle: 'X', axe: 'A', titre: 't', severite: 'mineur', constat: 'c', extrait: enorme });
-  const duree = performance.now() - debut;
-  assert.equal(dernier.extrait, 'x y '.repeat(75));
-  assert.ok(duree < 1000, `${Math.round(duree)} ms`);
+  assert.equal(extrait(enorme), 'x y '.repeat(75));
+  assert.equal(extrait(enorme), extrait(enorme.slice(0, 4096)));
+  // Le temps de ce repli est chronométré à part (`scripts/chronometrer-pieges.mjs`) : aucun budget en temps réel dans la suite.
 });

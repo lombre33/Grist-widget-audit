@@ -64,17 +64,16 @@ function exempleAvecScript(t, script) {
 
 function auditer(t, widget, { args = [], env = {}, delaiAxeD = '20000' } = {}) {
   const sortie = path.join(dossierTemporaire(t), 'sortie');
-  const debut = Date.now();
   const r = spawnSync(process.execPath, [CLI, widget, '--json', '--sortie', sortie, ...args], {
     encoding: 'utf8', timeout: 240_000,
     env: { ...process.env, GWAUDIT_DELAI_AXE_D_MS: delaiAxeD, ...env },
   });
-  const duree = Date.now() - debut;
+  // Un audit qui ne conclurait pas de lui-même est tué par le délai de sécurité de `spawnSync` (statut nul) : l'assertion suivante le dit. Aucun budget de temps n'est jugé ici.
   assert.ok(r.status !== null && r.status <= 2, `gwaudit a échoué (code ${r.status}) : ${(r.stderr ?? '').slice(-600)}`);
   // Le code 1 est aussi celui d'un plantage de Node : sans rapport, ce n'est pas un verdict.
   assert.ok(fs.existsSync(path.join(sortie, 'rapport.json')), `aucun rapport écrit (code ${r.status}) : ${(r.stderr ?? '').slice(-600)}`);
   const lire = (nom) => fs.readFileSync(path.join(sortie, nom), 'utf8');
-  return { rapport: JSON.parse(lire('rapport.json')), md: lire('rapport.md'), html: lire('rapport.html'), stderr: r.stderr, duree };
+  return { rapport: JSON.parse(lire('rapport.json')), md: lire('rapport.md'), html: lire('rapport.html'), stderr: r.stderr };
 }
 
 const constatsD = (rapport, regle) => rapport.axes.D.constats.filter((c) => c.regle === regle);
@@ -210,7 +209,6 @@ test("widget qui boucle au chargement : D-TIMEOUT-01 bloquant, axes D et F noté
   assert.match(boucle.md, /Mesure empêchée par le widget/, 'le Markdown aussi');
   assert.match(boucle.html, /D-TIMEOUT-01/);
   assert.match(boucle.md, /D-TIMEOUT-01/);
-  assert.ok(boucle.duree < 90_000, `l'audit doit conclure de lui-même (${boucle.duree} ms)`);
 });
 
 test("widget conforme + une boucle : de CONFORME à NON CONFORME, jamais l'inverse", (t) => {

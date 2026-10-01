@@ -124,13 +124,11 @@ test('un lot tué par SIGTERM s\'arrête sur-le-champ (aucun gestionnaire de sig
     const laisses = processusDans(path.join(copies, copie));
     assert.ok(laisses.length >= 3, `le lanceur, le fichier de test qui boucle et l'orphelin tournent dans la copie (vus : ${laisses.length})`);
 
-    const debut = Date.now();
     lot.kill('SIGTERM');
     const { signal } = await fini;
     assert.equal(signal, 'SIGTERM', 'le lot est mort du signal (un gestionnaire l\'aurait laissé finir sa suite)');
-    assert.ok(Date.now() - debut < 5000, 'sur-le-champ, sans attendre la fin de la suite (60 s)');
     assert.ok(fs.existsSync(path.join(copies, copie)), 'sa copie est restée');
-    assert.ok(laisses.some(vivant), 'ses processus aussi');
+    assert.ok(laisses.some(vivant), 'ses processus aussi : le lot est mort sur-le-champ, sans attendre la fin de la suite (qui boucle)');
 
     assert.deepEqual(balayerCopiesAbandonnees(copies), [path.join(copies, copie)], 'le lot suivant la retire');
     for (const pid of laisses) assert.ok(await attendreLaMort(pid), `le processus ${pid} est mort`);

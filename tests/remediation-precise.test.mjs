@@ -62,14 +62,12 @@ test('F-RGAA-05 : un bouton avec du texte, ou avec aria-label, ne déclenche rie
   assert.equal(analyserAccessibiliteStatique(ctx).filter((x) => x.regle === 'F-RGAA-05').length, 0);
 });
 
-test("F-RGAA-05 : du HTML sans </button> qui referme la construction ne doit jamais faire exploser le temps d'analyse (retour arrière catastrophique relevé par la coordination le 2026-09-28 sur flashcards/index.html, un widget officiel de Grist qui dépassait le délai de 240 s de l'audit entier)", () => {
-  const piege = '<button>' + '<i> '.repeat(2000) + 'X'; // jamais de </button>
-  const html = ['<!doctype html>', '<html><body>', piege, '</body></html>'].join('\n');
-  const ctx = { fichiers: [fichier('index.html', html)], entrees: ['index.html'] };
-  const debut = Date.now();
-  analyserAccessibiliteStatique(ctx);
-  const duree = Date.now() - debut;
-  assert.ok(duree < 1000, `doit rester linéaire (${duree} ms) — l'ancienne regex à quantificateurs imbriqués aurait explosé bien avant ce volume`);
+test("F-RGAA-05 : du HTML sans </button> qui referme la construction se lit sans abandon, et le bouton se juge à son texte (retour arrière catastrophique relevé par la coordination le 2026-09-28 sur flashcards/index.html, un widget officiel de Grist qui dépassait le délai de 240 s de l'audit entier ; le temps de cette entrée est chronométré dans `scripts/chronometrer-pieges.mjs`, non ici)", () => {
+  const relevees = (contenu) => analyserAccessibiliteStatique({ fichiers: [fichier('index.html', ['<!doctype html>', '<html><body>', contenu, '</body></html>'].join('\n'))], entrees: ['index.html'] }).filter((x) => x.regle === 'F-RGAA-05');
+  assert.deepEqual(relevees('<button>' + '<i> '.repeat(2000) + 'X'), [], 'jamais de </button>, mais le texte « X » nomme le bouton : rien à relever');   // l'entrée qui faisait exploser la regex : la construction ne se referme jamais
+  const [c, ...autres] = relevees('<button>' + '<i> '.repeat(2000));
+  assert.equal(autres.length, 0);
+  assert.match(c.titre, /^1 bouton/, 'le même bouton sans texte est relevé, une fois');
 });
 
 test('F-GUIDE-03/04 localisent l\'entrée fautive dans le manifest.json brut', () => {

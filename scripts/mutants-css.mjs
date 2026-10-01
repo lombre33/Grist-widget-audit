@@ -159,4 +159,6 @@ const mutants = MUTANTS
   .filter(([, , , libelle]) => !filtre || filtre.test(libelle))
   .map(([fichier, ancien, nouveau, libelle]) => ({ libelle: `${libelle}  [${fichier.split('/').pop()}]`, fichier, ancien, nouveau }));
 
-process.exitCode = rejouerMutants({ mutants, groupes: [{ nom: 'tests ciblés', fichiers: TESTS }], exigerChromium: false, partie });
+// Aucun essai ne juge le temps (aucun budget en temps réel dans la suite, `scripts/lib/pieges.mjs`) : un mutant qui rend une lecture quadratique
+// (« regex quadratique ») ne se voit qu'au temps. Il est tué par le délai de la suite et le bilan le dit (« par un délai »), non par un essai.
+process.exitCode = rejouerMutants({ mutants, groupes: [{ nom: 'tests ciblés', fichiers: TESTS }], exigerChromium: false, partie, delaiMs: 240_000 });
