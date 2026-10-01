@@ -93,3 +93,59 @@ export const PAGE_FEUILLES_DATA = `<style>${FEUILLE_DATA}${FEUILLE_DATA}${FEUILL
 
 /** Une feuille `<link>` `data:` de plus de 4 Mio de URL : au-delà, la borne de volume est dite. */
 export const PAGE_LINK_DATA_GEANT = `<!doctype html><link rel=stylesheet href='data:text/css,${'a'.repeat(4 * MIO + 1)}'>`;
+
+/**
+ * Les fichiers que l'inventaire ne lit pas (au-delà du plafond par fichier, ou une extension de binaire) : une règle qui en lit le texte sans
+ * vérifier qu'il existe fait lever une exception, et l'analyse s'arrête sans rapport (c'était le cas du README et de la licence). Les essais
+ * (`tests/fichiers-non-lus-regles.test.mjs`) et le balayage (`scripts/balayer-fichiers-non-lus.mjs`) partagent ces tables : le nom du fichier non lu,
+ * la façon dont la page ou le code le référence, sa nature.
+ */
+
+/** Les noms que des règles cherchent (README, licence, manifestes, verrous, `SECURITY`), ceux des dossiers qu'elles distinguent (`vendor/`, tests, `dist/`) et les autres que porte un widget. */
+export const NOMS_DE_FICHIERS_NON_LUS = [
+  'README.md', 'README.fr.md', 'LISEZMOI.md', 'README.txt', 'README', 'LICENSE', 'LICENSE.md', 'LICENCE', 'COPYING', 'LICENSE.pdf', 'COPYING.png',
+  'package.json', 'package-lock.json', 'manifest.json', 'widget.json', '.gitignore', '.env', '.npmrc', 'notes.txt', 'data.json', 'data.csv', 'x.svg', 'x.map', 'x.md',
+  'CHANGELOG.md', 'SECURITY.md', 'app.js', 'big.js', 'lib.mjs', 'worker.js', 'sw.js', 'style.css', 'theme.css', 'other.html', 'index.html', 'grist-plugin-api.js',
+  'vendor.min.js', 'jquery.min.js', 'vendor/lib.js', 'libs/a.js', 'third-party/t.js', 'assets/js/lib/x.js', 'dist/bundle.js', 'static/js/main.abc12345.js', 'src/app.js',
+  'docs/README.md', 'docs/LICENSE', '.github/SECURITY.md', 'SECURITY', 'tests/a.test.js', 'test/e2e/x.js', '__tests__/x.js', 'cypress/e2e/a.cy.js', 'playwright.config.js',
+  'i18n/fr.json', 'locales/en.json', 'public/index.html', 'pages/two.html',
+  'x.wasm', 'x.png', 'x.woff2', 'yarn.lock', 'pnpm-lock.yaml', 'tsconfig.json', 'webpack.config.js', 'x.test.js', 'x.d.ts',
+];
+
+const PAGE_DE_BASE = '<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>t</title><link rel="stylesheet" href="style.css"></head><body><script src="app.js"></script></body></html>\n';
+
+/**
+ * Comment le widget référence le fichier `t` : `[nom de forme, (t) => fichiers du widget qui s'ajoutent ou remplacent ceux de base]`. Les fichiers de base
+ * sont `index.html` (qui charge `app.js` et `style.css`), `app.js` et `style.css`.
+ */
+export const FORMES_DE_REFERENCE = {
+  seul: () => ({}),
+  script: (t) => ({ 'index.html': `<script src="${t}"></script>` }),
+  module: (t) => ({ 'index.html': `<script type="module" src="${t}"></script>` }),
+  feuille: (t) => ({ 'index.html': `<link rel="stylesheet" href="${t}">` }),
+  iframe: (t) => ({ 'index.html': `<iframe src="${t}"></iframe>` }),
+  manifeste: (t) => ({ 'index.html': `<link rel="manifest" href="${t}">` }),
+  image: (t) => ({ 'index.html': `<img src="${t}"><object data="${t}"></object>` }),
+  worker: (t) => ({ 'app.js': `new Worker('${t}');` }),
+  importScripts: (t) => ({ 'app.js': `importScripts('${t}');` }),
+  serviceWorker: (t) => ({ 'app.js': `navigator.serviceWorker.register('${t}');` }),
+  importStatique: (t) => ({ 'app.js': `import './${t}';` }),
+  fetch: (t) => ({ 'app.js': `fetch('${t}');` }),
+  cssImport: (t) => ({ 'style.css': `@import url('${t}');` }),
+  importMap: (t) => ({ 'index.html': `<script type="importmap">{"imports":{"x":"./${t}"}}</script><script type="module">import 'x';</script>` }),
+};
+
+/** Les deux natures d'un fichier non lu : un texte au-delà du plafond, un contenu binaire (NUL, octets invalides). */
+export const NATURES_NON_LUES = ['texte', 'binaire'];
+
+/**
+ * Les fichiers (nom → contenu) d'un petit widget dont le fichier `nom` est celui que l'inventaire ne lira pas : un texte de `octets` octets, ou un
+ * binaire. Il est écrit en dernier : quand `nom` est `index.html`, `app.js` ou `style.css`, c'est lui qui remplace le fichier de base.
+ */
+export function widgetAvecFichierNonLu(nom, forme, nature, octets) {
+  return {
+    'index.html': PAGE_DE_BASE, 'app.js': 'grist.ready();\n', 'style.css': 'body{margin:0}\n',
+    ...FORMES_DE_REFERENCE[forme](nom),
+    [nom]: nature === 'binaire' ? Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(200, 0), Buffer.from([0xff, 0xfe, 0x01])]) : 'a'.repeat(octets),
+  };
+}

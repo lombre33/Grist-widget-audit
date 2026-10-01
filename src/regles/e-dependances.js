@@ -375,10 +375,23 @@ async function npmAudit(racine) {
   }
 }
 
+/** Le nom d'un fichier de licence à la racine : `LICENSE`, `LICENCE` ou `COPYING`, une extension facultative. Aucun séparateur de dossier : `docs/LICENSE` n'est pas la licence du dépôt. */
+const NOM_DE_LICENCE = /^(LICEN[SC]E|COPYING)(\.[a-z]+)?$/i;
+
+/** Un fichier dont l'inventaire a lu le texte : un fichier trop gros, un format binaire (`LICENSE.pdf`), le plafond cumulé atteint ou une lecture refusée n'en ont pas. */
+const estLu = (f) => typeof f.contenu === 'string';
+
+/** Les fichiers dont le texte est lu d'abord, puis l'ordre des noms. */
+const rangDeLicence = (f) => (estLu(f) ? 0 : 1);
+
 /** Licence du dépôt : condition d'un fork par l'équipe Grist.Gouv. */
 export function analyserLicence(ctx) {
   const constats = [];
-  const licence = ctx.fichiers.find((f) => /^(LICEN[SC]E|COPYING)(\.[a-z]+)?$/i.test(path.basename(f.chemin)) && !f.chemin.includes('/'));
+  // Plusieurs fichiers de licence à la racine : celui dont l'outil a lu le texte d'abord (un `COPYING.png` qu'il ne lit pas ne doit pas passer devant un
+  // `LICENSE` qu'il lit), puis l'ordre des noms (l'inventaire suit celui du système de fichiers : il ne décide de rien).
+  const licence = ctx.fichiers
+    .filter((f) => NOM_DE_LICENCE.test(f.chemin))
+    .sort((a, b) => rangDeLicence(a) - rangDeLicence(b) || (a.chemin < b.chemin ? -1 : a.chemin > b.chemin ? 1 : 0))[0];
   if (!licence) {
     constats.push(constat({
       regle: 'E-LIC-01', axe: 'E', severite: 'majeur', bloquant: true, confiance: 'certain',
@@ -389,7 +402,8 @@ export function analyserLicence(ctx) {
       referentiels: ['Loi pour une République numérique, art. 9', 'Politique de contribution open source de l\'État', 'EUPL 1.2'],
     }));
   } else {
-    const t = licence.contenu.slice(0, 3000);
+    const lue = estLu(licence);
+    const t = lue ? licence.contenu.slice(0, 3000) : '';
     const type = /MIT License/i.test(t) ? 'MIT'
       : /Apache License/i.test(t) ? 'Apache 2.0'
       : /EUROPEAN UNION PUBLIC LICENCE|EUPL/i.test(t) ? 'EUPL'
@@ -399,13 +413,16 @@ export function analyserLicence(ctx) {
       regle: 'E-LIC-02', axe: 'E', severite: type === 'non identifiée' ? 'mineur' : 'info', confiance: 'certain',
       titre: `Licence du dépôt : ${type}`,
       fichier: licence.chemin,
-      constat: `Fichier de licence présent (${Math.round(licence.taille / 1024)} Ko), type détecté : ${type}.`,
+      constat: lue
+        ? `Fichier de licence présent (${Math.round(licence.taille / 1024)} Ko), type détecté : ${type}.`
+        : "Fichier de licence présent, dont l'outil n'a pas lu le texte (fichier trop gros, format binaire ou lecture refusée) : son type n'a pas pu être détecté.",
       impact: type === 'GPL/AGPL'
         ? "Licence à effet contaminant : à vérifier avec l'équipe Grist.Gouv avant intégration, elle contraint la redistribution du reste de l'instance."
         : type === 'non identifiée'
         ? "Le type de licence n'a pas pu être déterminé automatiquement : à vérifier manuellement."
         : 'Licence compatible avec un fork par l\'équipe Grist.Gouv.',
-      remediation: type === 'non identifiée' ? "Utiliser le texte standard non modifié d'une licence reconnue." : 'Rien à corriger.',
+      remediation: !lue ? "Fournir le texte de la licence dans un fichier texte (`LICENSE` ou `LICENSE.md`) : l'outil, comme l'équipe qui fork le dépôt, le lit sans autre programme."
+        : type === 'non identifiée' ? "Utiliser le texte standard non modifié d'une licence reconnue." : 'Rien à corriger.',
       referentiels: ['Politique de contribution open source de l\'État'],
     }));
   }
