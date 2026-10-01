@@ -204,8 +204,10 @@ test("sous dérogation, un échec de lancement n'est pas rangé parmi les refus 
 /**
  * Un processus enfant sans dérogation. Sous root, Chromium ne démarre pas avec son bac à sable : l'enfant tourne alors
  * sous un utilisateur sans privilège (nobody) — ce que fait un vrai déploiement. Là où le bac à sable ne peut pas
- * démarrer du tout (espaces de noms utilisateur interdits), le test ÉCHOUE et le dit, sauf GWAUDIT_SUITE_SANS_CHROMIUM=1
- * (saut explicite, comme les autres tests qui lancent Chromium).
+ * démarrer du tout (espaces de noms utilisateur interdits), l'essai ne prouve rien : hors root il ÉCHOUE et le dit (c'est là que le bac à
+ * sable doit démarrer, sur le poste d'un contributeur et dans la construction de l'image), sous root (un conteneur, qui interdit ces espaces de
+ * noms plus souvent qu'il ne les laisse) il SAUTE en nommant la cause, et GWAUDIT_SUITE_SANS_CHROMIUM=1 le saute partout (saut explicite,
+ * comme les autres essais qui lancent Chromium).
  */
 function enfantAvecBacASable(t, args) {
   const travail = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-test-bas-'));
@@ -219,6 +221,7 @@ function enfantAvecBacASable(t, args) {
 
 function bacASableImpossible(t, detail) {
   if (process.env.GWAUDIT_SUITE_SANS_CHROMIUM === '1') { t.skip(`Chromium ne démarre pas avec son bac à sable ici (GWAUDIT_SUITE_SANS_CHROMIUM=1) : ${detail}`); return true; }
+  if (process.getuid?.() === 0) { t.skip(`Chromium ne démarre pas avec son bac à sable ici (exécution en root : un conteneur interdit souvent les espaces de noms utilisateur, même à un utilisateur sans privilège) : ${detail} — cet essai ne prouve rien sans lui ; hors root il échoue`); return true; }
   assert.fail(`Chromium ne démarre pas avec son bac à sable sur cette machine : ${detail} — ce test ne prouve rien sans lui. GWAUDIT_SUITE_SANS_CHROMIUM=1 le saute explicitement.`);
 }
 
