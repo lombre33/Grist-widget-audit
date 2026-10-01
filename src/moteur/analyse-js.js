@@ -7,7 +7,7 @@
  * positif coûte la confiance du lecteur — c'est le défaut le plus grave que
  * puisse avoir un outil comme celui-ci.
  */
-import { parse } from 'acorn';
+import { Parser } from 'acorn';
 import * as walk from 'acorn-walk';
 import { lirePage, integriteProtege, urlDe, urlDeCarte, baseDe } from './page-html.js';
 
@@ -122,6 +122,40 @@ export function syntaxeDeModule(ast) {
  */
 export const depassementDePile = (e) => (e instanceof RangeError && /call stack/i.test(String(e.message))) || (e instanceof SyntaxError && /not enough stack space/i.test(String(e.message)));
 
+/**
+ * Vrai pour le `RangeError` de V8 que lève une pile qui déborde : le même jugement que le premier membre de `depassementDePile`, sans expression
+ * régulière. La différence compte là où la pile est pleine (voir `LecteurAcorn`) : une expression régulière qui s'y compile pour la première fois
+ * n'a plus la place de le faire, et V8 abandonne le processus. Un `RangeError` seul : un message d'erreur de syntaxe peut citer le texte du widget
+ * (le motif d'une expression régulière invalide, `/(call stack/`) et ne doit pas passer pour une pile qui déborde.
+ */
+export const estPileDeV8 = (e) => e instanceof RangeError && String(e.message).includes('call stack');
+
+/**
+ * Le lecteur d'acorn. `catchStackOverflow` d'acorn (8.18) enveloppe chaque `parseExpression` : quand la pile déborde, le cadre le plus profond
+ * qui le rattrape teste le message de l'erreur par une expression régulière, que V8 compile à cet instant, au bord de la pile. Il n'y a plus de
+ * place pour la compiler : V8 abandonne le processus (« FATAL ERROR: RegExpCompiler Allocation failed », code 134, aucun rapport) et aucun `try`
+ * ne l'attrape. Quelques Kio de `a[` répétés suffisent, à certains lancements (selon l'état du compilateur JIT et des
+ * expressions régulières déjà compilées) : un widget hostile tue l'auditeur sans rapport. Ici le même rattrapage sans expression
+ * régulière, et sans `raise` (qui en compile une autre pour dire la ligne) : le `RangeError` de la pile devient l'erreur de syntaxe « Not enough
+ * stack space to parse input (ligne:colonne) » que lève acorn quand il réussit à la dire, avec les mêmes `pos`, `loc` et `raisedAt`, et que
+ * `depassementDePile` classe en `profondeur`. Toute autre erreur passe telle quelle.
+ */
+export const LecteurAcorn = Parser.extend((Base) => class extends Base {
+  catchStackOverflow(f) {
+    try {
+      return f();
+    } catch (e) {
+      if (!estPileDeV8(e)) throw e;
+      const loc = this.startLoc;
+      const erreur = new SyntaxError(`Not enough stack space to parse input${loc ? ` (${loc.line}:${loc.column})` : ''}`);
+      erreur.pos = this.start;
+      erreur.loc = loc;
+      erreur.raisedAt = this.pos;
+      throw erreur;
+    }
+  }
+});
+
 /** Ce que dit une erreur qui n'est ni un dépassement de pile ni une erreur de syntaxe : son type et son message, tronqué. */
 const messageDErreur = (e) => `${e?.name ?? 'Error'} : ${String(e?.message ?? e).slice(0, 200)}`;
 
@@ -172,7 +206,7 @@ export function erreurDeParcours(e) {
 function tenter(source, sourceType) {
   try {
     const commentaires = [];
-    const ast = parse(source, {
+    const ast = LecteurAcorn.parse(source, {
       ecmaVersion: 'latest', sourceType, locations: true, allowHashBang: true,
       onComment: (_bloc, _texte, debut, fin) => commentaires.push({ debut, fin }),
     });

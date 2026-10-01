@@ -317,7 +317,12 @@ imbrication de code littéral), et aucun ne se passe sous silence :
   reste, une fois par unité, avec l'étape où l'échec a eu lieu (lecture,
   parcours d'une règle, inventaire), et une lecture qui a échoué n'est pas
   refaite par les règles. Le code piégé est dit et les autres fichiers sont
-  audités comme s'il n'était pas là : il ne fait pas tomber l'audit. Un
+  audités comme s'il n'était pas là : il ne fait pas tomber l'audit. Une
+  imbrication que la pile ne porte pas ne fait pas non plus abandonner le
+  processus : la lecture rattrape elle-même le dépassement de pile, sans
+  expression régulière (`LecteurAcorn`), là où acorn en compilait une au bord
+  de la pile, ce que V8 ne pardonne pas (abandon sans rapport, à certains
+  lancements). Un
   fichier que le parcours d'une règle n'a pas pu faire et qu'aucune page
   n'exécute est une information groupée, qui ne bloque pas. Quand c'est la
   lecture elle-même qui échoue, le texte du constat dit ce qui a eu lieu :

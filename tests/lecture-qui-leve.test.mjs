@@ -5,12 +5,13 @@
  * aucune règle ne voyait le fichier et l'audit concluait « conforme sous réserve » (88 sans navigateur, 92 avec) d'un fichier qu'il
  * n'avait pas lu.
  *
- * Un code réellement trop profond finit, selon l'état du compilateur JIT et celui du compilateur d'expressions régulières de V8,
- * dans une exception (que ce fichier éprouve), dans un code qui se lit, ou dans l'abandon du processus (code 134) : aucune de ces
- * fins ne se rejoue à coup sûr dans un essai. Ici la lecture lève sur commande, là où acorn convertit sa source en chaîne
- * (`String(source)`), donc toujours, sans dépendre de la pile de la machine ni de l'état de V8 ; le rejeu d'un code réellement
- * profond, lancement après lancement, est `scripts/rejouer-fichier-profond.mjs`. Chaque essai a son mutant dans
- * `scripts/mutants-lecture-qui-leve.mjs`.
+ * Un code réellement trop profond finit, selon l'état du compilateur JIT de V8, dans une exception (que ce fichier éprouve) ou dans un
+ * code qui se lit ; aucune de ces fins ne se rejoue à coup sûr dans un essai. Il finissait aussi, à certains lancements, dans l'abandon
+ * du processus (code 134) : le rattrapage de pile d'acorn compilait une expression régulière au bord de la pile. `LecteurAcorn` l'a
+ * corrigé à la source, et `tests/abandon-de-pile.test.mjs` l'éprouve dans un processus neuf par lecture. Ici la lecture lève sur
+ * commande, là où acorn convertit sa source en chaîne (`String(source)`), donc toujours, sans dépendre de la pile de la machine ni de
+ * l'état de V8 ; le rejeu d'un code réellement profond, lancement après lancement, est `scripts/rejouer-fichier-profond.mjs`. Chaque
+ * essai a son mutant dans `scripts/mutants-lecture-qui-leve.mjs`.
  */
 import test from 'node:test';
 import assert from 'node:assert/strict';

@@ -3,8 +3,9 @@
  * widget-exemple. Ce que V8 fait d'un code trop profond varie d'un lancement à l'autre (le code se lit, la lecture lève, le processus
  * est arrêté) : les essais ne comparent aucun de ces comptes à une valeur écrite. Ils éprouvent ce que le script juge, sur des
  * arbres factices dont la fin de chaque lancement est décidée d'avance : un rapport complet qui n'a ni le témoin planté au cœur du
- * fichier ni C-SURFACE-03 est un silence, à toute profondeur, l'abandon du processus n'en est pas un, une sortie 3 est un plantage, un
- * lancement qui ne finit pas est un délai, et le code de sortie du script suit. Les arbres factices disent aussi comment l'audit a été lancé (fil principal ou
+ * fichier ni C-SURFACE-03 est un silence, à toute profondeur, l'abandon du processus n'en est pas un (sauf avec `--sans-abandon`, qui
+ * l'interdit : le rejeu d'un arbre qui porte le correctif de la lecture), une sortie 3 est un plantage, un lancement qui ne finit pas est
+ * un délai, et le code de sortie du script suit. Les arbres factices disent aussi comment l'audit a été lancé (fil principal ou
  * Worker, pile, options) ; deux lancements réels, à un niveau que la pile porte, éprouvent le fil principal et l'enveloppe Worker.
  * Chaque essai a son mutant dans `scripts/mutants-lecture-qui-leve.mjs`.
  */
@@ -15,7 +16,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { TEMOIN, fichierProfond, diraitIllisible, aVuLeTemoin, classer, rejouer, tableau } from '../scripts/rejouer-fichier-profond.mjs';
+import { TEMOIN, SANS_CAUSE, fichierProfond, diraitIllisible, aVuLeTemoin, classer, causeDAbandon, rejouer, tableau } from '../scripts/rejouer-fichier-profond.mjs';
 
 const RACINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const SCRIPT = path.join(RACINE, 'scripts', 'rejouer-fichier-profond.mjs');
@@ -123,6 +124,17 @@ else if (scenario === 'muet') { rapport([]); process.exitCode = 1; }
 else if (scenario === 'dit') { rapport([illisible]); process.exitCode = 2; }
 else if (scenario === 'info') { rapport([{ ...illisible, severite: 'info', bloquant: false }]); process.exitCode = 1; }
 else if (scenario === 'abandon') process.exit(134);
+else if (scenario === 'abandon-v8') { console.error('FATAL ERROR: RegExpCompiler Allocation failed - process out of memory'); process.exit(134); }
+else if (scenario === 'abandon-alterne') {
+  const compteur = path.join(import.meta.dirname, 'compteur');
+  const k = fs.existsSync(compteur) ? Number(fs.readFileSync(compteur, 'utf8')) : 0;
+  fs.writeFileSync(compteur, String(k + 1));
+  console.error(k % 3 === 2 ? 'FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory' : 'FATAL ERROR: RegExpCompiler Allocation failed - process out of memory');
+  process.exit(134);
+}
+else if (scenario === 'abandon-vide') { console.error('FATAL ERROR: '); process.exit(134); }
+else if (scenario === 'lit-bruyant') { console.error('FATAL ERROR: RegExpCompiler Allocation failed - process out of memory'); rapport([{ regle: 'C-EXFIL-01', severite: 'critique', bloquant: true, titre: 'Requête réseau sortante vers un service externe : ' + temoin }]); process.exitCode = 2; }
+else if (scenario === 'lit-volumineux') { for (let i = 0; i < 48; i++) fs.writeSync(2, 'x'.repeat(65535) + '\\n'); rapport([{ regle: 'C-EXFIL-01', severite: 'critique', bloquant: true, titre: 'Requête réseau sortante vers un service externe : ' + temoin }]); process.exitCode = 2; }
 else if (scenario === 'plante') { console.error('Erreur : boom'); process.exitCode = 3; }
 else if (scenario === 'refuse') process.exitCode = 4;
 else if (scenario === 'boucle') setInterval(() => {}, 1000);
@@ -169,6 +181,88 @@ for (const regime of ['principal', 'worker']) {
     }
   }));
 }
+
+test('rejouer, avec `sansAbandon` : l\'arrêt par V8 devient une fin interdite, et aucune autre fin ne change de sens ni n\'est comptée deux fois', () => avecArbres((parent) => {
+  const cas = [
+    ['abandon', { abandon: 3 }, 3],
+    ['lit', { lu: 3 }, 0],
+    ['dit', { dit: 3 }, 0],
+    ['muet', { silence: 3 }, 3],
+    ['plante', { plantage: 3 }, 3],
+    ['refuse', { autre: 3 }, 3],
+  ];
+  for (const regime of ['principal', 'worker']) {
+    for (const [scenario, attendu, interdites] of cas) {
+      const arbre = arbreFactice(parent, `sans-abandon-${regime}-${scenario}`, scenario);
+      const r = rejouer({ niveaux: [20_000], essais: 3, regime, arbres: [arbre], sansAbandon: true });
+      assert.deepEqual(pris(r.lignes[0]), comptes(attendu), `${scenario} (${regime})`);
+      assert.equal(r.interdites, interdites, `${scenario} (${regime}) : fins interdites`);
+    }
+  }
+  const abandon = arbreFactice(parent, 'abandon-seul', 'abandon');
+  assert.equal(rejouer({ niveaux: [20_000], essais: 2, regime: 'principal', arbres: [abandon], sansAbandon: false }).interdites, 0, 'sans l\'option, l\'abandon reste une fin permise');
+  assert.equal(rejouer({ niveaux: [20_000], essais: 2, regime: 'principal', arbres: [abandon] }).interdites, 0, 'l\'option est facultative');
+  const dit = arbreFactice(parent, 'dit-seul', 'dit');
+  const deux = rejouer({ niveaux: [20_000], essais: 2, regime: 'principal', arbres: [abandon, dit], sansAbandon: true });
+  assert.deepEqual(deux.lignes.map((l) => [path.basename(l.arbre), l.abandon, l.dit]), [['abandon-seul', 2, 0], ['dit-seul', 0, 2]]);
+  assert.equal(deux.interdites, 2, 'seuls les lancements de l\'arbre qui s\'abandonne comptent');
+}));
+
+test('causeDAbandon : la ligne « FATAL ERROR » de V8, sans son préfixe ni ses blancs, coupée à cent vingt caractères ; null quand V8 n\'en a dit aucune', () => {
+  const regexp = 'RegExpCompiler Allocation failed - process out of memory';
+  const tas = 'Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory';
+  assert.equal(causeDAbandon(`FATAL ERROR: ${regexp}\n ----- Native stack trace -----\n\n 1: 0x1234 node::Abort()`), regexp);
+  assert.equal(causeDAbandon(`FATAL ERROR: ${tas}\n`), tas);
+  assert.equal(causeDAbandon(`un avertissement\nFATAL ERROR: ${regexp}\r\nla suite`), regexp, 'précédée d\'autres lignes, terminée par un retour chariot');
+  assert.equal(causeDAbandon(`FATAL ERROR: ${regexp}  \t \n`), regexp, 'les blancs de fin ne sont pas la cause');
+  assert.equal(causeDAbandon(`FATAL ERROR: première\nFATAL ERROR: seconde\n`), 'première', 'la première ligne');
+  assert.equal(causeDAbandon(`FATAL ERROR: ${'x'.repeat(120)}`), 'x'.repeat(120), 'cent vingt caractères : entière');
+  assert.equal(causeDAbandon(`FATAL ERROR: ${'x'.repeat(121)}`), 'x'.repeat(120), 'cent vingt et un : coupée');
+  assert.equal(causeDAbandon(`FATAL ERROR: ${'x'.repeat(5000)}\n`).length, 120);
+  assert.equal(causeDAbandon('FATAL ERROR: \n'), '', 'un message vide est une cause vide, que le tableau ne garde pas');
+  for (const rien of ['', 'Erreur : boom', 'fatal error: minuscules', 'FATAL ERROR:collé', '# Fatal error in , line 0', null, undefined]) assert.equal(causeDAbandon(rien), null, String(rien));
+});
+
+test('rejouer : chaque abandon compte sa cause, celle que V8 a dite, « aucun message de V8 » quand il n\'en a dit aucune, et seuls les abandons ont des causes', () => avecArbres((parent) => {
+  const regexp = 'RegExpCompiler Allocation failed - process out of memory';
+  const tas = 'Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory';
+  const cas = [
+    ['abandon-v8', { abandon: 3 }, { [regexp]: 3 }],
+    ['abandon', { abandon: 3 }, { [SANS_CAUSE]: 3 }],
+    ['abandon-vide', { abandon: 3 }, { [SANS_CAUSE]: 3 }],
+    ['abandon-alterne', { abandon: 3 }, { [regexp]: 2, [tas]: 1 }],
+    ['lit-bruyant', { lu: 3 }, {}],
+    ['lit', { lu: 3 }, {}],
+    ['dit', { dit: 3 }, {}],
+    ['muet', { silence: 3 }, {}],
+    ['plante', { plantage: 3 }, {}],
+    ['refuse', { autre: 3 }, {}],
+  ];
+  for (const regime of ['principal', 'worker']) {
+    for (const [scenario, fins, causes] of cas) {
+      const arbre = arbreFactice(parent, `causes-${regime}-${scenario}`, scenario);
+      const r = rejouer({ niveaux: [20_000], essais: 3, regime, arbres: [arbre] });
+      assert.deepEqual(pris(r.lignes[0]), comptes(fins), `${scenario} (${regime})`);
+      assert.deepEqual(r.lignes[0].causes, causes, `${scenario} (${regime}) : causes`);
+    }
+  }
+  // Un arbre par ligne : chaque arbre compte ses causes, non celles d'un autre ; chaque niveau les siennes.
+  const a = arbreFactice(parent, 'cause-a', 'abandon-v8');
+  const b = arbreFactice(parent, 'cause-b', 'abandon');
+  const deux = rejouer({ niveaux: [1_400, 20_000], essais: 2, regime: 'principal', arbres: [a, b] });
+  assert.deepEqual(deux.lignes.map((l) => [path.basename(l.arbre), l.niveaux, l.causes]), [
+    ['cause-a', 1_400, { [regexp]: 2 }], ['cause-b', 1_400, { [SANS_CAUSE]: 2 }],
+    ['cause-a', 20_000, { [regexp]: 2 }], ['cause-b', 20_000, { [SANS_CAUSE]: 2 }],
+  ]);
+}));
+
+test('rejouer : une sortie d\'erreur de plusieurs Mio ne fait pas échouer le lancement : il se lit, il n\'est ni arrêté ni compté en abandon', () => avecArbres((parent) => {
+  const arbre = arbreFactice(parent, 'volumineux', 'lit-volumineux');
+  const r = rejouer({ niveaux: [20_000], essais: 2, regime: 'principal', arbres: [arbre], sansAbandon: true });
+  assert.deepEqual(pris(r.lignes[0]), comptes({ lu: 2 }));
+  assert.deepEqual(r.lignes[0].causes, {});
+  assert.equal(r.interdites, 0);
+}));
 
 test('rejouer : un lancement qui ne finit pas dans le temps donné est arrêté et compté en délai (interdit), non en abandon', () => avecArbres((parent) => {
   const arbre = arbreFactice(parent, 'boucle', 'boucle');
@@ -220,6 +314,30 @@ test('le tableau dit, par niveau (et par arbre s\'il y en a plusieurs), les comp
   assert.match(plusieurs[1], /^avant\s+20000 \|/);
 });
 
+test('le tableau dit aussi, sous les comptes, la cause de chaque abandon : une ligne par cause, avec le nom de l\'arbre quand il y en a plusieurs ; aucune quand il n\'y en a pas', () => {
+  const fins = { lu: 0, dit: 0, silence: 0, plantage: 0, autre: 0, delai: 0 };
+  const lignes = [
+    { arbre: '/x/avant', niveaux: 1_700, essais: 10, ...fins, lu: 4, abandon: 6, causes: { 'RegExpCompiler Allocation failed - process out of memory': 5, [SANS_CAUSE]: 1 } },
+    { arbre: '/x/apres', niveaux: 1_700, essais: 10, ...fins, lu: 10, abandon: 0, causes: {} },
+    { arbre: '/x/avant', niveaux: 20_000, essais: 10, ...fins, dit: 10, abandon: 0, causes: {} },
+  ];
+  const seul = tableau(lignes.slice(0, 1), { plusieursArbres: false }).split('\n');
+  assert.equal(seul.length, 6, 'l\'en-tête, la ligne, un blanc, le titre des causes, deux causes');
+  assert.equal(seul[2], '', 'un blanc sépare les comptes des causes');
+  assert.deepEqual(seul.slice(3), [
+    'Causes des abandons (la ligne « FATAL ERROR » de V8) :',
+    '  1700 niveaux : 5 × RegExpCompiler Allocation failed - process out of memory',
+    `  1700 niveaux : 1 × ${SANS_CAUSE}`,
+  ]);
+  const plusieurs = tableau(lignes, { plusieursArbres: true }).split('\n').slice(5);
+  assert.deepEqual(plusieurs, [
+    'Causes des abandons (la ligne « FATAL ERROR » de V8) :',
+    '  avant, 1700 niveaux : 5 × RegExpCompiler Allocation failed - process out of memory',
+    `  avant, 1700 niveaux : 1 × ${SANS_CAUSE}`,
+  ]);
+  assert.equal(tableau(lignes.slice(1), { plusieursArbres: true }).split('\n').length, 3, 'sans abandon, pas de ligne de causes');
+});
+
 // ---------------------------------------------------------------------------
 // La ligne de commande.
 // ---------------------------------------------------------------------------
@@ -259,6 +377,45 @@ test('la ligne de commande sort en code 1 sur un silence, dit pourquoi, et en co
   assert.match(lignes[2], /^dit\s+20000 \|\s+1 \|\s+0 \|\s+1 \|/);
 }));
 
+test('la ligne de commande, avec `--sans-abandon`, sort en code 1 quand V8 arrête un lancement et le dit, et en code 0 quand aucun lancement n\'est arrêté', () => avecArbres((parent) => {
+  const abandon = arbreFactice(parent, 'abandon', 'abandon');
+  const r = lancer(`--arbre=${abandon}`, '--niveaux=20000', '--essais=2', '--sans-abandon');
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /20000 \|\s+2 \|\s+0 \|\s+0 \|\s+2 \|\s+0 \|/);
+  assert.match(r.stdout, /2 lancement\(s\) ont fini d'une fin qui ne doit pas exister/);
+  assert.match(r.stdout, /abandon : le processus a été arrêté par V8/);
+  const avant = lancer('--sans-abandon', `--arbre=${abandon}`, '--niveaux=20000', '--essais=1');
+  assert.equal(avant.status, 1, 'l\'option se place où l\'on veut dans la ligne');
+  const sans = lancer(`--arbre=${abandon}`, '--niveaux=20000', '--essais=2');
+  assert.equal(sans.status, 0, 'sans l\'option, l\'abandon reste permis');
+  assert.match(sans.stdout, /Aucune fin interdite : chaque lancement a lu le code, l'a dit \(C-SURFACE-03 bloquant\) ou a été arrêté par V8\./);
+  assert.doesNotMatch(sans.stdout, /abandon : le processus a été arrêté/);
+  const dit = arbreFactice(parent, 'dit', 'dit');
+  const bon = lancer(`--arbre=${dit}`, '--niveaux=20000,1400', '--essais=2', '--sans-abandon');
+  assert.equal(bon.status, 0, bon.stdout + bon.stderr);
+  assert.match(bon.stdout, /Aucune fin interdite : chaque lancement a lu le code ou l'a dit \(C-SURFACE-03 bloquant\), aucun n'a été arrêté par V8\./);
+  const muet = arbreFactice(parent, 'muet', 'muet');
+  const silence = lancer(`--arbre=${muet}`, '--niveaux=20', '--essais=1', '--sans-abandon');
+  assert.equal(silence.status, 1, silence.stdout + silence.stderr);
+  assert.match(silence.stdout, /1 lancement\(s\) ont fini d'une fin qui ne doit pas exister \(silence : .* delai : pas fini à temps ; abandon : le processus a été arrêté par V8\)\./);
+  const deux = lancer(`--arbre=${abandon}`, `--arbre=${dit}`, '--niveaux=20000', '--essais=1', '--sans-abandon');
+  assert.equal(deux.status, 1, deux.stdout + deux.stderr);
+  assert.match(deux.stdout, /\n1 lancement\(s\) ont fini/);
+}));
+
+test('la ligne de commande dit la cause de chaque abandon sous le tableau, avec ou sans `--sans-abandon`, et n\'en dit aucune quand aucun lancement n\'est arrêté', () => avecArbres((parent) => {
+  const v8 = arbreFactice(parent, 'v8', 'abandon-v8');
+  for (const options of [[], ['--sans-abandon']]) {
+    const r = lancer(`--arbre=${v8}`, '--niveaux=20000', '--essais=2', ...options);
+    assert.equal(r.status, options.length ? 1 : 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /\nCauses des abandons \(la ligne « FATAL ERROR » de V8\) :\n {2}20000 niveaux : 2 × RegExpCompiler Allocation failed - process out of memory\n/);
+  }
+  const sans = arbreFactice(parent, 'sans', 'abandon');
+  assert.match(lancer(`--arbre=${sans}`, '--niveaux=20000', '--essais=1').stdout, /\n {2}20000 niveaux : 1 × aucun message de V8\n/);
+  const lit = arbreFactice(parent, 'lit', 'lit');
+  assert.doesNotMatch(lancer(`--arbre=${lit}`, '--niveaux=20000', '--essais=1').stdout, /Causes des abandons/);
+}));
+
 test('la ligne de commande, sans `--arbre`, rejoue l\'arbre qui la porte : un vrai lancement de l\'audit, à 40 niveaux', () => {
   const r = lancer('--niveaux=40', '--essais=1');
   assert.equal(r.status, 0, r.stdout + r.stderr);
@@ -295,9 +452,12 @@ test('la ligne de commande refuse en code 2 une option inconnue ou fausse, et di
     assert.equal(r.status, 2, `${args.join(' ')} : ${r.stdout}${r.stderr}`);
     assert.match(r.stderr, motif, args.join(' '));
     assert.match(r.stderr, /Usage : node scripts\/rejouer-fichier-profond\.mjs/);
+    assert.match(r.stderr, /\[--sans-abandon\]$/m, 'l\'usage dit l\'option qui interdit l\'abandon');
     assert.equal(r.stdout, '', 'rien n\'est lancé');
   };
   refuse(['--bidon=1'], /Option inconnue : --bidon=1/);
+  refuse(['--sans-abandon=1'], /Option inconnue : --sans-abandon=1/); // un drapeau, non une option à valeur : une valeur qu'on ignorerait en silence est refusée
+  refuse(['--sans-abandons'], /Option inconnue : --sans-abandons/);
   refuse([`--arbre=${arbre}`, '--niveaux=abc'], /Niveaux invalides/);
   refuse([`--arbre=${arbre}`, '--niveaux=0'], /Niveaux invalides/);
   refuse([`--arbre=${arbre}`, '--niveaux=1.5'], /Niveaux invalides/);
