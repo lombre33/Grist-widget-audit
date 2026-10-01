@@ -112,6 +112,11 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: bash docker/ci/verifier.sh memoire
 
+      - name: Analyse du code interrompue (tas épuisé, noyau, délai), audit sous le seuil et mesure des pics
+        id: interruption
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: bash docker/ci/verifier.sh interruption
+
       - name: Nettoyage
         if: ${{ always() }}
         run: |
@@ -226,3 +231,10 @@ jobs:
       # Un seul saut est attendu et dit sa raison : le faux Chromium en script shell.
       - name: Axe D bloqué ou non exécuté, refus de cible, sous Windows
         run: node --test tests/axe-d-bloque.test.mjs tests/ssrf.test.mjs
+
+      # L'analyse du code tourne dans un processus enfant à limite de mémoire (src/isolement) : la ligne de commande
+      # d'Antoine (V1, Windows) la lance aussi. Ces essais éprouvent l'enfant, ses limites, le rapport de repli quand
+      # il meurt d'un tas épuisé et la sortie 3 quand il ne démarre pas ; ceux qui provoquent un abandon par signal
+      # sautent sous Windows (le processus y est tué sans signal) et le disent.
+      - name: Analyse du code dans un enfant à limite, sous Windows
+        run: node --test tests/isolement-limites.test.mjs tests/isolement-enfant.test.mjs tests/isolement-analyse-isolee.test.mjs tests/isolement-cli.test.mjs

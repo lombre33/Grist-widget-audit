@@ -45,9 +45,12 @@ mkdir -p /out
 # 8643599, le premier, d4a2e39, prenait encore 302 s sur une page piégée)
 # — mais la classe de bug reste :
 # analyseStatique() (src/moteur/statique.js) exécute les axes A/B/C/F en
-# JavaScript synchrone dans CE process, sans aucune limite propre, et un
-# thread bloqué par du retour arrière ne peut structurellement pas
-# exécuter le moindre setTimeout côté outil pour s'auto-interrompre. Seul
+# JavaScript synchrone, et un thread bloqué par du retour arrière ne peut
+# structurellement pas exécuter le moindre setTimeout côté outil pour
+# s'auto-interrompre. Elle tourne désormais dans un enfant (src/isolement)
+# que le parent tue au bout de GWAUDIT_DELAI_ANALYSE_S (240 s, posé par
+# l'image) et dont il écrit le rapport de repli ; ce plafond-ci reste le
+# filet de tout le reste (clonage, axe D, l'outil lui-même). Seul
 # un mécanisme externe au process peut couper un blocage de cette nature
 # — vérifié avec une vraie boucle Node synchrone et sans gestionnaire de
 # signal : `timeout` la termine par un simple SIGTERM, sans même avoir

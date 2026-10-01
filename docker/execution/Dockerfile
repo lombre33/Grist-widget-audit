@@ -67,6 +67,13 @@ RUN chmod +x /app/entrypoint.sh
 # une deuxième couche d'isolation indépendante de Chromium (conteneur jetable +
 # réseau fermé, déjà en place ; microVM si le volume le justifie un jour) —
 # jamais céder et repasser en --no-sandbox.
+# Durée de l'analyse du code dans son enfant à limite (src/isolement, docs/ARCHITECTURE-V2.md §4) : au-delà,
+# l'enfant est tué et l'audit conclut par un rapport de repli (C-SURFACE-03, axes empêchés), au lieu d'attendre
+# le plafond de 480 s du conteneur, qui ne laisserait ni rapport ni axe D. 240 s laissent, sous 480 s, le clonage
+# (120 s au plus), l'axe D (~90 s) et l'écriture des rapports. La mémoire, elle, suit celle du conteneur
+# (mem_limit) sans rien poser ici : GWAUDIT_MEMOIRE_ANALYSE_MO ne se surcharge que pour un essai.
+ENV GWAUDIT_DELAI_ANALYSE_S=240
+
 USER pwuser
 
 ENTRYPOINT ["/app/entrypoint.sh"]

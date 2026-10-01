@@ -13,7 +13,7 @@ Rejouer la même chose sur n'importe quelle machine Linux avec Docker (cgroups
 v2, accès à github.com et registry.npmjs.org), depuis la racine du dépôt :
 
 ```bash
-bash docker/ci/verifier.sh tout        # ou un seul : build | audit | securite | proxy | plafond | memoire | publication
+bash docker/ci/verifier.sh tout        # ou un seul : build | audit | securite | proxy | plafond | memoire | interruption | publication
 ```
 
 ## Ce que la CI éprouve
@@ -26,6 +26,7 @@ bash docker/ci/verifier.sh tout        # ou un seul : build | audit | securite |
 | `proxy` | un hôte autorisé (github.com) se joint à travers le proxy ; deux hôtes hors liste blanche (dont un nom qui commence comme un hôte autorisé) sont refusés **par le proxy** (403) ; SSH n'ouvre pas de voie parallèle (échec par le réseau, pas par les identifiants : témoin sur réseau ouvert) ; un nom autorisé fixé à 127.0.0.1 (`--add-host`) est refusé par le proxy (403) : le refus par adresse résolue privée l'emporte sur la liste blanche de noms — résolution statique et `git` seul, pas un rebinding dynamique ni le chemin de clone propre à gwaudit ; `gwaudit` lui-même dit un refus en clair, avec le code 4 et sans pile (hôte hors liste, littéral IPv6 interne) ; l'audit d'une URL réelle va jusqu'au bout, clone et `npm audit` à travers le proxy | `git ls-remote`, proxy jetable avec `--add-host github.com:127.0.0.1`, audit de `lombre33/Grist_Table_structure_import` |
 | `plafond` | un `gwaudit` bloqué en boucle synchrone, avec un Chromium lancé, est coupé au plafond de durée (code 124) et aucun Chromium ne survit à la destruction du conteneur ; le vrai audit d'un widget qui boucle sans fin conclut de lui-même, en NON CONFORME par `D-TIMEOUT-01` (bloquant : l'axe D n'est pas « non exécuté »), sans Chromium orphelin | `gwaudit` de substitution monté sur `bin/gwaudit.js` (vrai `entrypoint.sh`, vraie image), `GWAUDIT_PLAFOND_S=20`, `pgrep` sur l'hôte ensuite |
 | `memoire` | un widget qui alloue sans fin est contenu : mémoire du conteneur sous la limite, `OOMKilled` à vrai (le noyau tue le rendu de Chromium), swap exclu ; l'audit conclut malgré tout par un verdict | `docker stats` échantillonné, `docker inspect` |
+| `interruption` | l'analyse du code (dans un enfant à limite de mémoire, `src/isolement`) qui ne finit pas donne un rapport de repli, jamais une panne : sous le vrai plafond de 768 Mio, un widget de 8 Mio de code (tas de l'enfant épuisé), un widget de 12 Mio avec une limite d'enfant au-dessus du conteneur (le noyau tue l'enfant, le parent écrit le repli), un délai de 5 s : dans chacun, code 2, `C-SURFACE-03` (cause `interruption`), axes A B C E F à 0, conteneur intact ; le piège de la pile pleine (20 000 « x=>{ » imbriqués ; `docker/ci/fabriquer-widget-pile.mjs`), que V8 abandonnait avant `b3d12ba`, qui le ferme à la source : lu et dit `profondeur` (`C-SURFACE-03` critique bloquant, code 2), pas de rapport de repli, aucun « FATAL ERROR », trois lancements sur trois ; un widget de 3 Mio, sous le seuil, aboutit avec l'axe D exécuté ; enfin `docker/ci/mesurer-pics.sh` (l'outil des marges de mémoire de `docs/ARCHITECTURE-V2.md`) rend, sur ce widget, le pic du groupe de contrôle, celui de l'enfant et celui du parent, sans refus de mémoire | `docker stats` échantillonné, `docker inspect`, `docker/ci/verifier-rapport.mjs --interruption`, `docker/ci/mesurer-pics.sh` |
 | `publication` | (dans un job à part, sur les images rechargées depuis le dépôt d'artefacts : empreinte du fichier et identifiants d'image identiques à ceux relevés à la vérification) `docker/ci/publier.sh` : étiquette invalide refusée ; une version d'essai (`v1.2.3-rc1`) ne déplace pas `latest` ; une version finale le déplace, pour les deux images ; l'image publiée porte l'étiquette de source et la révision exacte | registre local, sans identifiants (à blanc : rien n'est publié) |
 
 ### Sous Windows (job `windows` du même workflow)
@@ -96,7 +97,7 @@ Le runner GitHub n'est pas le VPS : mêmes scénarios, autre noyau. À rejouer
 ## Codes de sortie du conteneur
 
 `0` CONFORME · `1` SOUS RÉSERVE ou NON CONFORME sans bloquant · `2` au moins un
-bloquant (un verdict, pas une panne) · `3` erreur interne de gwaudit · `4`
+bloquant (un verdict, pas une panne : y compris le rapport de repli d'une analyse du code interrompue, `C-SURFACE-03`) · `3` erreur interne de gwaudit (dont un processus d'analyse qui ne démarre pas : il n'a rien lu, le widget n'y est pour rien) · `4`
 cible refusée ou inaccessible (une soumission refusée par la validation ou par le
 proxy de sortie, dite en clair et sans pile : pas une panne) · `124`
 (ou `137`) coupé par le plafond de durée (`GWAUDIT_PLAFOND_S`, 480 s par défaut) ·

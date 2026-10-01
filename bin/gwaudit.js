@@ -35,9 +35,11 @@ import net from 'node:net';
 import dns from 'node:dns/promises';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { construireContexte, raisonsDeTroncature } from '../src/contexte/inventaire.js';
-import { analyseStatique } from '../src/moteur/statique.js';
-import { auditDynamique, constatAxeDIgnoreParOption } from '../src/runtime/dynamique.js';
+import { constatAxeDIgnoreParOption } from '../src/runtime/dynamique.js';
+import { analyserEnEnfant } from '../src/isolement/analyse-isolee.js';
+import { auditerAxeD } from '../src/isolement/axe-d.js';
+import { ErreurLancement } from '../src/isolement/enfant.js';
+import { limitesDeLAnalyse } from '../src/isolement/limites.js';
 import { noter } from '../src/moteur/notation.js';
 import { genererMarkdown } from '../src/rapport/markdown.js';
 import { genererJson } from '../src/rapport/json.js';
@@ -87,21 +89,21 @@ async function main() {
     const dossierSortie = path.resolve(valeur('sortie', `./rapport-${nomDepot}`));
     fs.mkdirSync(dossierSortie, { recursive: true });
 
-    console.error(`→ Inventaire du dépôt : ${racine}`);
-    const ctx = construireContexte(racine);
-    console.error(`  ${ctx.fichiers.length} fichier(s), ${ctx.surface.size} dans la surface exécutée, point(s) d'entrée : ${ctx.entrees.join(', ') || '(aucun)'}`);
-    if (ctx.tronque) {
-      console.error(`  ⚠ Inventaire tronqué (dépôt anormalement volumineux) : ${raisonsDeTroncature(ctx.tronque).join(', ')} — le rapport porte sur une partie du dépôt seulement.`);
-    }
-
-    console.error('→ Analyse statique (axes A, B, C, E, F)…');
-    const constats = await analyseStatique(ctx, { reseau: !flag('sans-reseau') });
+    // L'inventaire et les règles statiques lisent le code du widget : elles tournent dans un enfant à limite
+    // de mémoire (et de temps, si la brique en fixe une). Un widget qui les fait tomber ne fait pas tomber
+    // l'audit : l'enfant mort donne un constat critique bloquant qui dit pourquoi (src/isolement/).
+    const analyse = await analyserEnEnfant({ racine, reseau: !flag('sans-reseau'), limites: limitesDeLAnalyse() });
+    const constats = analyse.constats;
+    // Si l'enfant est mort avant la fin de l'inventaire il n'y a pas de contexte : les rapports lisent alors un contexte vide.
+    const ctx = analyse.ctx ?? { racine, entrees: [], fichiersReels: 0, surface: { size: 0 }, tronque: null, fichiers: [] };
+    if (!analyse.ok) console.error(`⚠ L'analyse du code s'est interrompue : ${analyse.interruption.raison}. Le rapport le dit (C-SURFACE-03) et note à 0 les axes qu'elle alimente.`);
 
     const axesNonExecutes = new Set();
     if (!flag('sans-dynamique')) {
-      const scenario = chargerScenario(valeur('scenario', null));
-      console.error("→ Analyse dynamique en condition réelle (axe D)… (navigateur Chromium, hôte Grist de test)");
-      const { constats: constatsD, nonExecute } = await auditDynamique(ctx, { scenario });
+      const scenario = analyse.ctx ? chargerScenario(valeur('scenario', null)) : null;
+      if (analyse.ctx) console.error("→ Analyse dynamique en condition réelle (axe D)… (navigateur Chromium, hôte Grist de test)");
+      else console.error("→ Analyse dynamique non exécutée (l'analyse du code s'est interrompue avant l'inventaire : pas de point d'entrée à ouvrir).");
+      const { constats: constatsD, nonExecute } = await auditerAxeD(analyse, { scenario });
       constats.push(...constatsD);
       if (nonExecute) axesNonExecutes.add('D');
     } else {
@@ -423,6 +425,8 @@ main().catch((e) => {
   // net, pas de pile, code 4 — l'appelant (V2, interface) distingue ainsi « la
   // soumission est refusée » de « gwaudit a planté » (3).
   if (e instanceof CibleRefusee) { console.error(`Cible refusée ou inaccessible : ${e.message}`); process.exitCode = 4; return; }
+  // L'enfant d'analyse n'a pas pu être lancé : une panne de l'outil ou de son environnement, pas un fait du widget (code 3, sans pile).
+  if (e instanceof ErreurLancement) { console.error(`Erreur : ${e.message}`); process.exitCode = 3; return; }
   console.error('Erreur :', e?.stack ?? e);
   process.exitCode = 3;
 });

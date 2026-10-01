@@ -283,14 +283,16 @@ entièrement remplacer — à éprouver sur le VPS d'Antoine.
   de 3 Mio, mesure faite par la coordination ; celui vérifié par
   l'exécution est `8643599` (une seule passe du découpeur HTML). La classe
   de bug reste : `analyseStatique()` (`src/moteur/statique.js`)
-  exécute les axes A/B/C/F en JavaScript synchrone dans le même process
-  que le reste de l'outil, sans aucune limite propre — et un thread
+  exécute les axes A/B/C/F en JavaScript synchrone, et un thread
   Node bloqué par du retour arrière ne peut structurellement pas exécuter
   le moindre `setTimeout` interne pour s'auto-interrompre (le clonage git
   et `npm audit` ont déjà chacun leur propre plafond en sous-processus,
-  120 s ; l'axe D a le sien, ~90 s ; seule cette phase n'en avait aucun).
+  120 s ; l'axe D a le sien, ~90 s ; l'analyse du code a désormais le sien,
+  posé de l'extérieur : voir « Analyse du code dans un enfant à limite »
+  ci-dessous — elle ne tourne plus dans le processus de l'outil).
   Seul un mécanisme externe au process peut couper un blocage de cette
-  nature : `docker/execution/entrypoint.sh` enveloppe désormais tout
+  nature, et le plafond du conteneur reste le filet de tout ce que l'enfant
+  ne couvre pas : `docker/execution/entrypoint.sh` enveloppe désormais tout
   l'audit dans `timeout -k 10 480 node bin/gwaudit.js …` — 480 s de marge
   au-dessus de la somme des plafonds internes déjà connus, pour ne jamais
   couper un audit légitime tout en bornant ce que la file d'attente qui
@@ -303,6 +305,270 @@ entièrement remplacer — à éprouver sur le VPS d'Antoine.
   bien celle d'un Chromium orphelin, par arrêt de l'espace de noms PID
   (`bash docker/ci/verifier.sh plafond`, voir
   `docker/README-V2-VERIFICATIONS.md`).
+- **Analyse du code dans un enfant à limite de mémoire et de temps
+  (`src/isolement`).** Ajouté le 2026-09-30. Un widget peut faire mourir le
+  processus qui l'analyse sans lever la moindre exception : un tas de V8
+  épuisé est un abandon (SIGABRT, code 134), le noyau qui manque de mémoire
+  dans le conteneur tue par SIGKILL (137), et (jusqu'à `b3d12ba`) l'abandon du
+  compilateur d'expressions régulières sur une pile presque pleine ne se
+  rattrapait dans aucun fil. Avant ce changement, ces fins ne laissaient ni rapport ni
+  verdict, et ressemblaient à une panne de l'outil alors que c'est le widget
+  qui les provoque ; elles laissent maintenant le rapport que le widget a
+  voulu empêcher.
+  - **Ce qui tourne où.** `bin/gwaudit.js` lance `src/isolement/enfant-travail.mjs`
+    dans un processus à part (`node --max-old-space-size=<tas>`, son propre
+    groupe de processus) ; l'enfant y fait tourner, dans un Worker dont la pile
+    se règle, la construction du contexte puis `analyseStatique`. Il écrit dans
+    un dossier de travail privé l'étape en cours, un résumé du contexte dès
+    qu'il est construit (racine, entrées, fichiers utiles aux rapports), et le
+    résultat d'un bloc, avec un marqueur de fin : un résultat sans marqueur,
+    illisible ou absent n'est jamais pris pour un résultat. Le parent joue l'axe
+    D, note et écrit les rapports comme avant. Comparé avant/après sur les 32
+    cibles du corpus `gristlabs/grist-widget@6a773b2` (`scripts/comparer-avant-apres.mjs`),
+    les constats sont identiques ; `tests/isolement-equivalence.test.mjs` garde,
+    sur des widgets du dépôt, des constats et des rapports (HTML, JSON, Markdown,
+    SARIF) identiques que l'on rende le contexte entier ou le résumé qui en sort.
+  - **Ce qui se passe quand l'enfant ne rend pas de résultat.** Le parent dit
+    pourquoi (cause `tas`, `pile`, `abandon`, `noyau`, `delai`, `exception`,
+    `incomplet` ou `sortie`, avec la dernière étape annoncée et la fin de la
+    sortie d'erreur) et écrit un rapport de repli (`src/isolement/repli.js`, sans
+    toucher au moteur ni au rapport existants) : un constat critique bloquant
+    `C-SURFACE-03`, cause `interruption`, qui empêche les axes A, B, C, E et F
+    (notés 0, « mesure empêchée » : ce qu'un widget qui empêche la lecture de son
+    code ne doit jamais gagner). L'axe D est joué si le résumé du contexte a été
+    écrit avant la fin de l'enfant (il ne lit que la racine et les entrées) ; sinon
+    il est `D-INDISPONIBLE`, hors du calcul, et le rapport le dit.
+  - **Code de sortie et intégrateur.** Le repli est un verdict : code **2**
+    (« au moins un bloquant »), rapport écrit, JSON et SARIF compris. Ce n'est pas
+    une panne, et le rejouer donnerait le même résultat (même code, mêmes limites) :
+    l'intégrateur le traite comme n'importe quel NON CONFORME avec bloquant, le
+    présente comme un niveau de risque, et ne relance pas. Le code **3** est réservé
+    à l'outil : l'enfant n'a pas pu être lancé (fork refusé, environnement trop
+    gros) ou est mort avant d'avoir annoncé sa première étape (il n'a rien lu du
+    widget : rien à en dire) ; là, pas de rapport, et l'intégrateur peut relancer
+    une fois avant d'alerter l'exploitant. `124` et `137` gardent le sens
+    ci-dessous : en phase d'analyse du code, le délai de l'enfant est plus petit que
+    le plafond et l'enfant est la victime désignée du noyau, donc un widget qui
+    ne fait que consommer de la mémoire ou du temps d'analyse ne provoque plus ces
+    codes ; le clonage, l'axe D et l'outil lui-même restent couverts par eux.
+  - **Limites.** Tas de l'enfant : la limite du groupe de contrôle (`mem_limit`)
+    moins 210 Mio (`RESERVE_HORS_TAS_MO` : le parent, qui écrit le repli et joue
+    l'axe D, tient en environ 70 Mo ; l'enfant occupe hors tas 60 à 100 Mo de
+    plus : jeune génération, code, contenu des fichiers lus), au moins 128 Mio —
+    soit 558 Mio sous 768 Mio. Le repli ne sert à rien si le noyau tue le parent
+    avant l'enfant : l'enfant relève son propre `oom_score_adj` (1000) pour être
+    la victime, et un abandon (134), un SIGKILL du noyau ou un résultat incomplet
+    donnent chacun leur repli (`tests/isolement-enfant.test.mjs`,
+    `tests/isolement-repli.test.mjs`, `tests/isolement-cli.test.mjs`, aucun ne
+    dépend de la machine : le tas est petit, le SIGKILL est envoyé, le résultat
+    tronqué est écrit par un double). Durée : `GWAUDIT_DELAI_ANALYSE_S`, **240 s
+    posées par l'image** (elles laissent, sous les 480 s du plafond, le clonage
+    120 s au plus, l'axe D 90 s et les rapports) ; sur un poste (V1) il n'y en a
+    pas par défaut. Pile du Worker : celle de Node par défaut (4 Mio),
+    `GWAUDIT_PILE_ANALYSE_MO` la règle (à figer avec la table de profondeur de
+    l'analyse « illisible » ; ce qu'elle change est mesuré ci-dessous). Surchargeables pour un essai :
+    `GWAUDIT_MEMOIRE_ANALYSE_MO` (≥ 64), `GWAUDIT_PILE_ANALYSE_MO`,
+    `GWAUDIT_DELAI_ANALYSE_S` ; une valeur inutilisable est dite et ignorée. Le
+    dossier de travail et ce que l'enfant a lancé (un `npm audit`) disparaissent
+    avec lui, y compris quand le parent est tué sans préavis.
+  - **Trouvaille qui compte pour la limite.** Mesuré sur Node 22.22.2,
+    `resourceLimits.maxOldGenerationSizeMb` d'un Worker **seul ne borne pas le
+    tas** (30 millions d'objets sous « 64 Mio » : 4,6 Go) ; c'est l'option de
+    ligne de commande du processus qui l'applique, et le Worker la reprend.
+    L'enfant est lancé avec l'option ; `tests/isolement-enfant.test.mjs` le garde
+    (un tas doublé, plafonné à 1 Go, doit finir bien en dessous).
+  - **La pile pleine : fermée à la source, gardée en défense.** Un `app.js` de
+    « x=>{ » imbriqués puis refermés faisait sortir l'audit en 134 sans rapport, dès
+    440 niveaux (2,4 Kio ; relevé sur `0c741ce`, reproduit sur `a3b342e`) : le
+    rattrapage de pile d'acorn testait le message de l'erreur par une expression
+    régulière que V8 compile à cet instant, au bord de la pile, et V8 abandonne
+    (`FATAL ERROR: RegExpCompiler Allocation failed - process out of memory`, où le
+    mot « memory » n'a rien à voir avec la mémoire). L2 seul contenait cet abandon
+    dans l'enfant : rapport de repli, cause `pile`, 12 fois sur 12 à 20 000 niveaux
+    sur une page minimale et 10 fois sur 10 derrière les fichiers de `widget-exemple`
+    (mesuré sur `6c3c77b`). `b3d12ba` ferme l'abandon à la source (`LecteurAcorn`,
+    `src/moteur/analyse-js.js` : le dépassement de pile est rattrapé sans expression
+    régulière) : le piège est lu et dit `profondeur` (C-SURFACE-03, critique bloquant,
+    code 2, une demi-seconde), dans le fil principal comme dans le Worker de
+    l'enfant (0 abandon sur 30 dans chacun, mesuré dans le message de `b3d12ba`) ; l'audit
+    ne s'interrompt plus et le repli n'intervient pas. L'essai de la suite
+    (`tests/isolement-cli.test.mjs`) et le scénario 4/5 de l'image
+    (`bash docker/ci/verifier.sh interruption`) gardent cela avec 20 000 niveaux,
+    trois lancements chacun, dans le régime de l'enfant.
+    Le classement `pile` du repli reste, comme défense : si V8 abandonnait encore ainsi
+    ailleurs (une autre expression régulière compilée au bord de la pile), l'enfant le
+    contiendrait. Il est éprouvé par un enfant factice
+    (`tests/aide-isolement/abandon.mjs`, `tests/isolement-enfant.test.mjs`), non par un
+    piège réel : il n'y en a plus. Le message de V8 contient « Allocation failed » comme
+    celui d'un tas épuisé : avant d'y regarder, le classement disait ce cas « mémoire
+    épuisée », avec la remédiation des fichiers trop gros, ce qui était faux ; il est dit
+    `pile`, avec sa raison, sa remédiation (découper l'expression trop imbriquée ou
+    publier les sources non minifiées) et sans désigner de fichier, et le message fatal
+    est gardé en tête de `finDeLaSortieDErreur` (la trace native, dessous, le noyait).
+    Une pile qui déborde en exception, sans que V8 abandonne, n'est pas du ressort du
+    repli : l'analyse isolée la rend à l'audit, qui la dit lui-même (constat « illisible »
+    de la notation, cause `profondeur` ; les profondeurs de chaque construction :
+    `scripts/mesurer-profondeur.mjs`).
+  - **Le seuil, mesuré.** Ce qui fait tomber l'analyse dans le repli n'est pas la
+    taille d'un fichier en soi mais ce que son arbre d'analyse coûte en mémoire, et
+    la densité de l'arbre par octet de source varie du simple au double : un seuil
+    ne se cite qu'avec le code qui l'a donné. Tas plafonné à 558-560 Mio (celui de
+    l'image sous 768 Mio), un seul fichier de code : du code minifié synthétique
+    dense (`scripts/lib/code-synthetique.mjs`) passe à 5 Mio, tombe à 6 Mio
+    (pic résident de l'enfant 627 puis 635 Mo) ; de vrais paquets (`chart` et
+    `timeline` de `gristlabs/grist-widget`, enveloppés en un fichier) passent à
+    8,7 Mio (pic 625 Mo), tombent à 9,5 Mio et à 11,3 Mio, un fichier de 10,9 Mio
+    d'une densité moindre passe (629 Mo) : **le seuil par fichier est entre 5 et
+    11 Mio selon la densité, celui d'un code réel dense autour de 9 Mio.** Le
+    total, lui, n'est pas ce qui épuise le tas : 171 fichiers d'environ 1,1 Mio
+    (193 Mio en tout, presque le plafond de 200 Mio lus) passent, pic résident 583 Mo,
+    en 139 s. Les cibles honnêtes, mesurées sur `6c3c77b` avec ce même chemin
+    (une exécution par point, `--sans-dynamique`) : `chart` (16 fichiers, 6,1 Mio de
+    code, le plus lourd du corpus) échoue à 400 et à 424 Mio de tas et passe à 448,
+    496 et 528 ; la racine de `gristlabs/grist-widget@6a773b2` (le recueil, 353
+    fichiers inventoriés) échoue à 448 et à 472 et passe à 496 et à 528. Les
+    quatre échecs sont `tas`, à l'étape `inventaire`, en 5 à 7 s. Le besoin est
+    donc entre 424 et 448 Mio pour `chart`, entre 472 et 496 pour le recueil : la
+    limite retenue (558) laisse **au moins 110 Mio à `chart`, au moins 62 Mio
+    (11 %) au recueil**, c'est étroit pour ce dernier (une seule exécution par
+    point). Le besoin de tas est fixé par l'inventaire, avant toute règle : le seul
+    levier est `mem_limit` (le tas suit), et l'analyse unique, prévue en version
+    suivante, est ce qui élargira la marge. Un recueil de cette taille n'est pas une
+    soumission attendue ; s'il dépasse, il sort en `interruption` (mémoire), critique
+    bloquant, jamais en conforme. Le pic résident dépasse le
+    tas de 60 à 100 Mo : c'est la mesure à comparer à `mem_limit`, pas le tas. À
+    rejouer : `node scripts/mesurer-seuil-memoire.mjs --mio 5 [--fichiers 1]
+    [--tas 558] [--sources a.js,b.js]` (code fabriqué) ou
+    `node scripts/mesurer-seuil-memoire.mjs --cible <dossier> --tas 448` (le
+    dossier d'un vrai widget), par le chemin réel (`analyserEnEnfant`).
+  - **Ce que coûte le plafond de 16 Mio par fichier** (relevé de 4 à 16 Mio pour
+    que les paquets légitimes soient lus, `chart` : 6,08 Mio). Un fichier de 16 Mio
+    ne se lit pas sous 768 Mio : le tas est épuisé avant la fin, et c'est
+    exactement ce que le repli rend, avec le bloquant et la cause dite ; ce n'est
+    plus un audit qui meurt en silence. Côté durée, `chart` demande environ 70 s,
+    et le temps suit la quantité de code dense : au-delà d'une vingtaine de Mio de
+    code dense en tout (extrapolé du rythme de `chart`, non mesuré : la vitesse
+    varie du simple au décuple avec la densité, 171 fichiers légers d'environ
+    1,1 Mio passent en 139 s), c'est le délai de 240 s qui tranche, avec le même
+    repli.
+    Aucun de ces deux cas n'est un widget honnête connu ; un intégrateur qui veut
+    lire de plus gros paquets donne plus de mémoire au conteneur (le tas suit) et
+    plus de temps à l'enfant, dans cet ordre, en gardant le plafond du conteneur
+    au-dessus de la somme.
+  - **Hors de l'image** (un poste, la V1, ou un conteneur sans limite de mémoire).
+    Sans limite de groupe de contrôle et sans `GWAUDIT_MEMOIRE_ANALYSE_MO`, l'enfant
+    est lancé sans `--max-old-space-size` : son tas est celui que Node choisit (8 240 Mio
+    sur la machine de ces mesures, qui a 16 Go), et sans `GWAUDIT_DELAI_ANALYSE_S` rien ne
+    borne le temps. Ce qui borne l'analyse est alors la machine, pas l'outil : un
+    fichier qui épuiserait ce tas ferait encore mourir l'enfant, et le repli dirait
+    l'`interruption` de la même façon, mais un tas de plusieurs Go, cela se compte en
+    minutes. Mesuré sur `e42a8a6` avec L2, sur le fichier le plus coûteux que Règles ait
+    chronométré (un `app.js` d'accents graves à la suite, le « point 4 » de son message :
+    linéaire à constante haute, mesuré jusqu'à 800 Kio, extrapolé par lui au plafond
+    de 16 Mio par fichier). Les tailles, une exécution par case, sauf la ligne de
+    1,6 Mio (la sonde a ci-dessous : trois lancements, l'intervalle) :
+
+    | fichier | hors de l'image (tas de Node, pas de délai) | dans l'image, 768 Mio |
+    |---|---|---|
+    | 800 Kio | lu jusqu'au bout, 22 s, pic de l'enfant 1 177 Mo | non mesuré |
+    | 1,6 Mio | lu jusqu'au bout, 37 à 38 s, 2 017 à 2 187 Mo | lu jusqu'au bout, 60 à 103 s, 627 à 645 Mo |
+    | 16 Mio (le plafond) | lu jusqu'au bout, 730 s (12 min), 6 796 Mo | `interruption` (tas), à l'inventaire, en 6 s |
+
+    Les lignes « lu jusqu'au bout » donnent le constat C-SURFACE-03 de cause
+    `profondeur` (« le code est imbriqué plus profondément que ce que l'outil sait
+    parcourir : la pile déborde quand une règle le parcourt »), que l'enfant attrape lui-même :
+    pas de repli, pas d'`interruption`, code 2 comme pour tout NON CONFORME. La
+    réponse à « un fichier de 1,6 Mio d'accents graves donne-t-il un repli ? » est
+    donc non, hors de l'image comme dedans : le tas de 558 Mio y suffit (le tas
+    plafonné oblige le ramasse-miettes à travailler : 627 à 645 Mo de pic contre plus de
+    2 000 sans plafond), et c'est au plafond de 16 Mio que l'image le rend `interruption`
+    en 6 s, là où l'hôte calcule douze minutes et 6,8 Go. L'extrapolation de Règles
+    (de trois à six minutes et plus de dix Go) ne se retrouve pas ici : 730 s et
+    6,8 Go, sur une autre machine.
+
+    Les quatre sondes de la coordination, trois lancements chacune, l'axe D joué, `index.html`
+    de 77 octets qui charge un `app.js` d'accents graves (`docker/ci/fabriquer-widget-accents-graves.mjs`
+    les reproduit octet pour octet, un essai en garde l'empreinte) : **a**, 1 677 722
+    accents graves à la suite (sha256 `41f5b291…`) ; **b**, « coupe », 838 860 accents graves,
+    un « ; », 838 860 accents graves (1 677 721 octets, `f7d29165…`) ; **b'**, « milieu »,
+    838 840 accents graves, `;fetch("https://temoin-coeur.invalid/c");`, 838 840 accents
+    graves (1 677 721 octets, `70e13a3c…`) ; **c**, 3 355 443 accents graves (`715a8944…`),
+    un nombre impair : le dernier ne se ferme pas, le fichier est une erreur de syntaxe. Chaque
+    cellule dit les issues, la note, la durée et le pic de l'enfant (pour « sans L2 », celui
+    du processus, qui analyse lui-même). « Sans L2 » est `e42a8a6` seul, lancé avec
+    `node --max-old-space-size=558 bin/gwaudit.js` (le tas de l'image) ; « avec L2, tas
+    de l'image » est L2 hors de l'image avec `GWAUDIT_MEMOIRE_ANALYSE_MO=558` et
+    `GWAUDIT_DELAI_ANALYSE_S=240`, les limites de l'image sans Docker ; « sans limite » n'en
+    pose aucune.
+
+    | sonde | sans L2, tas de 558 Mio | avec L2 dans l'image (768 Mio) | avec L2, tas de l'image | avec L2, sans limite |
+    |---|---|---|---|---|
+    | a | un rapport 3 sur 3, `profondeur`, 21/100 ; 63 à 64 s ; 632 à 647 Mo | un rapport 3 sur 3, `profondeur`, 21/100 ; 60 à 103 s ; 627 à 645 Mo | 3 sur 3, `profondeur`, 21/100 ; 56 à 59 s ; 645 à 650 Mo | 3 sur 3, `profondeur`, 21/100 ; 37 à 38 s ; 2 017 à 2 187 Mo |
+    | b | un rapport 3 sur 3, `profondeur`, 21/100 ; 62 à 66 s ; 633 à 644 Mo | 3 sur 3, `profondeur`, 21/100 ; 52 à 54 s ; 636 à 666 Mo | 3 sur 3, `profondeur`, 21/100 ; 60 à 63 s ; 638 à 664 Mo | 3 sur 3, `profondeur`, 21/100 ; 37 s ; 2 112 à 2 207 Mo |
+    | b' | **un abandon sur 3** (SIGABRT, code 134, « Reached heap limit », sortie vide, pas de rapport), deux rapports `profondeur`, 21/100 | 3 sur 3, `profondeur`, 21/100 ; 50 à 52 s ; 643 à 659 Mo | 3 sur 3, 21/100 : deux `profondeur`, **un `interruption`** (tas, à l'étape des règles) ; 56 à 64 s ; 641 à 643 Mo | 3 sur 3, `profondeur`, 21/100 ; 32 à 33 s ; 1 936 à 2 141 Mo |
+    | c | **trois abandons sur 3** (même message, dès l'inventaire, pas de rapport) | 3 sur 3, `interruption` (tas, à l'inventaire), **0/100**, axe D hors du calcul ; 4 à 5 s ; 639 à 645 Mo | 3 sur 3, `interruption` (tas, à l'inventaire), 0/100 ; 4 à 5 s ; 636 à 643 Mo | 3 sur 3, `syntaxe` (à la lecture), 21/100 ; 10 à 11 s ; 2 125 à 2 133 Mo |
+
+    Ce que le tableau dit. Avec L2, 36 lancements sur 36 ont écrit un rapport (code 2, NON CONFORME,
+    C-SURFACE-03) ; sans L2, au tas de l'image, 4 lancements sur 12 sont morts sans rien dire (b' une
+    fois, c trois fois). La sonde a ne régresse pas : même issue, même note (21/100), même cause qu'avant.
+    Le fichier de la sonde b' porte en son milieu un appel réseau que personne ne lit : aucun des 9
+    lancements avec L2 ne l'a relevé (aucun C-EXFIL-01), et chacun a dit C-SURFACE-03, bloquant :
+    jamais ni l'un ni l'autre. L'abandon est intermittent (b : aucun sur trois lancements ici) ; avec L2
+    il devient un repli quand il a lieu (b' une fois). La même sonde c note 0/100 dans l'image (l'enfant meurt
+    avant d'avoir écrit le résumé du contexte : pas d'axe D) et 21/100 sans limite (le parseur
+    finit, la syntaxe est fautive, l'axe D est joué) : la limite ne rend jamais une meilleure note que
+    son absence. Ce que cela veut dire pour l'exploitant : **ce sont les limites de l'image, pas
+    l'algorithme, qui bornent le coût d'un fichier hostile** ; hors de l'image, un poste le paie
+    en temps et en mémoire (2 Go ici, 6,8 Go au plafond de 16 Mio), et un intégrateur qui lancerait
+    l'outil sans l'image doit poser `GWAUDIT_MEMOIRE_ANALYSE_MO` et `GWAUDIT_DELAI_ANALYSE_S`
+    lui-même. Que la V1 ne pose ni l'un ni l'autre par défaut est un choix de produit, à confirmer.
+    À rejouer : `node docker/ci/fabriquer-widget-accents-graves.mjs <dossier> <octets> [--coupe |
+    --temoin]` fabrique le widget (819200, 1677722 et 16777216 octets pour les tailles ci-dessus ;
+    1677722 pour la sonde a, avec `--coupe` pour b, avec `--temoin` pour b' ; 3355443 pour c) ; dans
+    l'image, `bash docker/ci/mesurer-pics.sh <dossier> --image <image> --memoire 768m` ; hors de
+    l'image, le même audit lancé directement : `GWAUDIT_PICS_SORTIE=<sortie> node -r
+    ./docker/ci/pics.cjs bin/gwaudit.js <dossier> --json --sortie <sortie>` (précédé de
+    `GWAUDIT_MEMOIRE_ANALYSE_MO=558 GWAUDIT_DELAI_ANALYSE_S=240` pour les limites de l'image, de rien
+    pour « sans limite » ; sous root, avec `GWAUDIT_CHROMIUM_SANS_SANDBOX=1` et `GWAUDIT_CHROMIUM_PATH`
+    pour l'axe D), puis `node docker/ci/resumer-pics.cjs <sortie> <code de sortie> <secondes> aucune`.
+    L'issue se lit dans `<sortie>/rapport.json` : `verdict`, `scoreGlobal`, et dans les constats de
+    l'axe C le `C-SURFACE-03` avec sa `preuve` (`cause`, `genre`, `etape`). Sans L2 : `e42a8a6` et
+    `node --max-old-space-size=558 bin/gwaudit.js <dossier> --json --sortie <sortie>`.
+  - **La marge dans l'image**, mesurée avec L2 : `bash
+    docker/ci/mesurer-pics.sh <cible> --image <image> [--memoire 768m]
+    [--statique]` lance l'audit réel de la cible dans le conteneur (sans réseau,
+    lecture seule, mêmes limites que l'intégrateur, axe D joué) et dit le pic du
+    groupe de contrôle, celui de l'enfant et celui du parent. Sous 768 Mio, sur
+    `6c3c77b` : `chart`, pic du groupe de contrôle de 614 à 673 Mo sur cinq
+    exécutions (dont une sans axe D), pic de l'enfant de 613 à 615 Mo ; le recueil,
+    de 629 à 632 Mo sur quatre exécutions, enfant de 629 à 634 Mo. Refaits dans
+    l'image construite sur `0949868` (l'inventaire compris) puis sur `1055f99`
+    (C-SECRET-01 compris), avec L2, trois exécutions chacun : `chart` 614 à
+    619 Mo au groupe de contrôle, 613 à 618 à l'enfant ; le recueil 629 à 638 Mo,
+    629 à 638 à l'enfant. Refaits enfin sur `e42a8a6` (les correctifs de l'inventaire
+    et des secrets compris), trois exécutions chacun : `chart` 613 à 630 Mo au
+    groupe de contrôle, 613 à 615 à l'enfant, 173 à 175 au parent, en 78 à 80 s ;
+    le recueil 628 à 649 Mo, 630 à 633 à l'enfant, 179 à 180 au parent, en 90 à
+    94 s. Aucun refus de mémoire, aucun repli, pas de constat
+    C-SURFACE-03 d'interruption. La marge sous 768 est donc d'au moins 95 Mio
+    (12 %) pour `chart` (le pire pic est celui de `6c3c77b`) et 119 Mio (15 %) pour
+    le recueil (649 Mo sur `e42a8a6`) ; le groupe de contrôle compte aussi
+    le cache de pages, qui explique peut-être les valeurs hautes de `chart`
+    (non vérifié). Le pic du parent (171 à 182 Mo avec l'axe D, 106 sans) est
+    celui de l'axe D : l'enfant est mort à ce moment-là. Le corpus (les 31
+    dossiers et la racine) et l'étalonnage (3 cibles) passent tous sous un tas de
+    558 Mio sans `interruption` : 35 cibles sur 35 sur `6c3c77b`, et sur `1055f99`,
+    `9a6fe07` puis `e42a8a6` (hors conteneur, avec `GWAUDIT_MEMOIRE_ANALYSE_MO=558` ;
+    sur `e42a8a6` aussi avec le tas par défaut de Node) les mêmes constats et les
+    mêmes notes qu'avec l'outil sans L2, cible par cible
+    (`scripts/comparer-avant-apres.mjs`). Ces
+    nombres se refont à chaque changement de l'inventaire ou de l'analyse.
+  - **Éprouvé dans l'image**, sous `mem_limit: 768m` (`bash docker/ci/verifier.sh
+    interruption`, dans `image-v2.yml`) : un widget de code au-dessus du seuil est
+    audité, le tas de l'enfant est épuisé, le rapport de repli est écrit, code 2,
+    aucun `OOMKilled`, la mort de l'enfant par le noyau (limite d'enfant au-dessus du
+    conteneur), le délai, le piège de la pile pleine, et un widget honnête sous le
+    seuil se note comme avant.
 
 ### Proposition concrète pour le VPS d'Antoine (Debian 13)
 

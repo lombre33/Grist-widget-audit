@@ -4,7 +4,7 @@
 # exécutable de docker/README-V2-VERIFICATIONS.md : ce qui s'y lit comme une
 # commande à taper sur le VPS est ici une commande qui tourne et échoue.
 #
-# Usage : bash docker/ci/verifier.sh <build|audit|securite|proxy|plafond|memoire|publication|tout>
+# Usage : bash docker/ci/verifier.sh <build|audit|securite|proxy|plafond|memoire|interruption|publication|tout>
 #         bash docker/ci/verifier.sh exporter <fichier.tar.gz>
 #         bash docker/ci/verifier.sh importer <fichier.tar.gz> <sha256> <id-execution> <id-proxy>
 #
@@ -347,6 +347,114 @@ cmd_memoire() {
   ok "aucun Chromium ne survit au conteneur tué pour cause de mémoire"
 }
 
+cmd_interruption() {
+  titre "Analyse du code interrompue : un widget trop lourd donne un rapport de repli, pas une panne"
+  # L'analyse statique tourne dans un enfant à limite de mémoire (src/isolement) : ce qui l'abat (tas épuisé,
+  # noyau, délai) ne doit pas abattre l'audit. Éprouvé ici avec le vrai plafond du conteneur (768 Mio), sur un
+  # code synthétique (docker/ci/fabriquer-widget-lourd.mjs) : un widget au-dessus du seuil, un widget en dessous,
+  # une limite d'enfant plus haute que le conteneur (c'est alors le noyau qui tue, et l'enfant qui est choisi), un délai.
+  local limite tas_attendu=558
+  local lourd="$TRAVAIL/lourd" leger="$TRAVAIL/leger" tres_lourd="$TRAVAIL/tres-lourd" pile="$TRAVAIL/pile"
+  node docker/ci/fabriquer-widget-lourd.mjs "$lourd" 8
+  node docker/ci/fabriquer-widget-lourd.mjs "$leger" 3
+  node docker/ci/fabriquer-widget-lourd.mjs "$tres_lourd" 12
+  node docker/ci/fabriquer-widget-pile.mjs "$pile" 20000
+
+  # Lance un audit détaché sous surveillance : pic de mémoire du conteneur, OOMKilled, code de sortie.
+  # Usage : suivre <nom> <dossier-du-widget> [variables -e …]  →  positionne SUIVI_PIC, SUIVI_OOM, SUIVI_CODE
+  suivre() {
+    local nom="$1" widget="$2"; shift 2
+    docker rm -f "$nom" >/dev/null 2>&1 || true
+    preparer_sortie
+    "${COMPOSE[@]}" run -d --name "$nom" "$@" -v "$widget:/widget:ro" execution-audit /widget >/dev/null
+    limite="$(docker inspect -f '{{.HostConfig.Memory}}' "$nom")"
+    [ "$limite" = "805306368" ] || echec "limite mémoire du conteneur = $limite octets au lieu de 768 Mio : le compose n'est pas appliqué"
+    SUIVI_PIC=0
+    local mib
+    while [ "$(docker inspect -f '{{.State.Running}}' "$nom")" = "true" ]; do
+      mib="$(docker stats --no-stream --format '{{.MemUsage}}' "$nom" 2>/dev/null | awk '{
+        v=$1; u=v; gsub(/[0-9.]/,"",u); gsub(/[A-Za-z]/,"",v);
+        if (u=="GiB") v*=1024; else if (u=="KiB") v/=1024; else if (u=="B") v/=1048576;
+        printf "%d", v }')"
+      [ -n "$mib" ] && [ "$mib" -gt "$SUIVI_PIC" ] && SUIVI_PIC="$mib"
+      sleep 1
+    done
+    SUIVI_OOM="$(docker inspect -f '{{.State.OOMKilled}}' "$nom")"
+    SUIVI_CODE="$(docker inspect -f '{{.State.ExitCode}}' "$nom")"
+    docker logs "$nom" 2>&1 | tee "$TRAVAIL/$nom.log" | tail -12 || true
+    docker rm -f "$nom" >/dev/null 2>&1 || true
+  }
+
+  local delai_image
+  delai_image="$(docker image inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$IMG_EXEC" | grep '^GWAUDIT_DELAI_ANALYSE_S=' || true)"
+  [ "$delai_image" = "GWAUDIT_DELAI_ANALYSE_S=240" ] || echec "l'image ne porte pas la limite de durée de l'analyse (GWAUDIT_DELAI_ANALYSE_S=240) : « $delai_image »"
+  ok "l'image porte la limite de durée de l'analyse du code (240 s)"
+
+  titre "Interruption 1/5 : tas de l'enfant épuisé (widget de 8 Mio, au-dessus du seuil)"
+  suivre gwaudit-interruption "$lourd"
+  echo "pic mesuré ${SUIVI_PIC} Mio pour 768 Mio, OOMKilled=$SUIVI_OOM, code $SUIVI_CODE"
+  [ "$SUIVI_CODE" = "2" ] || echec "code de sortie $SUIVI_CODE au lieu de 2 (verdict NON CONFORME : un audit interrompu n'est ni une panne, code 3, ni une coupure, 124/137)"
+  [ "$SUIVI_OOM" = "false" ] || echec "le conteneur a été tué par le noyau (OOMKilled) : la limite de l'enfant ne le protège pas"
+  [ "$SUIVI_PIC" -le $((768 * 102 / 100)) ] || echec "la mémoire a dépassé la limite (${SUIVI_PIC} Mio)"
+  grep -q "L'analyse du code s'est interrompue" "$TRAVAIL/gwaudit-interruption.log" || echec "la sortie d'erreur ne dit pas que l'analyse s'est interrompue"
+  node docker/ci/verifier-rapport.mjs --interruption tas --etape inventaire "$SORTIE/rapport.json" || echec "rapport de repli incorrect (tas épuisé)"
+  ok "tas épuisé : rapport de repli (code 2, C-SURFACE-03, axes A B C E F à 0), conteneur intact (pic ${SUIVI_PIC} Mio, OOMKilled=$SUIVI_OOM)"
+  aucun_chromium_orphelin "à l'audit interrompu"
+
+  titre "Interruption 2/5 : le noyau tue l'enfant, pas le parent (limite d'enfant au-dessus du conteneur, widget de 12 Mio)"
+  suivre gwaudit-interruption-noyau "$tres_lourd" -e GWAUDIT_MEMOIRE_ANALYSE_MO=3000
+  echo "pic mesuré ${SUIVI_PIC} Mio pour 768 Mio, OOMKilled=$SUIVI_OOM, code $SUIVI_CODE"
+  [ "$SUIVI_CODE" = "2" ] || echec "code de sortie $SUIVI_CODE au lieu de 2 : le noyau a tué autre chose que l'enfant, ou le parent n'a pas su écrire le repli"
+  node docker/ci/verifier-rapport.mjs --interruption noyau "$SORTIE/rapport.json" || echec "rapport de repli incorrect (mort par le noyau)"
+  ok "mort par le noyau : le parent a survécu et écrit le repli (code 2, genre noyau ; OOMKilled=$SUIVI_OOM tel que rapporté par le moteur de conteneurs)"
+
+  titre "Interruption 3/5 : délai de l'analyse dépassé (widget de 3 Mio, limite de 5 s)"
+  suivre gwaudit-interruption-delai "$leger" -e GWAUDIT_DELAI_ANALYSE_S=5
+  [ "$SUIVI_CODE" = "2" ] || echec "code de sortie $SUIVI_CODE au lieu de 2"
+  node docker/ci/verifier-rapport.mjs --interruption delai "$SORTIE/rapport.json" || echec "rapport de repli incorrect (délai)"
+  ok "délai dépassé : rapport de repli (code 2, genre delai)"
+
+  titre "Interruption 4/5 : la pile pleine (20 000 « x=>{ » imbriqués) : l'enfant la lit et la dit, V8 n'abandonne plus"
+  # Le piège relevé sur 0c741ce : sans enfant, 440 niveaux suffisaient pour un SIGABRT (code 134, « FATAL ERROR: RegExpCompiler Allocation failed »)
+  # et aucun rapport ; avec l'enfant seul (L2), cet abandon était contenu : rapport de repli, cause pile, 12 fois sur 12 sur cette page minimale.
+  # b3d12ba le ferme à la source : la lecture rattrape le dépassement de pile sans expression régulière, le code est dit trop imbriqué (C-SURFACE-03,
+  # cause profondeur, critique bloquant, code 2) et l'analyse n'est pas interrompue. Ce scénario garde, sous le vrai plafond du conteneur et dans le Worker
+  # de l'enfant (c'est lui qui lit), que le piège ne tue plus l'audit et n'appelle plus le repli. Trois lancements : l'abandon dépendait de l'état du
+  # compilateur d'expressions régulières, il était intermittent. Le classement « pile » du repli, pour un abandon de V8 qui reviendrait ailleurs, est
+  # éprouvé par un enfant factice (tests/isolement-enfant.test.mjs), non par un piège réel : il n'y en a plus.
+  local tentative
+  for tentative in 1 2 3; do
+    suivre gwaudit-interruption-pile "$pile"
+    echo "lancement $tentative/3 : code $SUIVI_CODE, OOMKilled=$SUIVI_OOM"
+    [ "$SUIVI_CODE" = "2" ] || echec "code de sortie $SUIVI_CODE au lieu de 2 (134 : l'abandon de V8 a tué l'audit ; 3 : il a été pris pour une panne)"
+    [ "$SUIVI_OOM" = "false" ] || echec "conteneur tué par le noyau sur un widget de quelques dizaines de Kio"
+    if grep -q "FATAL ERROR" "$TRAVAIL/gwaudit-interruption-pile.log"; then echec "V8 a abandonné au lancement $tentative/3 : la lecture ne rattrape plus le dépassement de pile sans expression régulière (src/moteur/analyse-js.js)"; fi
+    node docker/ci/verifier-rapport.mjs --profondeur "$SORTIE/rapport.json" || echec "rapport de la pile pleine incorrect (lancement $tentative/3)"
+  done
+  ok "pile pleine : lue et dite par C-SURFACE-03 (cause profondeur, critique bloquant), code 2, 3 lancements sur 3, V8 n'abandonne plus, aucun rapport de repli"
+
+  titre "Interruption 5/5 : sous le seuil, le même audit aboutit (widget de 3 Mio, aucune limite changée)"
+  suivre gwaudit-interruption-leger "$leger"
+  echo "pic mesuré ${SUIVI_PIC} Mio pour 768 Mio, OOMKilled=$SUIVI_OOM, code $SUIVI_CODE"
+  [ "$SUIVI_CODE" -le 2 ] || echec "code de sortie $SUIVI_CODE"
+  [ "$SUIVI_OOM" = "false" ] || echec "conteneur tué par le noyau sur un widget sous le seuil"
+  node docker/ci/verifier-rapport.mjs --sans-interruption "$SORTIE/rapport.json" || echec "l'audit d'un widget sous le seuil n'a pas abouti, ou l'axe D n'a pas tourné"
+  ok "sous le seuil : l'analyse aboutit, aucun axe empêché, axe D exécuté (pic ${SUIVI_PIC} Mio)"
+  aucun_chromium_orphelin "aux audits interrompus, conteneurs détruits"
+  ok "aucun Chromium ne survit aux audits interrompus"
+
+  titre "Mesure des pics : docker/ci/mesurer-pics.sh mesure un vrai audit dans l'image, sous le plafond de l'intégrateur (768 Mio)"
+  # L'outil dont se tirent les marges de docs/ARCHITECTURE-V2.md (pic du groupe de contrôle, de l'enfant, du parent). Ici : sur le widget
+  # sous le seuil, sans axe D (aucun Chromium). Sur ce runner le groupe de contrôle est en v2 (memory.peak, memory.events) : un pic que l'hôte
+  # ne donnerait pas serait dit « ? » et ferait échouer ce contrôle au lieu de passer pour une mesure.
+  local mesure
+  mesure="$(bash docker/ci/mesurer-pics.sh "$leger" --image "$IMG_EXEC" --statique)" || echec "mesurer-pics.sh a échoué : $mesure"
+  echo "$mesure"
+  echo "$mesure" | grep -Eq "^code [0-2], [0-9]+ s, --memory 768m : groupe de contrôle [0-9]+ Mo, enfant [0-9]+ Mo, parent [0-9]+ Mo, refus de mémoire (0|max 0, oom_kill 0) ; analysé jusqu'au bout ; détail : " \
+    || echec "mesurer-pics.sh ne rend pas une mesure complète (pic du groupe de contrôle, de l'enfant et du parent, aucun refus de mémoire, audit mené jusqu'au bout)"
+  ok "mesurer-pics.sh : pic du groupe de contrôle, de l'enfant et du parent relevés dans l'image, aucun refus de mémoire"
+}
+
 cmd_publication() {
   titre "Publication à blanc : les deux images vers un registre local, sans identifiants"
   # Ce que ça éprouve : publier.sh (étiquettes, « latest » réservé aux versions
@@ -435,9 +543,10 @@ case "${1:-}" in
   proxy) cmd_proxy ;;
   plafond) cmd_plafond ;;
   memoire) cmd_memoire ;;
+  interruption) cmd_interruption ;;
   publication) cmd_publication ;;
   exporter) shift; cmd_exporter "$@" ;;
   importer) shift; cmd_importer "$@" ;;
-  tout) cmd_build; cmd_audit; cmd_securite; cmd_proxy; cmd_plafond; cmd_memoire; cmd_publication ;;
-  *) echo "usage : $0 <build|audit|securite|proxy|plafond|memoire|publication|tout> | exporter <fichier> | importer <fichier> <sha256> <id-execution> <id-proxy>" >&2; exit 2 ;;
+  tout) cmd_build; cmd_audit; cmd_securite; cmd_proxy; cmd_plafond; cmd_memoire; cmd_interruption; cmd_publication ;;
+  *) echo "usage : $0 <build|audit|securite|proxy|plafond|memoire|interruption|publication|tout> | exporter <fichier> | importer <fichier> <sha256> <id-execution> <id-proxy>" >&2; exit 2 ;;
 esac
