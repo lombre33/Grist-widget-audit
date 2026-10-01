@@ -11,7 +11,7 @@ import path from 'node:path';
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs, nomPointe, aCommentaireDansPortee } from '../moteur/analyse-js.js';
 import { numeroLigne } from '../moteur/lignes.js';
-import { mesurerFonction, nomDeFonction, estAutoAppelee } from '../moteur/fonctions.js';
+import { mesurerFonction, mesurerProgramme, nomDeFonction, nomDuNiveauSuperieur, estAutoAppelee } from '../moteur/fonctions.js';
 import { mesurerLignes, NOTE_LIGNES_APPROCHEES } from '../moteur/lignes-de-code.js';
 
 const SEUILS = {
@@ -60,17 +60,56 @@ export function analyserTailleFichiers(ctx) {
 /** Le groupe nominal d'une fonction (« la fonction `f` »), mis au début d'une phrase. */
 const enPhrase = (groupe) => groupe.charAt(0).toUpperCase() + groupe.slice(1);
 
+/** Le constat de complexité (A-FONC-02) d'une unité de code : une fonction, ou le niveau supérieur d'un script. `nom` : `{ titre, groupe }`. */
+function constatComplexite(chemin, ligne, nom, complexite) {
+  const forte = complexite > SEUILS.complexiteForte;
+  return constat({
+    regle: 'A-FONC-02', axe: 'A', severite: forte ? 'majeur' : 'mineur', confiance: 'certain',
+    titre: `Complexité cyclomatique de ${complexite} : ${nom.titre}`,
+    fichier: chemin, ligne,
+    constat: `${enPhrase(nom.groupe)} comporte ${complexite} chemins d'exécution indépendants (seuil retenu : ${SEUILS.complexite}).`,
+    impact: `Il faut au minimum ${complexite} cas de test pour couvrir tous les chemins. En pratique ils ne seront pas tous testés, et les branches rares porteront les défauts.`,
+    remediation: 'Extraire les branches en fonctions distinctes, ou remplacer les cascades de conditions par une table de correspondance.',
+    referentiels: ['Métrique de McCabe'],
+  });
+}
+
+/** Le constat d'imbrication (A-FONC-03) d'une unité de code. Le niveau supérieur d'un script n'a pas de `return` anticipé : le conseil n'est pas le même. */
+function constatImbrication(chemin, ligne, nom, imbrication, dansUneFonction) {
+  return constat({
+    regle: 'A-FONC-03', axe: 'A', severite: 'mineur', confiance: 'certain',
+    titre: `Imbrication de profondeur ${imbrication} : ${nom.titre}`,
+    fichier: chemin, ligne,
+    constat: `${enPhrase(nom.groupe)} atteint ${imbrication} niveaux de blocs imbriqués.`,
+    impact: "Au-delà de quatre ou cinq niveaux, le lecteur perd le fil des conditions actives à un point donné.",
+    remediation: dansUneFonction
+      ? 'Sortir tôt (`return` anticipé), extraire les blocs internes.'
+      : 'Extraire les blocs internes en fonctions nommées, que le script appelle.',
+  });
+}
+
 /**
  * Longueur, complexité cyclomatique et imbrication des fonctions, chacune sur son propre corps (voir `moteur/fonctions.js`). Une fonction
  * appelée là où elle est écrite, l'enveloppe d'un module `(function () { … })()`, ne se mesure en longueur que sur ses lignes propres : celles
  * des fonctions qu'elle contient sont comptées pour chacune, et la taille du fichier est dite par A-TAILLE-01. Une enveloppe de dix lignes qui
  * contient trente fonctions n'est pas « une fonction de neuf cents lignes ».
+ * Le code qui n'est dans aucune fonction (le niveau supérieur d'un fichier, d'un script de page) se mesure de la même façon, en complexité et en
+ * imbrication : un widget écrit à plat ne vaut pas mieux que le même code dans une fermeture. Sa longueur reste dite par A-TAILLE-01.
  */
 export function analyserFonctions(ctx) {
   const constats = [];
 
   pourChaqueUniteJs(ctx, { surfaceSeulement: true, ignorerVendorise: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
+
+    const niveauSuperieur = mesurerProgramme(ast);
+    if (niveauSuperieur.complexite > SEUILS.complexite) {
+      constats.push(constatComplexite(unite.chemin, ligneDe(niveauSuperieur.premiere), nomDuNiveauSuperieur(unite), niveauSuperieur.complexite));
+    }
+    if (niveauSuperieur.imbrication > SEUILS.imbrication) {
+      constats.push(constatImbrication(unite.chemin, ligneDe(niveauSuperieur.plusProfonde), nomDuNiveauSuperieur(unite), niveauSuperieur.imbrication, false));
+    }
+
     const visiter = (n, _etat, ancetres) => {
       const { complexite, imbrication, etendue, lignesPropres } = mesurerFonction(n);
       const autoAppelee = estAutoAppelee(n, ancetres);
@@ -91,28 +130,10 @@ export function analyserFonctions(ctx) {
         }));
       }
       if (complexite > SEUILS.complexite) {
-        const forte = complexite > SEUILS.complexiteForte;
-        const nom = nomDeFonction(n, ancetres);
-        constats.push(constat({
-          regle: 'A-FONC-02', axe: 'A', severite: forte ? 'majeur' : 'mineur', confiance: 'certain',
-          titre: `Complexité cyclomatique de ${complexite} : ${nom.titre}`,
-          fichier: unite.chemin, ligne: ligneDe(n),
-          constat: `${enPhrase(nom.groupe)} comporte ${complexite} chemins d'exécution indépendants (seuil retenu : ${SEUILS.complexite}).`,
-          impact: `Il faut au minimum ${complexite} cas de test pour couvrir cette fonction. En pratique elle ne sera pas testée exhaustivement, et les branches rares porteront les défauts.`,
-          remediation: 'Extraire les branches en fonctions distinctes, ou remplacer les cascades de conditions par une table de correspondance.',
-          referentiels: ['Métrique de McCabe'],
-        }));
+        constats.push(constatComplexite(unite.chemin, ligneDe(n), nomDeFonction(n, ancetres), complexite));
       }
       if (imbrication > SEUILS.imbrication) {
-        const nom = nomDeFonction(n, ancetres);
-        constats.push(constat({
-          regle: 'A-FONC-03', axe: 'A', severite: 'mineur', confiance: 'certain',
-          titre: `Imbrication de profondeur ${imbrication} : ${nom.titre}`,
-          fichier: unite.chemin, ligne: ligneDe(n),
-          constat: `Le corps de ${nom.groupe} atteint ${imbrication} niveaux de blocs imbriqués.`,
-          impact: "Au-delà de quatre ou cinq niveaux, le lecteur perd le fil des conditions actives à un point donné.",
-          remediation: 'Sortir tôt (`return` anticipé), extraire les blocs internes.',
-        }));
+        constats.push(constatImbrication(unite.chemin, ligneDe(n), nomDeFonction(n, ancetres), imbrication, true));
       }
     };
     walk.ancestor(ast, {

@@ -298,6 +298,8 @@ const CAS = [
   ['analyse : 200 000 lignes vides dans un .js, fins de ligne CRLF', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(200000, () => '\r\n') })],
   ['analyse : 40 000 `/** @param {` dans un .js', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': N(40000, () => '/** @param {') })],
   ['analyse : un README de 200 000 lignes vides', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': '1;', 'README.md': N(200000, () => '\n') })],
+  // --- le code du niveau supérieur se mesure d'un trait, comme une fonction (A-FONC-02 et A-FONC-03) : une instruction à la fois, sans que la mesure de l'une relise les autres
+  ['analyse : un script à plat de 300 000 `if` consécutifs (niveau supérieur)', 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': `${N(300000, (i) => `if (x === ${i}) { g(${i}); } `)}\n` })],
 
   // --- analyse complète : les entrées piégées que les essais lisent sans en juger le temps (`scripts/lib/pieges.mjs`, une table pour les deux)
   ...PIEGES_CSS.flatMap(([nom, css]) => contextesCss(css).map(([contexte, chemin, contenu]) => [

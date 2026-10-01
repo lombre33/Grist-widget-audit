@@ -3,11 +3,12 @@
  * Rejoue les mutants de la mesure exacte du code (méthode : `scripts/lib/rejouer-mutants.mjs`) :
  *   - `src/moteur/fonctions.js` : la complexité d'une fonction sur son propre corps (chaque construction qui ajoute un chemin, chaque opérateur
  *     logique, le `case` à test), la profondeur des blocs (chaque construction qui ouvre un niveau, la chaîne de `else if` à plat), les lignes
- *     propres d'une enveloppe, ce qu'est une fonction appelée là où elle est écrite, le nom d'une fonction (déclaration, affectation, propriété,
- *     méthode, champ, constructeur, rappel, enveloppe), le nom du widget borné et cité ;
+ *     propres d'une enveloppe, la mesure du code qui n'est dans aucune fonction (le niveau supérieur d'un script) et l'instruction où il faut
+ *     regarder, ce qu'est une fonction appelée là où elle est écrite, le nom d'une fonction (déclaration, affectation, propriété, méthode,
+ *     champ, constructeur, rappel, enveloppe), le nom du widget borné et cité ;
  *   - `src/moteur/lignes-de-code.js` : le compte des lignes sur les commentaires qu'acorn lit (les blancs, les fins de ligne, le bord d'un
  *     commentaire, la dernière ligne), son repli quand le fichier n'est pas lu, sa mémoire ;
- *   - ce que les règles en font : A-FONC-01/02/03 (les seuils, la mesure d'une enveloppe, le texte du constat), A-TAILLE-01, B-COM-01, B-VERB-01.
+ *   - ce que les règles en font : A-FONC-01/02/03 (les seuils, ceux du niveau supérieur, la mesure d'une enveloppe, la ligne et le texte du constat), A-TAILLE-01, B-COM-01, B-VERB-01.
  * Chaque mutant est tué par une assertion de `tests/a-fonctions.test.mjs` ou de `tests/lignes-de-code.test.mjs`.
  *
  * Mutants équivalents, laissés de côté :
@@ -37,7 +38,7 @@ const MUTANTS = [
   dansLigne(F, "noeud.type === 'SwitchCase'", ' && noeud.test', '', 'complexité : le `default` compte comme un `case`'),
   dansLigne(F, "noeud.type === 'SwitchCase'", 'complexite++', '', 'complexité : un `case` ne compte plus'),
   dansLigne(F, 'let complexite = 1;', '= 1', '= 0', 'complexité : une fonction sans branche vaut 0'),
-  dansLigne(F, 'const pile = [[fonction.body, 0]', '...fonction.params.map((p) => [p, 0])', '', 'complexité : les valeurs par défaut des paramètres ne sont pas lues'),
+  dansLigne(F, 'const { complexite, imbrication, interieur } = parcourir(', ', ...fonction.params', '', 'complexité : les valeurs par défaut des paramètres ne sont pas lues'),
   dansLigne(F, '// elle a sa propre mesure', 'continue;', '', 'complexité : les fonctions déclarées dedans comptent dans la fonction (et font déborder l\'enveloppe d\'un module)'),
 
   // --- imbrication
@@ -116,7 +117,40 @@ const MUTANTS = [
   dansLigne(A, 'constat: etendue > lignes', 'etendue > lignes', 'etendue >= lignes', 'A-FONC-01 : une fonction sans fonction dedans dit ne rien compter'),
   dansLigne(A, 'constat: etendue > lignes', 'etendue > lignes', 'false', 'A-FONC-01 : une enveloppe ne dit pas ce qu\'elle ne compte pas'),
   dansLigne(A, 'const enPhrase = (groupe)', 'groupe.charAt(0).toUpperCase() + groupe.slice(1)', 'groupe', 'A-FONC : la phrase du constat commence par une minuscule'),
-  dansLigne(A, 'constat: `Le corps de ${nom.groupe} atteint', '${nom.groupe}', '${enPhrase(nom.groupe)}', 'A-FONC-03 : « Le corps de La fonction »'),
+  dansLigne(A, 'constat: `${enPhrase(nom.groupe)} atteint', '${enPhrase(nom.groupe)}', '${nom.groupe}', 'A-FONC-03 : la phrase du constat commence par une minuscule'),
+  dansLigne(A, 'constat: `${enPhrase(nom.groupe)} comporte', '${enPhrase(nom.groupe)}', '${nom.groupe}', 'A-FONC-02 : la phrase du constat commence par une minuscule'),
+  dansLigne(A, 'impact: `Il faut au minimum ${complexite} cas de test', '${complexite}', '${complexite + 1}', 'A-FONC-02 : l\'impact dit un nombre de cas de test de trop'),
+  dansLigne(A, 'remediation: dansUneFonction', 'dansUneFonction', '!dansUneFonction', 'A-FONC-03 : le conseil d\'une fonction et celui du niveau supérieur sont échangés'),
+
+  // --- le niveau supérieur d'un script (A-FONC-02, A-FONC-03)
+  dansLigne(A, 'const niveauSuperieur = mesurerProgramme(ast);', 'mesurerProgramme(ast)', '{ complexite: 1, imbrication: 0, premiere: null, plusProfonde: null }', 'niveau supérieur : il n\'est pas mesuré'),
+  dansLigne(A, 'if (niveauSuperieur.complexite > SEUILS.complexite) {', 'complexite >', 'complexite >=', 'niveau supérieur : une complexité de 15 est relevée'),
+  dansLigne(A, 'if (niveauSuperieur.imbrication > SEUILS.imbrication) {', 'imbrication >', 'imbrication >=', 'niveau supérieur : une imbrication de 5 est relevée'),
+  dansLigne(A, 'constatComplexite(unite.chemin, ligneDe(niveauSuperieur.premiere)', 'niveauSuperieur.premiere', 'niveauSuperieur.plusProfonde', 'niveau supérieur : la complexité est dite à la ligne de l\'instruction la plus profonde'),
+  dansLigne(A, 'constatImbrication(unite.chemin, ligneDe(niveauSuperieur.plusProfonde)', 'niveauSuperieur.plusProfonde', 'niveauSuperieur.premiere', 'niveau supérieur : l\'imbrication est dite à la ligne de la première instruction qui ajoute un chemin'),
+  dansLigne(A, 'constatComplexite(unite.chemin, ligneDe(niveauSuperieur.premiere)', 'nomDuNiveauSuperieur(unite)', 'nomDuNiveauSuperieur({ inline: false })', 'niveau supérieur : la complexité d\'un script de page est dite celle d\'un fichier'),
+  dansLigne(A, 'constatComplexite(unite.chemin, ligneDe(niveauSuperieur.premiere)', 'nomDuNiveauSuperieur(unite)', 'nomDuNiveauSuperieur({ inline: true })', 'niveau supérieur : la complexité d\'un fichier est dite celle d\'un script de page'),
+  dansLigne(A, 'constatImbrication(unite.chemin, ligneDe(niveauSuperieur.plusProfonde)', 'nomDuNiveauSuperieur(unite)', 'nomDuNiveauSuperieur({ inline: false })', 'niveau supérieur : l\'imbrication d\'un script de page est dite celle d\'un fichier'),
+  dansLigne(A, 'constatImbrication(unite.chemin, ligneDe(niveauSuperieur.plusProfonde)', 'nomDuNiveauSuperieur(unite)', 'nomDuNiveauSuperieur({ inline: true })', 'niveau supérieur : l\'imbrication d\'un fichier est dite celle d\'un script de page'),
+  dansLigne(A, 'constatImbrication(unite.chemin, ligneDe(niveauSuperieur.plusProfonde)', ', false));', ', true));', 'niveau supérieur : l\'imbrication reçoit le conseil du `return` anticipé'),
+  dansLigne(A, 'constatImbrication(unite.chemin, ligneDe(n), nomDeFonction(n, ancetres)', ', true));', ', false));', 'A-FONC-03 : une fonction ne reçoit plus le conseil du `return` anticipé'),
+
+  // --- mesurerProgramme
+  dansLigne(F, 'let complexite = 1, imbrication = 0;', 'complexite = 1', 'complexite = 0', 'niveau supérieur : un script sans branche vaut 0'),
+  dansLigne(F, 'const mesure = parcourir([instruction]);', '[instruction]', '[]', 'niveau supérieur : aucune instruction n\'est mesurée'),
+  dansLigne(F, 'if (mesure.complexite > 1) {', '> 1', '>= 1', 'niveau supérieur : toute instruction est tenue pour une qui ajoute un chemin (la première est rendue)'),
+  dansLigne(F, 'if (mesure.complexite > 1) {', '> 1', '> 2', 'niveau supérieur : une instruction qui n\'ajoute qu\'un chemin n\'en ajoute aucun'),
+  dansLigne(F, 'complexite += mesure.complexite - 1;', ' - 1', '', 'niveau supérieur : chaque instruction ajoute son chemin de base'),
+  dansLigne(F, 'complexite += mesure.complexite - 1;', '+=', '=', 'niveau supérieur : seule la dernière instruction compte pour la complexité'),
+  dansLigne(F, 'premiere ??= instruction;', '??=', '=', 'niveau supérieur : la dernière instruction qui ajoute un chemin est rendue'),
+  dansLigne(F, 'if (mesure.imbrication > imbrication) {', '>', '>=', 'niveau supérieur : la dernière instruction à la plus grande profondeur est rendue'),
+  dansLigne(F, 'if (mesure.imbrication > imbrication) {', '>', '<', 'niveau supérieur : la plus petite profondeur est retenue'),
+  dansLigne(F, 'imbrication = mesure.imbrication;', '= mesure', '+= mesure', 'niveau supérieur : les profondeurs de deux instructions s\'ajoutent'),
+  dansLigne(F, 'plusProfonde = instruction;', 'instruction', 'premiere', 'niveau supérieur : l\'instruction la plus profonde est la première qui ajoute un chemin'),
+  dansLigne(F, "return unite.inline", 'unite.inline', 'true', 'nom du niveau supérieur : un fichier est dit un script de page'),
+  dansLigne(F, "return unite.inline", 'unite.inline', 'false', 'nom du niveau supérieur : un script de page est dit un fichier'),
+  dansLigne(F, "(niveau supérieur du fichier)", 'niveau supérieur du fichier', 'niveau supérieur', 'nom du niveau supérieur : le titre d\'un fichier ne dit plus qu\'il s\'agit du fichier'),
+  dansLigne(F, "le code du niveau supérieur de ce script de la page", 'de ce script de la page', 'du fichier', 'nom du niveau supérieur : la phrase d\'un script de page parle du fichier'),
 
   // --- A-TAILLE-01
   dansLigne(A, '.map((f) => ({ f, ...mesurerLignes(f) }))', '...mesurerLignes(f)', 'code: f.locSignificatives ?? 0, exacte: true', 'A-TAILLE-01 : les lignes sont celles de l\'inventaire (premier caractère)'),

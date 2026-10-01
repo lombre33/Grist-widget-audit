@@ -2,14 +2,15 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as walk from 'acorn-walk';
 import { lire } from '../src/moteur/analyse-js.js';
-import { mesurerFonction, nomDeFonction, estAutoAppelee } from '../src/moteur/fonctions.js';
+import { mesurerFonction, mesurerProgramme, nomDeFonction, nomDuNiveauSuperieur, estAutoAppelee } from '../src/moteur/fonctions.js';
 import { analyserFonctions } from '../src/regles/a-qualite.js';
 
 /**
  * Une fonction se mesure sur son propre corps (voir `src/moteur/fonctions.js`) : la complexité et l'imbrication ne comptent pas ce que contiennent
  * les fonctions qu'elle déclare, une chaîne de `else if` est à plat, une flèche à corps-expression est mesurée comme une autre, et le nom d'une
- * méthode, d'une affectation ou d'un rappel se lit dans l'arbre. Ces essais mesurent les fonctions une à une, puis les constats des règles
- * A-FONC-01, A-FONC-02 et A-FONC-03 sur des fichiers de test.
+ * méthode, d'une affectation ou d'un rappel se lit dans l'arbre ; le code qui n'est dans aucune fonction se mesure comme le corps d'une fonction.
+ * Ces essais mesurent les fonctions une à une, puis le niveau supérieur d'un script, puis les constats des règles A-FONC-01, A-FONC-02 et
+ * A-FONC-03 sur des fichiers de test.
  */
 
 /** Les fonctions d'une source, dans l'ordre où l'arbre les rencontre (les plus internes d'abord), avec leurs ancêtres. */
@@ -142,6 +143,73 @@ test('lignes : deux fonctions internes se retirent chacune ; celle d\'une foncti
 });
 
 // ---------------------------------------------------------------------------------------------------------------------
+// Le code qui n'est dans aucune fonction
+
+const programme = (source) => {
+  const { ast, erreur } = lire(source);
+  assert.ok(ast, `la source doit se lire : ${erreur?.message}`);
+  return ast;
+};
+const mesureDuProgramme = (source) => {
+  const { complexite, imbrication } = mesurerProgramme(programme(source));
+  return { complexite, imbrication };
+};
+
+const NIVEAUX_SUPERIEURS = [
+  ['un script vide', '', { complexite: 1, imbrication: 0 }],
+  ['des instructions sans branche', 'const a = 1;\nb(a);\n', { complexite: 1, imbrication: 0 }],
+  ['un if', 'if (a) { g(); }', { complexite: 2, imbrication: 1 }],
+  ['un ternaire, un && et un ??', 'const a = b ? 1 : 2; c && d(); const e = f ?? 0;', { complexite: 4, imbrication: 0 }],
+  ['huit else if à la suite : à plat', `if (x === 0) { a(); }${Array.from({ length: 8 }, (_, i) => ` else if (x === ${i + 1}) { a(); }`).join('')}`, { complexite: 10, imbrication: 1 }],
+  ['un if dans un if', 'if (a) { if (b) { g(); } }', { complexite: 3, imbrication: 2 }],
+  ['deux instructions, la plus profonde fait la profondeur, les deux font les chemins', 'if (a) { g(); }\nfor (const k of o) { if (k) { h(); } }', { complexite: 4, imbrication: 2 }],
+  ['une fonction déclarée : mesurée à part', 'function f(a) { if (a) { if (b) { g(); } } }', { complexite: 1, imbrication: 0 }],
+  ['une flèche affectée : mesurée à part', 'const f = (a) => (a ? 1 : 2);', { complexite: 1, imbrication: 0 }],
+  ['une valeur par défaut de paramètre : mesurée avec sa fonction', 'function f(a = b ? 1 : 2) { return a; }', { complexite: 1, imbrication: 0 }],
+  ['une enveloppe appelée aussitôt : tout son corps est à elle', '(function () { if (a) { for (;;) { g(); } } })();', { complexite: 1, imbrication: 0 }],
+  ['les méthodes d\'une classe sont des fonctions, un champ et un bloc statique sont du niveau supérieur', 'class A { m(a) { if (a) { g(); } } x = b ? 1 : 2; static { if (c) { h(); } } }', { complexite: 3, imbrication: 1 }],
+  ['un objet : ses méthodes sont des fonctions, ses autres valeurs sont du niveau supérieur', 'const o = { m() { if (a) { g(); } }, v: b ? 1 : 2 };', { complexite: 2, imbrication: 0 }],
+  ['une exportation', 'export const x = a ? 1 : 2;\nexport default function () { if (a) { g(); } }\n', { complexite: 2, imbrication: 0 }],
+  ['un try et un catch', 'try { g(); } catch (e) { if (e) { h(); } }', { complexite: 3, imbrication: 2 }],
+  ['un switch', 'switch (a) { case 1: if (b) { g(); } break; case 2: break; default: break; }', { complexite: 4, imbrication: 2 }],
+];
+for (const [nom, source, attendu] of NIVEAUX_SUPERIEURS) {
+  test(`niveau supérieur : ${nom}`, () => assert.deepEqual(mesureDuProgramme(source), attendu));
+}
+
+test('niveau supérieur : le même code vaut la même chose à plat et dans le corps d\'une fonction', () => {
+  const sources = NIVEAUX_SUPERIEURS.map(([, source]) => source).filter((source) => !/\bexport\b/.test(source));
+  assert.ok(sources.length >= 14);
+  for (const source of sources) {
+    const enveloppe = fonctionsDe(`function enveloppe() {\n${source}\n}`).at(-1).noeud;
+    const { complexite, imbrication } = mesurerFonction(enveloppe);
+    assert.deepEqual(mesureDuProgramme(source), { complexite, imbrication }, source);
+  }
+});
+
+test('niveau supérieur : la première instruction qui ajoute un chemin et la première qui atteint la plus grande profondeur sont rendues, pour dire où regarder', () => {
+  const source = ['const a = 1;', 'const b = x ? 1 : 2;', 'if (y) { if (z) { g(); } }', 'if (u) { if (v) { h(); } }', 'k();'].join('\n');
+  const { premiere, plusProfonde } = mesurerProgramme(programme(source));
+  assert.equal(premiere.loc.start.line, 2);
+  assert.equal(plusProfonde.loc.start.line, 3, 'deux instructions à deux niveaux : la première');
+  const sansRien = mesurerProgramme(programme('const a = 1;\nb(a);\n'));
+  assert.deepEqual([sansRien.premiere, sansRien.plusProfonde], [null, null]);
+});
+
+test('niveau supérieur : un code très profond ne fait pas déborder la mesure (pile explicite)', () => {
+  const profondeur = 20_000;
+  const instruction = Array.from({ length: profondeur }).reduce((corps) => ({ type: 'IfStatement', test: { type: 'Identifier' }, consequent: corps, alternate: null }), { type: 'EmptyStatement' });
+  const { imbrication, complexite } = mesurerProgramme({ body: [instruction] });
+  assert.equal(imbrication, profondeur);
+  assert.equal(complexite, profondeur + 1);
+});
+
+test('niveau supérieur : le nom dit s\'il s\'agit d\'un fichier ou d\'un script de page', () => {
+  assert.deepEqual(nomDuNiveauSuperieur({ inline: false }), { titre: '(niveau supérieur du fichier)', groupe: 'le code du niveau supérieur du fichier' });
+  assert.deepEqual(nomDuNiveauSuperieur({ inline: true }), { titre: "(niveau supérieur d'un script de la page)", groupe: 'le code du niveau supérieur de ce script de la page' });
+});
+
+// ---------------------------------------------------------------------------------------------------------------------
 // Les fonctions appelées là où elles sont écrites
 
 const AUTO_APPELEES = [
@@ -258,6 +326,7 @@ test('A-FONC-02 : la complexité d\'une fonction dans l\'enveloppe est la sienne
   assert.equal(c.titre, 'Complexité cyclomatique de 17 : trier');
   assert.equal(c.ligne, 2);
   assert.equal(c.constat, 'La fonction `trier` comporte 17 chemins d\'exécution indépendants (seuil retenu : 15).');
+  assert.match(c.impact, /^Il faut au minimum 17 cas de test pour couvrir tous les chemins\./);
 });
 
 test('A-FONC-02 : seuils 15 (mineur) et 30 (majeur), au-delà et non à', () => {
@@ -346,7 +415,8 @@ test('A-FONC-03 : six blocs emboîtés sont relevés, avec la profondeur', () =>
   assert.equal(autres.length, 0);
   assert.equal(c.regle, 'A-FONC-03');
   assert.equal(c.titre, 'Imbrication de profondeur 6 : f');
-  assert.equal(c.constat, 'Le corps de la fonction `f` atteint 6 niveaux de blocs imbriqués.');
+  assert.equal(c.constat, 'La fonction `f` atteint 6 niveaux de blocs imbriqués.');
+  assert.match(c.remediation, /`return` anticipé/);
 });
 
 test('A-FONC-03 : seuil à 5 niveaux, au-delà et non à', () => {
@@ -358,6 +428,76 @@ test('A-FONC-03 : seuil à 5 niveaux, au-delà et non à', () => {
 test('A-FONC-03 : un rappel déclaré dans cinq boucles n\'hérite pas de leur profondeur', () => {
   const source = `function f() {\n${'for (;;) { '.repeat(5)}items.forEach(function (x) { if (x) { g(x); } });${' }'.repeat(5)}\n}\n`;
   assert.deepEqual(constatsDe(source), []);
+});
+
+const conditionsA = (n, decalage = '') => Array.from({ length: n }, (_, i) => `${decalage}if (x === ${i}) { y(); }`).join('\n');
+
+test('A-FONC-02 : du code écrit à plat est mesuré comme le même code dans une fermeture, avec sa ligne', () => {
+  const [c, ...autres] = constatsDe(`const x = lire();\nconst y = 1;\n${conditionsA(16)}\n`);
+  assert.equal(autres.length, 0);
+  assert.equal(c.regle, 'A-FONC-02');
+  assert.equal(c.severite, 'mineur');
+  assert.equal(c.titre, 'Complexité cyclomatique de 17 : (niveau supérieur du fichier)');
+  assert.equal(c.constat, 'Le code du niveau supérieur du fichier comporte 17 chemins d\'exécution indépendants (seuil retenu : 15).');
+  assert.equal(c.ligne, 3, 'la première instruction qui ajoute un chemin');
+  assert.equal(c.fichier, 'app.js');
+  assert.match(c.impact, /^Il faut au minimum 17 cas de test pour couvrir tous les chemins\./);
+  const [enveloppe, ...reste] = constatsDe(`(function () {\nconst x = lire();\nconst y = 1;\n${conditionsA(16)}\n})();\n`);
+  assert.equal(reste.length, 0);
+  assert.deepEqual([enveloppe.regle, enveloppe.severite, enveloppe.titre.replace(/ : .*/, '')], [c.regle, c.severite, c.titre.replace(/ : .*/, '')], 'à plat ou dans une fermeture : le même constat');
+});
+
+test('A-FONC-02 : le niveau supérieur a les mêmes seuils qu\'une fonction, 15 (mineur) et 30 (majeur), au-delà et non à', () => {
+  const rendu = (chemins) => constatsDe(`${conditionsA(chemins - 1)}\n`).filter((c) => c.regle === 'A-FONC-02').map((c) => c.severite);
+  assert.deepEqual([rendu(15), rendu(16), rendu(30), rendu(31)], [[], ['mineur'], ['mineur'], ['majeur']]);
+});
+
+test('A-FONC-02 : les fonctions du niveau supérieur ne comptent pas dans la complexité du niveau supérieur', () => {
+  const fonctions = Array.from({ length: 30 }, (_, i) => `function f${i}(x) { return x ? ${i} : 0; }`).join('\n');
+  assert.deepEqual(constatsDe(`${fonctions}\nf0(1);\n`), []);
+});
+
+test('A-FONC-02 : le niveau supérieur et les fonctions qu\'il déclare ont chacun leur constat', () => {
+  const fonction = `function trier(x) {\n${conditionsA(16, '  ')}\n}\n`;
+  const constats = constatsDe(`${fonction}${conditionsA(16)}\n`);
+  assert.deepEqual(constats.map((c) => c.titre).sort(), ['Complexité cyclomatique de 17 : (niveau supérieur du fichier)', 'Complexité cyclomatique de 17 : trier']);
+});
+
+test('A-FONC-03 : un niveau supérieur de six blocs emboîtés est relevé, à la ligne de l\'instruction la plus profonde', () => {
+  const profond = `${'if (a) { '.repeat(6)}g();${' }'.repeat(6)}`;
+  const [c, ...autres] = constatsDe(`if (a) { g(); }\n${profond}\nk();\n`);
+  assert.equal(autres.length, 0);
+  assert.equal(c.regle, 'A-FONC-03');
+  assert.equal(c.severite, 'mineur');
+  assert.equal(c.titre, 'Imbrication de profondeur 6 : (niveau supérieur du fichier)');
+  assert.equal(c.constat, 'Le code du niveau supérieur du fichier atteint 6 niveaux de blocs imbriqués.');
+  assert.equal(c.ligne, 2);
+  assert.doesNotMatch(c.remediation, /return/, 'le niveau supérieur n\'a pas de `return` anticipé');
+});
+
+test('A-FONC-03 : le niveau supérieur a le seuil d\'une fonction, 5 niveaux, au-delà et non à', () => {
+  const rendu = (n) => constatsDe(`${'if (a) { '.repeat(n)}g();${' }'.repeat(n)}\n`).filter((c) => c.regle === 'A-FONC-03').length;
+  assert.deepEqual([rendu(5), rendu(6)], [0, 1]);
+});
+
+test('A-FONC-02, A-FONC-03 : un script de page est mesuré à part de ceux de la même page, à sa ligne dans la page', () => {
+  const profond = `${'if (a) { '.repeat(6)}g();${' }'.repeat(6)}`;
+  const page = `<!doctype html>\n<html><body>\n<script>\n${conditionsA(10)}\n</script>\n<script>\n${conditionsA(10)}\n</script>\n<script>\nconst a = 1;\nif (b) { g(); }\n${profond}\n${conditionsA(10)}\n</script>\n</body></html>\n`;
+  const constats = analyserFonctions({ fichiers: [fichier('index.html', page)] });
+  // les deux premiers scripts font 11 chemins chacun (22 ensemble : jamais additionnés) ; le troisième fait 1 + 6 + 10 + 1 = 18 chemins et 6 niveaux.
+  // Lignes de la page : le troisième script commence à la ligne 27 ; le premier chemin est le `if` de la ligne 29, la plus grande profondeur est à la ligne 30.
+  assert.deepEqual(constats.map((c) => [c.regle, c.titre, c.ligne]).sort(), [
+    ['A-FONC-02', 'Complexité cyclomatique de 18 : (niveau supérieur d\'un script de la page)', 29],
+    ['A-FONC-03', 'Imbrication de profondeur 6 : (niveau supérieur d\'un script de la page)', 30],
+  ]);
+  assert.ok(constats.every((c) => c.fichier === 'index.html'));
+  assert.match(constats.find((c) => c.regle === 'A-FONC-02').constat, /^Le code du niveau supérieur de ce script de la page comporte 18 chemins/);
+});
+
+test('A-FONC-02 : une fermeture qui enveloppe tout le widget n\'a pas de constat de niveau supérieur (son corps est mesuré comme fonction)', () => {
+  const [c, ...autres] = constatsDe(`(function () {\n${conditionsA(16)}\n})();\nlancer();\n`);
+  assert.equal(autres.length, 0);
+  assert.equal(c.titre, 'Complexité cyclomatique de 17 : (fonction auto-appelée)');
 });
 
 test('un constat sur un nom que le widget choisit le cite, partout où il paraît', () => {

@@ -1,5 +1,6 @@
 /**
- * Mesure d'une fonction, une par une : sa complexité cyclomatique, la profondeur de ses blocs imbriqués, les lignes qu'elle occupe, son nom.
+ * Mesure d'une fonction, une par une : sa complexité cyclomatique, la profondeur de ses blocs imbriqués, les lignes qu'elle occupe, son nom ;
+ * et celle du code qui n'est dans aucune fonction, le niveau supérieur d'un script ou d'un module.
  *
  * Une fonction se mesure sur son propre corps. Les fonctions qu'elle contient (rappels, fonctions internes, méthodes d'une classe qu'elle
  * déclare) ont chacune leur mesure et ne comptent pas dans la sienne : c'est la complexité de McCabe, définie par fonction. Une fermeture qui
@@ -21,24 +22,15 @@ const OUVRE_UN_NIVEAU = new Set(['IfStatement', 'ForStatement', 'ForInStatement'
 const AJOUTE_UN_CHEMIN = new Set(['IfStatement', 'ForStatement', 'ForInStatement', 'ForOfStatement', 'WhileStatement', 'DoWhileStatement', 'CatchClause', 'ConditionalExpression', 'LogicalExpression']);
 
 /**
- * Ce que mesure une fonction sur son propre corps (les fonctions qu'elle contient sont mesurées à part) :
- *  - `complexite` : 1, plus un par `if`, boucle, `case` à test, `catch`, ternaire, `&&`, `||` et `??` ;
- *  - `imbrication` : le plus grand nombre de `if`, boucles, `switch` et `try` emboîtés. Un `else if` prolonge la chaîne au niveau du `if` qu'il
- *    suit : huit `else if` à la suite sont à plat, non à huit niveaux ;
- *  - `etendue` : les lignes de la fonction, de la première à la dernière ;
- *  - `lignesPropres` : l'étendue moins les lignes de chaque fonction qu'elle contient sur plusieurs lignes, de la première à la dernière. Une
- *    fonction interne qui tient sur une ligne ne retire rien : sa ligne est aussi celle du code qui l'écrit. Ce compte ne dépasse jamais
- *    les lignes que la fonction écrit réellement elle-même (la ligne qui ouvre une fonction interne, `ready(() => {`, est retirée alors qu'elle
- *    a un peu du code de l'extérieur) : un défaut qui laisse passer une enveloppe de quelques lignes de trop, jamais un qui lui en donne.
- * Parcours à pile explicite : la profondeur d'un arbre n'est pas bornée par celle de la pile d'appels.
- * @returns {{complexite: number, imbrication: number, etendue: number, lignesPropres: number}}
+ * Parcourt des nœuds racines, sans entrer dans les fonctions qu'ils contiennent, et rend la complexité (1, plus un par construction qui ajoute un
+ * chemin), la profondeur des blocs imbriqués et les lignes des fonctions rencontrées sur plusieurs lignes (de la première à la dernière).
+ * Pile explicite : la profondeur d'un arbre n'est pas bornée par celle de la pile d'appels.
  */
-export function mesurerFonction(fonction) {
-  const etendue = fonction.loc.end.line - fonction.loc.start.line + 1;
+function parcourir(racines) {
   let complexite = 1;
   let imbrication = 0;
   let interieur = 0;
-  const pile = [[fonction.body, 0], ...fonction.params.map((p) => [p, 0])];
+  const pile = racines.map((n) => [n, 0]);
   while (pile.length) {
     const [noeud, niveau] = pile.pop();
     if (estFonction(noeud)) {
@@ -60,7 +52,57 @@ export function mesurerFonction(fonction) {
       else if (v && typeof v.type === 'string') pile.push([v, fils]);
     }
   }
+  return { complexite, imbrication, interieur };
+}
+
+/**
+ * Ce que mesure une fonction sur son propre corps (les fonctions qu'elle contient sont mesurées à part) :
+ *  - `complexite` : 1, plus un par `if`, boucle, `case` à test, `catch`, ternaire, `&&`, `||` et `??` ;
+ *  - `imbrication` : le plus grand nombre de `if`, boucles, `switch` et `try` emboîtés. Un `else if` prolonge la chaîne au niveau du `if` qu'il
+ *    suit : huit `else if` à la suite sont à plat, non à huit niveaux ;
+ *  - `etendue` : les lignes de la fonction, de la première à la dernière ;
+ *  - `lignesPropres` : l'étendue moins les lignes de chaque fonction qu'elle contient sur plusieurs lignes, de la première à la dernière. Une
+ *    fonction interne qui tient sur une ligne ne retire rien : sa ligne est aussi celle du code qui l'écrit. Ce compte ne dépasse jamais
+ *    les lignes que la fonction écrit réellement elle-même (la ligne qui ouvre une fonction interne, `ready(() => {`, est retirée alors qu'elle
+ *    a un peu du code de l'extérieur) : un défaut qui laisse passer une enveloppe de quelques lignes de trop, jamais un qui lui en donne.
+ * @returns {{complexite: number, imbrication: number, etendue: number, lignesPropres: number}}
+ */
+export function mesurerFonction(fonction) {
+  const etendue = fonction.loc.end.line - fonction.loc.start.line + 1;
+  const { complexite, imbrication, interieur } = parcourir([fonction.body, ...fonction.params]);
   return { complexite, imbrication, etendue, lignesPropres: etendue - interieur };
+}
+
+/**
+ * Ce que mesure le code qui n'est dans aucune fonction (les instructions du niveau supérieur d'un script ou d'un module), de la même façon qu'une
+ * fonction : un widget écrit à plat vaut ce que vaut le même code dans une fermeture `(function () { … })()`, dont le corps est mesuré sur ses
+ * instructions propres. Les fonctions que ce code déclare ont chacune leur mesure.
+ * @param {{body: object[]}} programme le nœud `Program`
+ * @returns {{complexite: number, imbrication: number, premiere: ?object, plusProfonde: ?object}} `premiere` : la première instruction qui ajoute un
+ *   chemin, `plusProfonde` : la première qui atteint la plus grande profondeur (l'endroit où le relecteur doit regarder), `null` quand il n'y en a pas
+ */
+export function mesurerProgramme(programme) {
+  let complexite = 1, imbrication = 0;
+  let premiere = null, plusProfonde = null;
+  for (const instruction of programme.body) {
+    const mesure = parcourir([instruction]);
+    if (mesure.complexite > 1) {
+      complexite += mesure.complexite - 1;
+      premiere ??= instruction;
+    }
+    if (mesure.imbrication > imbrication) {
+      imbrication = mesure.imbrication;
+      plusProfonde = instruction;
+    }
+  }
+  return { complexite, imbrication, premiere, plusProfonde };
+}
+
+/** Le nom du code du niveau supérieur d'une unité (un fichier, ou un script de page), dans les mêmes termes que celui d'une fonction : `{ titre, groupe }`. */
+export function nomDuNiveauSuperieur(unite) {
+  return unite.inline
+    ? { titre: "(niveau supérieur d'un script de la page)", groupe: 'le code du niveau supérieur de ce script de la page' }
+    : { titre: '(niveau supérieur du fichier)', groupe: 'le code du niveau supérieur du fichier' };
 }
 
 /** Vrai pour une fonction appelée là où elle est écrite : `(function () { … })()`, `(() => { … })()`, `!function () { … }()`, `(function () { … }).call(this)`, `new function () { … }`. */

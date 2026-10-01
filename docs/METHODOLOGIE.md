@@ -61,7 +61,12 @@ Deux mesures se font sur ce que le code est, non sur ce qu'il ressemble.
   d'un `if` au même niveau : huit `else if` à la suite sont à plat, non à
   huit niveaux. Le constat nomme la fonction (`render`, `Carte.constructor`,
   « le rappel passé à `grist.onRecords` ») ; un nom que le widget choisit est cité
-  et borné comme tout texte qui en vient.
+  et borné comme tout texte qui en vient. Le code qui n'est dans aucune fonction
+  (le niveau supérieur d'un fichier, d'un script de page) se mesure de la même
+  façon, en complexité et en imbrication, avec les mêmes seuils, et le constat
+  dit l'instruction où regarder : un widget écrit à plat ne vaut pas mieux que
+  le même code dans une fermeture. Sa longueur reste dite par la règle de taille
+  de fichier.
 - **Les lignes d'un fichier se comptent d'après les commentaires que lit
   `acorn`**, non d'après le premier caractère de chaque ligne : une ligne est
   du code dès qu'un caractère qui n'est pas un blanc est hors de tout
