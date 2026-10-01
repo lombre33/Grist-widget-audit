@@ -1,7 +1,11 @@
 #!/usr/bin/env node
 /**
  * Rejoue les mutants que la suite par défaut ne voit pas parce qu'ils ne changent aucun résultat, seulement le temps qu'il faut
- * pour l'obtenir : une regex qui devient quadratique sur un mégaoctet de blancs, un extrait replié en entier avant d'être coupé.
+ * pour l'obtenir : une regex qui devient quadratique sur un mégaoctet de blancs, un extrait replié en entier avant d'être coupé,
+ * l'ancien repli des workers (deux expressions qui relisaient le texte à chaque occurrence). Et ceux qui ne finissent jamais :
+ * une recherche qui reprend avant sa position ou ne s'arrête pas faute de parenthèse fermante boucle sans fin, qu'aucun essai ne
+ * juge (l'essai qui les contient ne finit pas) et que seul un délai voit. Dans un lot de la base, c'est le délai du lot qui les tue,
+ * et il le dit ; ici c'est la limite dure d'un cas, qui le dit aussi.
  * Seul un budget de temps les tue (`tests/budgets/`, joués ici par `tests/budgets/lot.mjs`) ; ils sortaient de la suite par défaut
  * avec ces tests (aucun temps mesuré dans la suite par défaut ni dans la base des mutants des autres lots).
  *
@@ -18,6 +22,24 @@ import { mesurerOccupation, refusSousCharge } from './lib/budgets.mjs';
 const P = 'src/moteur/page-html.js';
 const S = 'src/moteur/css.js';
 const M = 'src/moteur/modele.js';
+const I = 'src/contexte/inventaire.js';
+
+// Le repli des workers tel que `e42a8a6` l'écrit (une recherche de `importScripts(`, la parenthèse fermante par `indexOf`), et tel qu'il
+// était avant : une seule expression, `importScripts\s*\(([^)]*)\)`, relue jusqu'à la fin du texte à chaque appel qui ne se ferme pas.
+const IMPORTSCRIPTS_RECHERCHE = [
+  '  const entete = /\\bimportScripts\\s*\\(/g;',
+  '  while (entete.exec(contenu) !== null) {',
+  "    const fin = contenu.indexOf(')', entete.lastIndex);",
+  '    if (fin < 0) break;                                            // plus aucune `)` : aucun des appels suivants ne se ferme non plus',
+  '    for (const t of contenu.slice(entete.lastIndex, fin).matchAll(/["\']([^"\']+)["\']/g)) refs.push(duWorker(t[1]));',
+  '    entete.lastIndex = fin + 1;',
+  '  }',
+].join('\n');
+const IMPORTSCRIPTS_EXPRESSION = [
+  '  for (const m of contenu.matchAll(/\\bimportScripts\\s*\\(([^)]*)\\)/g)) {',
+  '    for (const t of m[1].matchAll(/["\']([^"\']+)["\']/g)) refs.push(duWorker(t[1]));',
+  '  }',
+].join('\n');
 
 // [fichier, chaîne d'origine (une seule occurrence), chaîne mutée, libellé]
 const MUTANTS = [
@@ -25,6 +47,10 @@ const MUTANTS = [
   [P, "  while (b > a && espace(texte.charCodeAt(b - 1))) b--;\n  return texte.slice(a, b);", "  return texte.replace(/^[\\t\\n\\f\\r ]+|[\\t\\n\\f\\r ]+$/g, '');", 'sansBlancsDeBord : regex quadratique'],
   [M, "masquerLesSecrets(String(c.extrait).slice(0, LONGUEUR_LUE_EXTRAIT)).replace(", "masquerLesSecrets(String(c.extrait)).replace(", 'extrait : replié en entier avant la coupe (quadratique)'],
   [M, "const LONGUEUR_LUE_EXTRAIT = 4096;", "const LONGUEUR_LUE_EXTRAIT = 1 << 30;", 'extrait : longueur lue sans borne'],
+  [I, IMPORTSCRIPTS_RECHERCHE, IMPORTSCRIPTS_EXPRESSION, 'repli des workers : importScripts\\s*\\(([^)]*)\\) relu à chaque appel (quadratique)'],
+  [I, "(?:serviceWorker\\.register|", "(?:\\w+\\.)*(?:serviceWorker\\.register|", 'repli des workers : préfixe (?:\\w+\\.)* relu à chaque point (quadratique)'],
+  [I, "contenu.indexOf(')', entete.lastIndex)", "contenu.indexOf(')')", 'repli des workers : la parenthèse fermante est cherchée depuis le début du texte (ne finit pas)'],
+  [I, "    if (fin < 0) break;", "", 'repli des workers : sans parenthèse fermante, la recherche repart du début (ne finit pas)'],
 ].map(([fichier, ancien, nouveau, libelle]) => ({ libelle: `${libelle}  [${fichier.split('/').pop()}]`, fichier, ancien, nouveau }));
 
 const { partie, restants } = lireArguments(process.argv.slice(2));
