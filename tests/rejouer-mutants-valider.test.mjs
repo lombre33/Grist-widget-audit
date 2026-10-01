@@ -99,6 +99,7 @@ test('moteur --valider : la vérification d\'avance seule, aucune suite n\'est l
   try {
     assert.equal(complet.code, 2, 'contrôle : sans --valider, la suite rouge sur le code non muté ne conclut rien');
     assert.match(complet.erreurs.join('\n'), /n'est pas verte et complète/);
+    assert.match(complet.erreurs.join('\n'), /verdict : test, en échec : déjà rouge, sautés : 0, lancés : 2\)/, 'la suite rouge nomme le test qui échoue (une machine chargée qui en fait échouer un le dit)');
   } finally {
     nettoyer(complet);
   }
@@ -230,4 +231,52 @@ test('lireArguments : --valider est lu où qu\'il soit et n\'est jamais un filtr
   assert.deepEqual(lireArguments(['--valider']), { partie: null, valider: true, restants: [] });
   assert.deepEqual(lireArguments(['a', '--valider', '--part=2/3', 'b']), { partie: { i: 2, n: 3 }, valider: true, restants: ['a', 'b'] });
   assert.deepEqual(lireArguments(['--valider=1', '--valid', 'valider']), { partie: null, valider: false, restants: ['--valider=1', '--valid', 'valider'] });
+});
+
+// --- --part : un lot qui ne la transmet pas est refusé ---------------------------------------------------------
+
+test('moteur : une ligne de commande qui demande --part=i/n sans que le lot transmette la même `partie` est refusée avant tout (code 2), la vérification seule aussi', () => {
+  const cas = [
+    ['partie absente', { argv: ['--part=1/3'] }, /--part=1\/3.*`partie` absente/s],
+    ['partie absente, vérification seule', { argv: ['--valider', '--part=1/3'] }, /--part=1\/3.*`partie` absente/s],
+    ['autre paquet', { argv: ['--part=1/3'], partie: { i: 2, n: 3 } }, /--part=1\/3.*reçue : 2\/3/s],
+    ['autre nombre de paquets', { argv: ['--part=1/3'], partie: { i: 1, n: 2 } }, /--part=1\/3.*reçue : 1\/2/s],
+    ['paquet hors de 1..n', { argv: ['--part=4/3'] }, /--part=4\/3 : i doit être entre 1 et n/],
+  ];
+  for (const [nom, options, message] of cas) {
+    const r = rejouer(['test'], options);
+    try {
+      assert.equal(r.code, 2, `${nom} : ${r.erreurs.join('\n')}`);
+      assert.equal(r.erreurs.length, 1, `${nom} : une seule ligne d'erreur`);
+      assert.match(r.erreurs[0], message, nom);
+      if (!/hors de/.test(nom)) assert.match(r.erreurs[0], /chaque paquet rejouerait le lot entier/, nom);
+      assert.deepEqual(r.lignes, [], `${nom} : rien n'est lancé ni dit`);
+      assert.deepEqual(r.copiesRestantes, [], `${nom} : aucune copie n'a été faite`);
+      assert.equal(r.bilan, null, nom);
+    } finally {
+      nettoyer(r);
+    }
+  }
+});
+
+test('moteur : la `partie` transmise telle que la ligne la demande passe, et sans --part dans la ligne le lot fait comme il veut', () => {
+  const transmise = rejouer(['test', 'survivant'], { argv: ['--valider', '--part=2/2'], partie: { i: 2, n: 2 } });
+  try {
+    assert.equal(transmise.code, 0, transmise.erreurs.join('\n'));
+  } finally {
+    nettoyer(transmise);
+  }
+  const rejeu = rejouer(['test', 'survivant'], { argv: ['--part=2/2'], partie: { i: 2, n: 2 } });
+  try {
+    assert.deepEqual(rejeu.bilan.mutants.map((m) => m.libelle), ['équivalent'], 'le paquet 2 sur 2 : seul le deuxième mutant est rejoué');
+    assert.ok(rejeu.lignes.includes('Paquet 2/2 : 1 mutants sur 2.\n'));
+  } finally {
+    nettoyer(rejeu);
+  }
+  const sansLigne = rejouer(['test', 'survivant'], { argv: [], partie: { i: 1, n: 2 }, valider: true });
+  try {
+    assert.equal(sansLigne.code, 0, 'pas de --part dans la ligne : rien à comparer, la partie donnée par le lot est la sienne');
+  } finally {
+    nettoyer(sansLigne);
+  }
 });

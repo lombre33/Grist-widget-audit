@@ -206,9 +206,15 @@ test("sous dérogation, un échec de lancement n'est pas rangé parmi les refus 
  * sous un utilisateur sans privilège (nobody) — ce que fait un vrai déploiement. Là où le bac à sable ne peut pas
  * démarrer du tout (espaces de noms utilisateur interdits), le test ÉCHOUE et le dit, sauf GWAUDIT_SUITE_SANS_CHROMIUM=1
  * (saut explicite, comme les autres tests qui lancent Chromium).
+ *
+ * Le dossier de travail porte un nom court : sous son bac à sable, Chromium plante (SIGTRAP, sans un mot sur la cause) quand le
+ * chemin de ce dossier, qui est son TMPDIR, dépasse 61 caractères (mesuré : 61 passe, 62 plante). Le dossier temporaire d'un lot
+ * de mutants (`<copie>-tmp`, scripts/lib/rejouer-mutants.mjs) en prend déjà 37 ou plus, et l'ancien préfixe (`gwaudit-test-bas-`,
+ * 24 caractères avec son suffixe) suffisait à franchir la limite : le lot du bac à sable refusait de partir, sa base n'étant pas verte.
  */
+const LIMITE_CHEMIN_BAC_A_SABLE = 61;
 function enfantAvecBacASable(t, args) {
-  const travail = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-test-bas-'));
+  const travail = fs.mkdtempSync(path.join(os.tmpdir(), 'gbas-'));
   t.after(() => fs.rmSync(travail, { recursive: true, force: true }));
   const env = { ...process.env, GWAUDIT_CHROMIUM_SANS_SANDBOX: '', GWAUDIT_CHROMIUM_SANDBOX: '', TMPDIR: travail, HOME: travail };
   delete env.NODE_EXTRA_CA_CERTS;
@@ -217,9 +223,12 @@ function enfantAvecBacASable(t, args) {
   return { travail, r: spawnSync(process.execPath, typeof args === 'function' ? args(travail) : args, options) };
 }
 
-function bacASableImpossible(t, detail) {
-  if (process.env.GWAUDIT_SUITE_SANS_CHROMIUM === '1') { t.skip(`Chromium ne démarre pas avec son bac à sable ici (GWAUDIT_SUITE_SANS_CHROMIUM=1) : ${detail}`); return true; }
-  assert.fail(`Chromium ne démarre pas avec son bac à sable sur cette machine : ${detail} — ce test ne prouve rien sans lui. GWAUDIT_SUITE_SANS_CHROMIUM=1 le saute explicitement.`);
+function bacASableImpossible(t, detail, travail) {
+  const chemin = travail.length > LIMITE_CHEMIN_BAC_A_SABLE
+    ? ` Le dossier de travail de l'essai fait ${travail.length} caractères (${travail}) : sous son bac à sable, Chromium plante au-delà de ${LIMITE_CHEMIN_BAC_A_SABLE} ; un TMPDIR plus court y remédie.`
+    : '';
+  if (process.env.GWAUDIT_SUITE_SANS_CHROMIUM === '1') { t.skip(`Chromium ne démarre pas avec son bac à sable ici (GWAUDIT_SUITE_SANS_CHROMIUM=1) : ${detail}${chemin}`); return true; }
+  assert.fail(`Chromium ne démarre pas avec son bac à sable sur cette machine : ${detail}${chemin} — ce test ne prouve rien sans lui. GWAUDIT_SUITE_SANS_CHROMIUM=1 le saute explicitement.`);
 }
 
 test("par défaut, avec un vrai Chromium et son bac à sable : l'axe D tourne et aucun marqueur de dérogation n'est posé", { skip: SOUS_WINDOWS && 'le job windows du workflow le vérifie (verifier-windows.mjs)' }, (t) => {
@@ -230,18 +239,18 @@ test("par défaut, avec un vrai Chromium et son bac à sable : l'axe D tourne et
   const fichier = path.join(travail, sortie, 'rapport.json');
   assert.ok(r.status !== null && r.status <= 2 && fs.existsSync(fichier), `gwaudit a échoué (code ${r.status}) : ${(r.stderr ?? '').slice(-500)}`);
   const rapport = JSON.parse(fs.readFileSync(fichier, 'utf8'));
-  if (rapport.axesNonExecutes.includes('D')) return bacASableImpossible(t, rapport.axes.D.constats.find((c) => c.regle === 'D-INDISPONIBLE')?.constat ?? '(cause inconnue)');
+  if (rapport.axesNonExecutes.includes('D')) return bacASableImpossible(t, rapport.axes.D.constats.find((c) => c.regle === 'D-INDISPONIBLE')?.constat ?? '(cause inconnue)', travail);
   assert.equal(rapport.axes.D.constats.some((c) => c.regle === 'D-INDISPONIBLE-BAC-A-SABLE'), false, "aucune dérogation n'est posée : le rapport ne doit pas dire que le bac à sable a été retiré");
   const html = fs.readFileSync(path.join(travail, sortie, 'rapport.html'), 'utf8');
   assert.doesNotMatch(html, /sans le bac à sable de Chromium/);
 });
 
 test("par défaut, un échec de l'axe D APRÈS le lancement ne pose aucun marqueur de dérogation", { skip: SOUS_WINDOWS && 'le job windows du workflow le vérifie (verifier-windows.mjs)' }, (t) => {
-  const { r } = enfantAvecBacASable(t, [path.join(import.meta.dirname, 'aide-audit-sans-derogation.mjs')]);
+  const { travail, r } = enfantAvecBacASable(t, [path.join(import.meta.dirname, 'aide-audit-sans-derogation.mjs')]);
   assert.equal(r.status, 0, `le processus d'essai a échoué (code ${r.status}) : ${(r.stderr ?? '').slice(-500)}`);
   const { constats, nonExecute } = JSON.parse(r.stdout.trim().split('\n').pop());
   const echec = constats.find((c) => c.regle === 'D-INDISPONIBLE');
   assert.ok(nonExecute && echec, "l'axe D devait échouer");
-  if (!/Cannot convert undefined or null to object/.test(echec.constat)) return bacASableImpossible(t, echec.constat);
+  if (!/Cannot convert undefined or null to object/.test(echec.constat)) return bacASableImpossible(t, echec.constat, travail);
   assert.equal(constats.some((c) => c.regle === 'D-INDISPONIBLE-BAC-A-SABLE'), false, "Chromium a démarré AVEC son bac à sable : aucun marqueur de dérogation ne doit être posé, même quand l'axe échoue ensuite");
 });

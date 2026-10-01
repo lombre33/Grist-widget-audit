@@ -25,7 +25,7 @@ const MUTANTS = [
   [E, ARG, 'ARG BASE_IMAGE', 'exécution : plus de valeur par défaut'],
   [E, 'FROM ${BASE_IMAGE}', 'FROM node:22-alpine', "exécution : image littérale sans empreinte"],
 ];
-const { restants } = lireArguments(process.argv.slice(2));
+const { partie, restants } = lireArguments(process.argv.slice(2));
 const filtre = restants[0] ? new RegExp(restants[0]) : null;
 const mutants = MUTANTS
   .filter(([, , , libelle]) => !filtre || filtre.test(libelle))
@@ -36,4 +36,5 @@ process.exitCode = rejouerMutants({
   groupes: [{ nom: 'tests images', fichiers: TESTS }],
   exigerChromium: false,
   dossiers: [...DOSSIERS_COPIES, 'docker'],
+  partie,
 });

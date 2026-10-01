@@ -22,7 +22,7 @@ const MUTANTS = [
   [V, TEST_FONCTION, TEST_FONCTION.replace('    echec "un Chromium survit $1"\n', '    true\n'), 'fonction : un survivant ne fait pas échouer'],
   [V, '  aucun_chromium_orphelin "à la destruction du conteneur, coupé au plafond"\n', "  if pgrep -f '/ms-playwright/chromium-' >/dev/null; then echec \"un Chromium survit\"; fi\n", 'plafond : motif recopié, sans les crochets'],
 ];
-const { restants } = lireArguments(process.argv.slice(2));
+const { partie, restants } = lireArguments(process.argv.slice(2));
 const filtre = restants[0] ? new RegExp(restants[0]) : null;
 const mutants = MUTANTS
   .filter(([, , , libelle]) => !filtre || filtre.test(libelle))
@@ -33,4 +33,5 @@ process.exitCode = rejouerMutants({
   groupes: [{ nom: 'tests orphelin', fichiers: TESTS }],
   exigerChromium: false,
   dossiers: [...DOSSIERS_COPIES, 'docker'],
+  partie,
 });

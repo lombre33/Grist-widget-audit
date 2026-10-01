@@ -53,6 +53,14 @@ export function processusDans(dossier) {
   return pids;
 }
 export const prive = () => fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-essai-moteur-')));
+/**
+ * La seconde racine que le moteur balaie (`/tmp` en vrai, voir `racinesTemporaires`) : ici, un dossier à ces essais, posé pour tout le
+ * processus (les lots lancés en sous-processus en héritent). Le moteur qu'ils éprouvent est tour à tour un moteur muté qui retire ce
+ * qu'il ne devrait pas ; sur le vrai `/tmp`, il retirerait la copie du lot qui l'a lancé et celle de chaque lot qui tourne à côté.
+ */
+export const RACINE_FIXE = prive();
+process.env.GWAUDIT_MUTANTS_RACINE_FIXE = RACINE_FIXE;
+process.on('exit', () => { try { fs.rmSync(RACINE_FIXE, { recursive: true, force: true }); } catch { /* déjà parti */ } });
 /** Un numéro de processus qui n'existe plus : celui d'un processus qui a fini et que son parent a ramassé. */
 export async function pidMort() {
   const p = spawn(process.execPath, ['-e', ''], { stdio: 'ignore' });
@@ -87,12 +95,40 @@ export const PLANTAGE_ET_ORPHELIN = [
   F_JS,
 ].join('\n');
 
+/** Le même orphelin, mais posé dans le dossier temporaire de la suite (`TMPDIR`, à côté de la copie) : son répertoire courant n'est pas la copie. */
+const DANS_TMP = (code) => {
+  const cherche = "{ detached: true, stdio: 'ignore' }";
+  if (code.split(cherche).length !== 2) throw new Error('le lanceur de l\'orphelin a changé : cet aide ne le retrouve plus');
+  return code.replace(cherche, "{ detached: true, stdio: 'ignore', cwd: process.env.TMPDIR }");
+};
+
+/** Un mutant dont la suite pose une copie de lot mort dans la seconde racine balayée (ce que fait un moteur muté qui lance un lot et le tue) : `GWAUDIT_MUTANTS_RACINE_FIXE`. */
+export const LAISSE_UNE_COPIE = [
+  "import { spawnSync } from 'node:child_process';",
+  "import fs from 'node:fs';",
+  "import path from 'node:path';",
+  "const mort = spawnSync(process.execPath, ['-e', '']).pid;",
+  'fs.mkdirSync(path.join(process.env.GWAUDIT_MUTANTS_RACINE_FIXE, `gwaudit-mutants-${mort}-laissee-par-la-suite`));',
+  'export const f = () => 2;',
+].join('\n');
+
+/** Un mutant équivalent (`f` vaut toujours 1) dont le chargement fait autre chose : `avant` est du code qui s'exécute quand la suite charge `f`. */
+const EQUIVALENT_QUI = (libelle, avant) => ({ libelle, fichier: 'src/f.js', ancien: F_JS, nouveau: `import fs from 'node:fs';\nimport path from 'node:path';\n${avant}\nexport const f = () => 1;\n` });
+
 export const MUTANTS = {
+  efaceLeTemporaire: EQUIVALENT_QUI('équivalent, mais retire le dossier temporaire de la suite', "fs.rmSync(process.env.TMPDIR, { recursive: true, force: true });"),
+  efaceLaCopie: EQUIVALENT_QUI('équivalent, mais retire la copie du lot', 'fs.rmSync(process.cwd(), { recursive: true, force: true });'),
+  efaceUnFichierDeTest: EQUIVALENT_QUI('équivalent, mais retire un fichier de test de la copie', "fs.rmSync(path.join(process.cwd(), 'tests', 'tmp.test.mjs'));"),
+  /** À jouer avec `tests/f.test.mjs` : son seul test n'est plus déclaré, le lanceur finit en 0 après zéro test. */
+  plusAucunTest: { libelle: 'le seul test de la suite n\'est plus déclaré', fichier: 'tests/f.test.mjs', ancien: "test('f vaut 1'", nouveau: "if (process.argv.length > 0) void ('f vaut 1'); else test('f vaut 1'" },
   test: { libelle: 'renvoie 2', fichier: 'src/f.js', ancien: F_JS, nouveau: 'export const f = () => 2;\n' },
   delai: { libelle: 'boucle de 20 s', fichier: 'src/f.js', ancien: F_JS, nouveau: BOUCLE },
   orphelin: { libelle: 'boucle de 20 s et laisse un orphelin', fichier: 'src/f.js', ancien: F_JS, nouveau: BOUCLE_ET_ORPHELIN },
   plantage: { libelle: 'quitte au chargement', fichier: 'src/f.js', ancien: F_JS, nouveau: `process.exit(3);\n${F_JS}` },
   plantageEtOrphelin: { libelle: 'quitte au chargement et laisse un orphelin', fichier: 'src/f.js', ancien: F_JS, nouveau: PLANTAGE_ET_ORPHELIN },
+  orphelinTmp: { libelle: 'boucle de 20 s et laisse un orphelin dans TMPDIR', fichier: 'src/f.js', ancien: F_JS, nouveau: DANS_TMP(BOUCLE_ET_ORPHELIN) },
+  plantageEtOrphelinTmp: { libelle: 'quitte au chargement et laisse un orphelin dans TMPDIR', fichier: 'src/f.js', ancien: F_JS, nouveau: DANS_TMP(PLANTAGE_ET_ORPHELIN) },
+  laisseUneCopie: { libelle: 'renvoie 2 et laisse la copie d\'un lot mort', fichier: 'src/f.js', ancien: F_JS, nouveau: LAISSE_UNE_COPIE },
   survivant: { libelle: 'équivalent', fichier: 'src/f.js', ancien: F_JS, nouveau: 'export const f = () => 1 + 0;\n' },
 };
 
@@ -107,11 +143,23 @@ const TEST_ECHECS = [
   "test('troisième', () => assert.equal(f(), 1));",
 ].join('\n');
 const TEST_PLANTE_SI_MUTE = (code) => `import { f } from '../src/f.js';\nif (f() !== 1) process.exit(${code});\n`;
+/** Un test qui a besoin du dossier temporaire de la suite : sans lui, il échoue sans que le code y soit pour rien. */
+const TEST_TMP = [
+  "import test from 'node:test';",
+  "import assert from 'node:assert/strict';",
+  "import fs from 'node:fs';",
+  "import os from 'node:os';",
+  "import path from 'node:path';",
+  "import { f } from '../src/f.js';",
+  "test('le dossier temporaire est là', () => { fs.mkdtempSync(path.join(os.tmpdir(), 'essai-')); });",
+  "test('f vaut 1 (dans le dossier temporaire)', () => assert.equal(f(), 1));",
+].join('\n');
 /** Ce que la copie doit être, vue de l'intérieur : un test qui n'a de sens que dans la copie du moteur (les variables `ESSAI_MOTEUR_*` viennent de `rejouer`). */
 const TEST_COPIE = [
   "import test from 'node:test';",
   "import assert from 'node:assert/strict';",
   "import fs from 'node:fs';",
+  "import os from 'node:os';",
   "import path from 'node:path';",
   "test('la copie a la forme attendue', () => {",
   '  const cwd = process.cwd();',
@@ -119,6 +167,9 @@ const TEST_COPIE = [
   "  assert.equal(path.dirname(cwd), process.env.ESSAI_MOTEUR_TMP, 'dans le dossier temporaire');",
   '  assert.match(path.basename(cwd), new RegExp(`^gwaudit-mutants-${process.env.ESSAI_MOTEUR_LOT}-`), \'le numéro du lot est dans le nom\');',
   "  assert.equal(fs.statSync(cwd).mode & 0o777, 0o755, 'lisible par un autre utilisateur');",
+  "  assert.equal(process.env.TMPDIR, `${cwd}-tmp`, 'le dossier temporaire de la suite est celui de la copie, à côté d\\'elle');",
+  "  assert.equal(fs.realpathSync(os.tmpdir()), `${cwd}-tmp`, 'et c\\'est celui que Node donne');",
+  "  assert.equal(fs.statSync(process.env.TMPDIR).mode & 0o7777, 0o1777, 'ouvert à tous comme /tmp : un essai sous un autre utilisateur y écrit');",
   "  assert.equal(fs.readFileSync('package.json', 'utf8'), '{ \"type\": \"module\" }\\n');",
   "  assert.ok(fs.lstatSync('node_modules').isSymbolicLink(), 'node_modules est lié, pas copié');",
   "  assert.equal(fs.readFileSync('node_modules/marqueur.txt', 'utf8'), 'ici\\n');",
@@ -157,6 +208,7 @@ export function creerProjet(dossier, fichiers = {}) {
     'tests/echecs.test.mjs': TEST_ECHECS,
     'tests/plante-si-mute-1.test.mjs': TEST_PLANTE_SI_MUTE(3),
     'tests/plante-si-mute-2.test.mjs': TEST_PLANTE_SI_MUTE(4),
+    'tests/tmp.test.mjs': TEST_TMP,
     'tests/copie.test.mjs': TEST_COPIE,
     'tests/copie-par-defaut.test.mjs': TEST_COPIE_PAR_DEFAUT,
     ...fichiers,

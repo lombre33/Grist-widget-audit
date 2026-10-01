@@ -3,7 +3,7 @@
  * Rejoue les mutants du moteur de mutants lui-même (`scripts/lib/rejouer-mutants.mjs`) :
  * chaque décision du moteur (ce qui est un délai, un plantage, un test nommé ;
  * ce qui est tué, retiré, refusé avant le premier essai) est gardée par un test
- * des cinq fichiers `tests/rejouer-mutants-*.test.mjs`. Aucun navigateur n'est
+ * des six fichiers `tests/rejouer-mutants-*.test.mjs`. Aucun navigateur n'est
  * requis.
  *
  * Deux mutants sont volontairement absents parce qu'ils ne changent rien
@@ -15,6 +15,11 @@
  *    tournent sous un seul.
  * Un mutant qui ferait tuer tout ce que `/proc` montre (le `continue` du filtre
  * de répertoire retiré) n'est pas écrit non plus : il tuerait aussi ce lot.
+ *
+ * Deux choix n'ont pas de mutant parce qu'aucun n'y serait observable :
+ *  - l'indentation des lignes `ok N - nom` lues pour savoir si un vrai test a tourné (`\s*`) : Node imprime toujours au premier
+ *    niveau la ligne du test ou de la suite qui les porte, un mutant qui la retirerait ne change rien à ce qu'il imprime ;
+ *  - le code de sortie ne compte pas les non jugés : un lot qui perd sa copie compte son mutant plantage, ce qui suffit à le faire échouer.
  *
  * Le moteur ne nettoie pas les noms des tests en échec : `node --test` les
  * imprime tels quels, espaces de bord compris (Node 22.22.2 : `not ok 1 -   a  `),
@@ -29,7 +34,7 @@
 import { lireArguments, rejouerMutants } from './lib/rejouer-mutants.mjs';
 
 const E = 'scripts/lib/rejouer-mutants.mjs';
-const TESTS = ['classement', 'processus', 'issues', 'preparation', 'valider'].map((n) => `tests/rejouer-mutants-${n}.test.mjs`);
+const TESTS = ['classement', 'processus', 'issues', 'preparation', 'valider', 'disparition'].map((n) => `tests/rejouer-mutants-${n}.test.mjs`);
 
 // [chaîne d'origine (une seule occurrence), chaîne mutée, libellé]
 const MUTANTS = [
@@ -61,7 +66,7 @@ const MUTANTS = [
   ["return { ...bilan, verdict: 'delai' };", "return { ...bilan, verdict: 'plantage' };", 'délai : dit plantage'],
   ['if (r.error) return plantage(', 'if (false) return plantage(', 'erreur de lancement : ignorée'],
   ['${r.error.code ?? r.error.message}', '${r.error.message ?? r.error.code}', 'erreur de lancement : le message avant le code'],
-  ["if (r.status === 0) return { ...bilan, verdict: 'passe' };", "if (false) return { ...bilan, verdict: 'passe' };", 'code 0 : plus une suite qui passe'],
+  ["if (r.status === 0) {", "if (false) {", 'code 0 : plus une suite qui passe'],
   ['if (r.status !== 1) return plantage(', 'if (false) return plantage(', 'autre code que 0 et 1 : lu comme un échec de test'],
   ['r.signal ? `tué par ${r.signal}`', '!r.signal ? `tué par ${r.signal}`', 'plantage : le signal et le code intervertis'],
   ['if (Number.isNaN(bilan.echecs)) return plantage(', 'if (false) return plantage(', 'résumé absent : accepté'],
@@ -89,20 +94,27 @@ const MUTANTS = [
   // --- le balayage des copies abandonnées
   ["try { process.kill(pid, 0); return true; }", "try { process.kill(pid, 0); return false; }", 'existe : un lot vivant est dit mort'],
   ["catch (e) { return e.code !== 'ESRCH'; }", 'catch (e) { return true; }', 'existe : un lot mort est dit vivant'],
-  ['tmp = os.tmpdir()) {', "tmp = '/tmp') {", 'balayage : /tmp au lieu du dossier temporaire du processus'],
-  ['catch { return retirees; }', 'catch { /* rien */ }', 'balayage : un dossier illisible fait planter'],
+  ['tmp = racinesTemporaires()) {', "tmp = ['/tmp']) {", 'balayage : /tmp seul, jamais le dossier temporaire du processus'],
+  ['tmp = racinesTemporaires()) {', 'tmp = [os.tmpdir()]) {', 'balayage : le dossier temporaire du processus seul, jamais /tmp'],
+  ['for (const racine of Array.isArray(tmp) ? tmp : [tmp]) {', 'for (const racine of [tmp]) {', 'balayage : plusieurs dossiers à la fois refusés (un tableau pris pour un chemin)'],
+  ['for (const racine of Array.isArray(tmp) ? tmp : [tmp]) {', 'for (const racine of Array.isArray(tmp) ? tmp.slice(0, 1) : [tmp]) {', 'balayage : seul le premier dossier est balayé'],
+  ['try { noms = fs.readdirSync(racine); } catch { continue; }', 'try { noms = fs.readdirSync(racine); } catch { return retirees; }', 'balayage : un dossier illisible arrête le balayage des suivants'],
+  ['try { noms = fs.readdirSync(racine); } catch { continue; }', 'noms = fs.readdirSync(racine);', 'balayage : un dossier illisible fait planter'],
   ['/^gwaudit-mutants-(\\d+)-/', '/gwaudit-mutants-(\\d+)-/', 'balayage : le préfixe est reconnu au milieu d\'un nom'],
   ['/^gwaudit-mutants-(\\d+)-/', '/^gwaudit-mutants-(\\d+)/', 'balayage : un numéro sans tiret derrière est reconnu'],
   ['if (!m || existe(Number(m[1]))) continue;', 'if (!m) continue;', 'balayage : la copie d\'un lot vivant est retirée'],
   ['existe(Number(m[1]))', 'existe(Number(m[0]))', 'balayage : le numéro lu dans le mauvais groupe'],
-  ['path.join(fs.realpathSync(tmp), nom)', 'path.join(tmp, nom)', 'balayage : le chemin de la copie n\'est pas résolu'],
+  ['path.join(fs.realpathSync(racine), nom)', 'path.join(racine, nom)', 'balayage : le chemin de la copie n\'est pas résolu'],
   ['tuerProcessusDe(dossier);', '', 'balayage : les processus de la copie restent'],
   ['fs.rmSync(dossier, { recursive: true, force: true });', '', 'balayage : la copie reste'],
+  ['const laissees = balayerCopiesAbandonnees();', 'const laissees = [];', 'fin de lot : la copie qu\'une suite a laissée derrière elle n\'est pas balayée'],
+  ['if (laissees.length) erreur(`${laissees.length} copie(s) laissée(s) par les essais', 'if (false) erreur(`${laissees.length} copie(s) laissée(s) par les essais', 'fin de lot : la copie retirée n\'est pas dite'],
+  ['    if (!verifierSeulement) {\n      const laissees = balayerCopiesAbandonnees();', '    {\n      const laissees = balayerCopiesAbandonnees();', 'fin de lot : la vérification seule balaie aussi'],
   ['fs.rmSync(dossier, { recursive: true, force: true });', 'fs.rmSync(dossier, { force: true });', 'balayage : un dossier plein n\'est pas retiré (sans recursive)'],
   ['retirees.push(dossier);', '', 'balayage : la copie retirée n\'est pas dite'],
 
   // --- ce que rejouerMutants prend par défaut
-  ['exigerChromium = true,', 'exigerChromium = false,', 'options : Chromium n\'est plus exigé par défaut'],
+  ['groupes, exigerChromium = true,', 'groupes, exigerChromium = false,', 'options : Chromium n\'est plus exigé par défaut'],
   ['partie = null,', 'partie = { i: 1, n: 1 },', 'options : un paquet 1/1 par défaut'],
   ['dossiers = DOSSIERS_COPIES,', "dossiers = ['src'],", 'options : seul src est copié par défaut'],
   ['delaiMs = DELAI_MS,', 'delaiMs = 1,', 'options : un délai d\'une milliseconde par défaut'],
@@ -131,8 +143,10 @@ const MUTANTS = [
   ["{ cwd: copie, encoding: 'utf8', env, timeout: delaiMs, maxBuffer: 1 << 26 }", "{ cwd: copie, encoding: 'utf8', env, maxBuffer: 1 << 26 }", 'lanceur : le délai n\'est jamais appliqué'],
   ["{ cwd: copie, encoding: 'utf8', env, timeout: delaiMs, maxBuffer: 1 << 26 }", "{ encoding: 'utf8', env, timeout: delaiMs, maxBuffer: 1 << 26 }", 'lanceur : lancé hors de la copie'],
   ["{ cwd: copie, encoding: 'utf8', env, timeout: delaiMs, maxBuffer: 1 << 26 }", '{ cwd: copie, env, timeout: delaiMs, maxBuffer: 1 << 26 }', 'lanceur : sortie en octets'],
-  ["if (bilan.verdict === 'delai' || bilan.verdict === 'plantage') tuerProcessusDe(copie);", "if (bilan.verdict === 'plantage') tuerProcessusDe(copie);", 'délai : les orphelins restent'],
-  ["if (bilan.verdict === 'delai' || bilan.verdict === 'plantage') tuerProcessusDe(copie);", "if (bilan.verdict === 'delai') tuerProcessusDe(copie);", 'plantage : les orphelins restent'],
+  ["if (bilan.verdict === 'delai' || bilan.verdict === 'plantage') { tuerProcessusDe(copie); tuerProcessusDe(temporaire); }", "if (bilan.verdict === 'plantage') { tuerProcessusDe(copie); tuerProcessusDe(temporaire); }", 'délai : les orphelins restent'],
+  ["if (bilan.verdict === 'delai' || bilan.verdict === 'plantage') { tuerProcessusDe(copie); tuerProcessusDe(temporaire); }", "if (bilan.verdict === 'delai') { tuerProcessusDe(copie); tuerProcessusDe(temporaire); }", 'plantage : les orphelins restent'],
+  ["{ tuerProcessusDe(copie); tuerProcessusDe(temporaire); }", "{ tuerProcessusDe(copie); }", 'délai ou plantage : les orphelins du dossier temporaire des suites restent'],
+  ["{ tuerProcessusDe(copie); tuerProcessusDe(temporaire); }", "{ tuerProcessusDe(temporaire); }", 'délai ou plantage : les orphelins de la copie restent (seuls ceux du dossier temporaire sont tués)'],
   ['if (fs.existsSync(path.join(racine, dossier))) fs.cpSync(', 'if (true) fs.cpSync(', 'copie : un dossier absent fait planter'],
   ["if (fs.existsSync(path.join(racine, 'package.json'))) fs.copyFileSync(path.join(racine, 'package.json'), path.join(copie, 'package.json'));", '', 'copie : package.json non copié'],
   ["fs.symlinkSync(path.join(racine, 'node_modules'), path.join(copie, 'node_modules'));", "fs.cpSync(path.join(racine, 'node_modules'), path.join(copie, 'node_modules'), { recursive: true });", 'copie : node_modules copié au lieu d\'être lié'],
@@ -160,11 +174,15 @@ const MUTANTS = [
 
   // --- la suite non mutée
   ['const base = lancer(groupes.flatMap((g) => g.fichiers));', 'const base = lancer(groupes[0].fichiers);', 'suite non mutée : seul le premier groupe est jugé'],
-  ["if (base.verdict !== 'passe' || base.saute !== 0 || !(base.lances > 0)) {", 'if (base.saute !== 0 || !(base.lances > 0)) {', 'suite non mutée : une suite rouge est acceptée'],
-  ["if (base.verdict !== 'passe' || base.saute !== 0 || !(base.lances > 0)) {", "if (base.verdict !== 'passe' || !(base.lances > 0)) {", 'suite non mutée : un test sauté est accepté'],
-  ["if (base.verdict !== 'passe' || base.saute !== 0 || !(base.lances > 0)) {", "if (base.verdict !== 'passe' || base.saute !== 0) {", 'suite non mutée : une suite qui ne lance aucun test est acceptée'],
+  ["if (base.verdict !== 'passe' || base.saute !== 0) {", 'if (base.saute !== 0) {', 'suite non mutée : une suite rouge est acceptée'],
+  ["if (base.verdict !== 'passe' || base.saute !== 0) {", "if (base.verdict !== 'passe') {", 'suite non mutée : un test sauté est accepté'],
   ["${base.raison ? `, ${base.raison}` : ''}", "${base.raison ? '' : `, ${base.raison}`}", 'suite non mutée : la raison du plantage n\'est pas dite'],
   ['rien à conclure.`);\n      return 2;', 'rien à conclure.`);\n      return 1;', 'suite non mutée refusée : code 1 au lieu de 2'],
+
+  ["${enEchec.length ? `, en échec : ${enEchec.join(' | ')}` : ''}", "", 'suite non mutée refusée : les tests en échec ne sont pas nommés'],
+  ["[...base.tueurs, ...base.fichiersEnEchec].slice(0, 3)", "[...base.tueurs].slice(0, 3)", 'suite non mutée refusée : les fichiers de test en échec ne sont pas nommés'],
+  ["[...base.tueurs, ...base.fichiersEnEchec].slice(0, 3)", "[...base.tueurs, ...base.fichiersEnEchec].slice(0, 1)", 'suite non mutée refusée : un seul test en échec nommé'],
+  ["(n.length > 100 ? `${n.slice(0, 97)}...` : n)", "n", 'suite non mutée refusée : un nom très long n\'est pas coupé'],
 
   // --- les paquets
   ['k % partie.n === partie.i - 1', 'k % partie.n === partie.i', 'paquet : décalé d\'un mutant'],
@@ -178,7 +196,8 @@ const MUTANTS = [
   ['n.length > 70 ?', 'n.length > 69 ?', 'détail : un nom de 70 caractères est coupé'],
   ['n.length > 70 ?', 'n.length > 71 ?', 'détail : un nom de 71 caractères n\'est pas coupé'],
   ['`${n.slice(0, 67)}...`', '`${n.slice(0, 66)}...`', 'détail : un nom coupé perd un caractère de plus'],
-  ["join(' | ')", "join(' ')", 'détail : les noms sans séparateur'],
+  [": n)).join(' | ')", ": n)).join(' ')", 'détail : les noms sans séparateur'],
+  ["${enEchec.join(' | ')}", "${enEchec.join(' ')}", 'suite non mutée refusée : les tests en échec sans séparateur'],
   ["const fichiers = r.fichiersEnEchec.length ? ` ; ${r.fichiersEnEchec.length > 1 ? 'les fichiers' : 'le fichier'} ${r.fichiersEnEchec.join(', ')} ${r.fichiersEnEchec.length > 1 ? 'échouent' : 'échoue'} aussi` : '';", "const fichiers = '';", 'détail : le fichier entier qui échoue aussi n\'est pas dit'],
   ["r.fichiersEnEchec.length > 1 ? 'les fichiers' : 'le fichier'", "r.fichiersEnEchec.length > 0 ? 'les fichiers' : 'le fichier'", 'détail : « les fichiers » dès le premier'],
   ["r.fichiersEnEchec.length > 1 ? 'échouent' : 'échoue'", "r.fichiersEnEchec.length > 2 ? 'échouent' : 'échoue'", 'détail : « échouent » dès trois fichiers seulement'],
@@ -197,7 +216,7 @@ const MUTANTS = [
   ["else if (jugement.issue === 'delai') bilan.tuesParUnDelai += 1;", "else if (jugement.issue === 'delai') bilan.tuesParUnTest += 1;", 'compte : un délai compté comme un test'],
   ['bilan.plantages += 1;', 'bilan.survivants += 1;', 'compte : un plantage compté comme un survivant'],
   ['else bilan.survivants += 1;', 'else bilan.plantages += 1;', 'compte : un survivant compté comme un plantage'],
-  ['bilan.mutants.push({ libelle: m.libelle, ...jugement });', 'bilan.mutants.push({ libelle: m.libelle });', 'bilan : l\'issue de chaque mutant perdue'],
+  ['bilan.mutants.push({ libelle: m.libelle, ...jugement, dureeMs });', 'bilan.mutants.push({ libelle: m.libelle, dureeMs });', 'bilan : l\'issue de chaque mutant perdue'],
   ['const tues = bilan.tuesParUnTest + bilan.tuesParUnDelai;', 'const tues = bilan.tuesParUnTest;', 'bilan : les tués par un délai ne sont pas comptés tués'],
   ["sortie('');", '', 'bilan : la ligne vide avant le résumé manque'],
   ["${bilan.plantages > 1 ? 's' : ''}", "${bilan.plantages > 0 ? 's' : ''}", 'pluriel : « plantages » dès un'],
@@ -208,7 +227,8 @@ const MUTANTS = [
   ['return bilan.survivants || bilan.plantages ? 1 : 0;', 'return bilan.survivants ? 1 : 0;', 'code de sortie : un plantage seul ne fait pas échouer le lot'],
   ['return bilan.survivants || bilan.plantages ? 1 : 0;', 'return bilan.plantages ? 1 : 0;', 'code de sortie : un survivant seul ne fait pas échouer le lot'],
   ['return bilan.survivants || bilan.plantages ? 1 : 0;', 'return bilan.survivants || bilan.plantages ? 0 : 1;', 'code de sortie : inversé'],
-  ['    fs.rmSync(copie, { recursive: true, force: true });\n  }\n}', '  }\n}', 'fin : la copie n\'est pas retirée'],
+  ['    fs.rmSync(copie, { recursive: true, force: true });\n    fs.rmSync(temporaire, { recursive: true, force: true });\n    // Un essai', '    fs.rmSync(temporaire, { recursive: true, force: true });\n    // Un essai', 'fin : la copie n\'est pas retirée'],
+  ['    fs.rmSync(copie, { recursive: true, force: true });\n    fs.rmSync(temporaire, { recursive: true, force: true });\n    // Un essai', '    fs.rmSync(copie, { recursive: true, force: true });\n    // Un essai', 'fin : le dossier temporaire des suites n\'est pas retiré'],
 
   // --- les arguments
   ['if (i < 1 || i > n) throw', 'if (i < 0 || i > n) throw', 'arguments : --part=0/n accepté'],
@@ -227,8 +247,8 @@ const MUTANTS = [
   ["const verifierSeulement = valider ?? argv.includes('--valider');", "const verifierSeulement = valider ?? argv.includes('--valid');", 'valider : --valid pris pour --valider'],
   ['argv = process.argv.slice(2),', 'argv = [],', "valider : la ligne de commande du processus n'est pas lue par défaut"],
   ['argv = process.argv.slice(2),', 'argv = process.argv.slice(3),', 'valider : le premier argument de la ligne de commande est sauté'],
-  ['  if (!verifierSeulement) {', '  if (true) {', "valider : les copies des autres lots sont retirées aussi"],
-  ['  if (!verifierSeulement) {', '  if (verifierSeulement) {', "valider : seule la vérification retire les copies des autres lots"],
+  ['  if (!verifierSeulement) {\n    const abandonnees', '  if (true) {\n    const abandonnees', "valider : les copies des autres lots sont retirées aussi"],
+  ['  if (!verifierSeulement) {\n    const abandonnees', '  if (verifierSeulement) {\n    const abandonnees', "valider : seule la vérification retire les copies des autres lots"],
   ['    if (verifierSeulement) {', '    if (false) {', "valider : la suite est lancée quand même"],
   ['aucune suite lancée.`);\n      return 0;', 'aucune suite lancée.`);\n      return 1;', "valider : code 1 quand tout est en ordre"],
   ['aucune suite lancée.`);\n      return 0;', 'aucune suite lancée.`);', "valider : la suite est lancée après le message"],
@@ -256,6 +276,96 @@ const MUTANTS = [
   ["if (a === '--valider') { valider = true; continue; }", "if (a === '--valider') { valider = false; continue; }", '--valider : jamais lu'],
   ["if (a === '--valider') { valider = true; continue; }", "if (a.startsWith('--valid')) { valider = true; continue; }", '--valider : --valid… pris pour --valider'],
   ['return { partie, valider, restants };', 'return { partie, restants };', '--valider : non rendu par lireArguments'],
+
+  // --- --part : un lot qui ne la transmet pas est refusé
+  ["if (demandee && (!partie || partie.i !== demandee.i || partie.n !== demandee.n)) {", 'if (false) {', '--part : un lot qui ne la transmet pas n\'est pas refusé'],
+  ["if (demandee && (!partie || partie.i !== demandee.i || partie.n !== demandee.n)) {", 'if (demandee && (partie.i !== demandee.i || partie.n !== demandee.n)) {', '--part : une `partie` absente n\'est pas vue (le moteur plante au lieu de refuser)'],
+  ["if (demandee && (!partie || partie.i !== demandee.i || partie.n !== demandee.n)) {", 'if (demandee && (!partie || partie.n !== demandee.n)) {', '--part : un autre paquet du même partage passe'],
+  ["if (demandee && (!partie || partie.i !== demandee.i || partie.n !== demandee.n)) {", 'if (demandee && (!partie || partie.i !== demandee.i)) {', '--part : un autre nombre de paquets passe'],
+  ["if (demandee && (!partie || partie.i !== demandee.i || partie.n !== demandee.n)) {", 'if (demandee && !partie) {', '--part : seule une `partie` absente est refusée'],
+  ["if (demandee && (!partie || partie.i !== demandee.i || partie.n !== demandee.n)) {", 'if (!partie || partie.i !== demandee?.i || partie.n !== demandee?.n) {', '--part : refusé aussi quand la ligne n\'en demande aucune'],
+  ["demandee = lireArguments(argv).partie;", "demandee = null;", '--part : la ligne de commande n\'est pas lue'],
+  ["erreur(e.message);\n    return 2;", "erreur(e.message);\n    return 1;", '--part : une partie hors de 1..n donne le code 1 au lieu de 2'],
+  ["erreur(e.message);\n    return 2;", "return 2;", '--part : une partie hors de 1..n est refusée sans le dire'],
+  ["erreur(e.message);\n    return 2;", "erreur(e.message);", '--part : une partie hors de 1..n ne refuse rien'],
+  ["`La ligne de commande demande --part=${demandee.i}/${demandee.n}, mais", "`La ligne de commande demande --part=${demandee.n}/${demandee.i}, mais", '--part : le refus nomme les deux nombres intervertis'],
+  ["${partie ? `reçue : ${partie.i}/${partie.n}` : 'absente'}", "${partie ? 'absente' : `reçue : ${partie?.i}/${partie?.n}`}", '--part : le refus dit « absente » d\'une partie reçue et inversement'],
+  ["chaque paquet rejouerait le lot entier et les comptes des paquets s'additionneraient faux. Le lot doit lire", "Le lot doit lire", '--part : le refus ne dit pas pourquoi'],
+  ["s'additionneraient faux. Le lot doit lire `const { partie } = lireArguments(process.argv.slice(2))` et passer `partie` à rejouerMutants.\");\n    return 2;", "s'additionneraient faux. Le lot doit lire `const { partie } = lireArguments(process.argv.slice(2))` et passer `partie` à rejouerMutants.\");\n    return 1;", '--part : un lot qui ne la transmet pas donne le code 1 au lieu de 2'],
+
+  // --- la durée de chaque mutant
+  ['      const debut = horloge();', '      const debut = 0;', 'durée : comptée depuis zéro, pas depuis le début du mutant'],
+  ['      const dureeMs = horloge() - debut;', '      const dureeMs = horloge();', 'durée : l\'heure de fin au lieu de la durée'],
+  ['      const dureeMs = horloge() - debut;', '      const dureeMs = debut - horloge();', 'durée : négative (début et fin intervertis)'],
+  ['[${Math.round(dureeMs / 100) / 10} s]', '[${Math.round(dureeMs / 1000)} s]', 'durée dite : arrondie à la seconde'],
+  ['[${Math.round(dureeMs / 100) / 10} s]', '[${dureeMs} s]', 'durée dite : des millisecondes annoncées en secondes'],
+  ['horloge = Date.now,', 'horloge = () => 0,', 'durée : l\'horloge par défaut ne marche pas'],
+  ['horloge = Date.now,', 'horloge = () => 1000,', 'durée : l\'horloge par défaut est arrêtée'],
+
+  // --- les dossiers où se balaie
+  ["{ tmpdir = os.tmpdir(), fixe = process.env.GWAUDIT_MUTANTS_RACINE_FIXE || '/tmp' } = {}", "{ tmpdir = '/tmp', fixe = process.env.GWAUDIT_MUTANTS_RACINE_FIXE || '/tmp' } = {}", 'racines : TMPDIR ignoré par défaut'],
+  ["{ tmpdir = os.tmpdir(), fixe = process.env.GWAUDIT_MUTANTS_RACINE_FIXE || '/tmp' } = {}", "{ tmpdir = os.tmpdir(), fixe = process.env.GWAUDIT_MUTANTS_RACINE_FIXE || '/var/tmp' } = {}", 'racines : /var/tmp au lieu de /tmp'],
+  ["fixe = process.env.GWAUDIT_MUTANTS_RACINE_FIXE || '/tmp' } = {}", "fixe = '/tmp' } = {}", 'racines : la variable de la seconde racine ignorée (le moteur muté balaierait le vrai /tmp)'],
+  ["fixe = process.env.GWAUDIT_MUTANTS_RACINE_FIXE || '/tmp' } = {}", "fixe = process.env.GWAUDIT_MUTANTS_RACINE_FIXE ?? '/tmp' } = {}", 'racines : variable vide prise pour une racine'],
+  ['for (const racine of [tmpdir, fixe]) {', 'for (const racine of [tmpdir]) {', 'racines : /tmp jamais balayé'],
+  ['for (const racine of [tmpdir, fixe]) {', 'for (const racine of [fixe, tmpdir]) {', 'racines : /tmp avant TMPDIR'],
+  ['    if (vues.has(reelle)) continue;\n', '', 'racines : le même dossier est balayé deux fois'],
+  ['    vues.add(reelle);\n', '', 'racines : jamais dédoublonné'],
+  ['try { reelle = fs.realpathSync(racine); } catch { continue; }', 'try { reelle = fs.realpathSync(racine); } catch { reelle = racine; }', 'racines : un dossier absent est gardé'],
+  ['try { reelle = fs.realpathSync(racine); } catch { continue; }', 'reelle = racine;', 'racines : un lien vers le même dossier est balayé comme un autre'],
+  ['    racines.push(racine);', '    racines.push(reelle);', 'racines : le chemin résolu est rendu au lieu de celui qu\'on a donné'],
+
+  // --- la précondition de traversée (o+x)
+  ['if (uid !== 0 || !exigerChromium) return null;', 'if (!exigerChromium) return null;', 'o+x : exigé aussi hors root'],
+  ['if (uid !== 0 || !exigerChromium) return null;', 'if (uid !== 0) return null;', 'o+x : exigé sans Chromium'],
+  ['if (uid !== 0 || !exigerChromium) return null;', 'if (uid === 0 || !exigerChromium) return null;', 'o+x : exigé hors root seulement'],
+  ['if ((mode & 0o001) === 0) {', 'if ((mode & 0o004) === 0) {', 'o+x : le bit de lecture des autres pris pour celui de traversée'],
+  ['if ((mode & 0o001) === 0) {', 'if ((mode & 0o100) === 0) {', 'o+x : le bit de traversée du propriétaire'],
+  ['if ((mode & 0o001) === 0) {', 'if ((mode & 0o111) === 0) {', 'o+x : la traversée de n\'importe qui suffit'],
+  ['if ((mode & 0o001) === 0) {', 'if ((mode & 0o001) !== 0) {', 'o+x : inversé'],
+  ["if (path.dirname(dossier) === dossier) return null;", "if (dossier === '/tmp') return null;", 'o+x : la remontée s\'arrête à /tmp'],
+  ["for (let dossier = path.resolve(chemin); ; dossier = path.dirname(dossier)) {", "for (let dossier = chemin; ; dossier = path.dirname(dossier)) {", 'o+x : le chemin n\'est pas résolu avant d\'être remonté'],
+  ["illisible (${e.code ?? e.message})", "illisible (${e.message})", 'o+x : un dossier illisible ne dit pas son code'],
+  ["mode ${(mode & 0o7777).toString(8)}", "mode ${mode.toString(8)}", 'o+x : le mode dit avec le type de fichier'],
+  ["(TMPDIR=/tmp)", "(TMPDIR=/var)", 'o+x : la consigne donne un autre dossier'],
+  ['const refus = preconditionTraversable(dossierTemporaire, { uid, exigerChromium });', 'const refus = preconditionTraversable(dossierTemporaire, { uid });', 'o+x : exigé même d\'un lot sans Chromium'],
+  ['const refus = preconditionTraversable(dossierTemporaire, { uid, exigerChromium });', 'const refus = preconditionTraversable(dossierTemporaire, { exigerChromium });', 'o+x : l\'utilisateur du lot est ignoré'],
+  ["    try { dossierTemporaire = fs.realpathSync(dossierTemporaire); } catch { /* le dossier n'existe pas : la copie ne pourra pas s'y faire, et le dira */ }\n", '', 'o+x : le chemin du dossier temporaire n\'est pas résolu (un lien vers un dossier fermé passe)'],
+  ['if (refus) {\n      erreur(refus);\n      return 2;', 'if (refus) {\n      erreur(refus);\n      return 1;', 'o+x : refusé avec le code 1 au lieu de 2'],
+  ['if (refus) {\n      erreur(refus);\n      return 2;', 'if (refus) {\n      return 2;', 'o+x : refusé sans le dire'],
+  ['if (refus) {\n      erreur(refus);\n      return 2;', 'if (refus) {\n      erreur(refus);\n      ', 'o+x : le lot continue malgré le refus'],
+  ['  if (!verifierSeulement) {\n    let dossierTemporaire', '  if (true) {\n    let dossierTemporaire', 'o+x : exigée aussi de la vérification seule'],
+
+  // --- le dossier temporaire des suites
+  ['const env = { ...process.env, TMPDIR: temporaire };', 'const env = { ...process.env };', 'suites : le dossier temporaire du lot, pas celui de la copie'],
+  ['const temporaire = `${copie}-tmp`;', "const temporaire = path.join(copie, 'tmp');", 'suites : dossier temporaire dans la copie (un essai qui la liste le voit)'],
+  ['    fs.mkdirSync(temporaire);\n', '', 'suites : dossier temporaire jamais créé'],
+  ['fs.chmodSync(temporaire, 0o1777);', '', 'suites : dossier temporaire fermé aux autres utilisateurs (0700)'],
+  ['fs.chmodSync(temporaire, 0o1777);', 'fs.chmodSync(temporaire, 0o777);', 'suites : dossier temporaire sans le bit collant'],
+
+  // --- un lancement qui n'a rien jugé : zéro test nommé, ou un lot qui a perdu sa copie, un de ses fichiers de test, son dossier temporaire
+  ["bilan.lances > 0 && [...sortie.matchAll(/^\\s*ok \\d+ - (.+)$/gm)].some((m) => !estFichier(m[1]))", "bilan.lances > 0", 'code 0 : un fichier sans test passe pour une suite verte'],
+  ["bilan.lances > 0 && [...sortie.matchAll(", "[...sortie.matchAll(", 'code 0 : sans résumé (aucun compte), la suite passe'],
+  ["Number.isNaN(bilan.lances) ? 'résumé absent' :", "false ? 'résumé absent' :", 'code 0 : le résumé absent est dit « 0 test lancé »'],
+  ["bilan.lances === 0 ? '0 test lancé' :", "false ? '0 test lancé' :", 'code 0 : zéro test lancé est dit « seuls des fichiers sans test »'],
+  ["if (!fs.existsSync(copie)) return { fatale: true,", "if (false) return { fatale: true,", 'perte : la copie retirée n\'est pas vue'],
+  ["return { fatale: true, raison: \"la copie du lot a disparu pendant l'essai\" }", "return { fatale: false, raison: \"la copie du lot a disparu pendant l'essai\" }", 'perte : la copie retirée n\'arrête pas le lot'],
+  ["if (manque) return { fatale: true,", "if (false) return { fatale: true,", 'perte : un fichier de test retiré n\'est pas vu'],
+  ["return { fatale: true, raison: `${manque} a disparu", "return { fatale: false, raison: `${manque} a disparu", 'perte : un fichier de test retiré n\'arrête pas le lot'],
+  ["if (!fs.existsSync(temporaire)) {\n      poserTemporaire();", "if (false) {\n      poserTemporaire();", 'perte : le dossier temporaire retiré n\'est pas vu'],
+  ["if (!fs.existsSync(temporaire)) {\n      poserTemporaire();\n      return", "if (!fs.existsSync(temporaire)) {\n      return", 'perte : le dossier temporaire retiré n\'est pas reposé'],
+  ["poserTemporaire();\n      return { fatale: false,", "poserTemporaire();\n      return { fatale: true,", 'perte : le dossier temporaire retiré arrête le lot'],
+  ["bilan = { ...bilan, verdict: 'plantage', raison: `${perte.raison} : ce qui a échoué ne juge pas le mutant` };", "bilan = { ...bilan, raison: `${perte.raison} : ce qui a échoué ne juge pas le mutant` };", 'perte : le verdict reste celui de la suite (un mutant « tué » par le vide)'],
+  ["bilan = { ...bilan, verdict: 'plantage', raison: `${perte.raison} : ce qui a échoué ne juge pas le mutant` };", "bilan = { ...bilan, verdict: 'plantage', raison: perte.raison };", 'perte : le plantage ne dit pas que l\'échec ne juge pas le mutant'],
+  ["if (perte.fatale) lotPerdu = perte.raison;", "", 'perte : le lot ne sait jamais qu\'il a perdu sa copie'],
+  ["if (lotPerdu) { bilan.nonJuges += 1; continue; }", "if (false) { bilan.nonJuges += 1; continue; }", 'lot perdu : les mutants suivants sont quand même lancés'],
+  ["if (lotPerdu) { bilan.nonJuges += 1; continue; }", "if (lotPerdu) { continue; }", 'lot perdu : les mutants suivants ne sont pas comptés non jugés'],
+  ["if (!lotPerdu) fs.writeFileSync(chemin, original);", "fs.writeFileSync(chemin, original);", 'lot perdu : le fichier d\'origine est réécrit dans une copie qui n\'existe plus'],
+  ["${bilan.nonJuges ? ` ; ${bilan.nonJuges} non jugé", "${true ? ` ; ${bilan.nonJuges} non jugé", 'non jugés : dits même quand il n\'y en a aucun'],
+  ["non jugé${bilan.nonJuges > 1 ? 's' : ''}`", "non jugé${bilan.nonJuges > 0 ? 's' : ''}`", 'non jugés : le pluriel dès un seul'],
+  ["non jugé${bilan.nonJuges > 1 ? 's' : ''}`", "non jugé`", 'non jugés : jamais au pluriel'],
+  ["if (lotPerdu) erreur(", "if (false) erreur(", 'lot perdu : le lot ne le dit pas'],
+  ["${bilan.nonJuges ? ` : ${bilan.nonJuges} mutant(s) n'ont pas été rejoués` : ''}", "${true ? ` : ${bilan.nonJuges} mutant(s) n'ont pas été rejoués` : ''}", 'lot perdu : dit des mutants non rejoués même quand il n\'y en a aucun'],
 
   // --- kill : rien ne retient le lot
   ['export const RACINE = path.resolve(', "process.on('SIGTERM', () => {});\nexport const RACINE = path.resolve(", 'un gestionnaire de SIGTERM qui ne fait rien : kill n\'arrête plus le lot'],

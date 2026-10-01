@@ -18,6 +18,10 @@
  *    fichier de test meurt sans qu'un test nommé échoue : mémoire, module qui
  *    ne se charge pas, signal, autre code de sortie) ne tue rien : il est dit
  *    à part et fait échouer le lot.
+ *  - un lancement qui n'a jugé rien (zéro test lancé, ou un essai qui a retiré
+ *    la copie du lot, un de ses fichiers de test ou son dossier temporaire :
+ *    tout ce qui échoue ensuite échoue pour cela, pas pour le mutant) est un
+ *    plantage de l'outil, dit à part et qui fait échouer le lot.
  * Trois comptes sont affichés : tués par un test, tués par un délai,
  * plantages. Code 1 si un mutant survit ou plante, 0 sinon.
  *
@@ -66,7 +70,8 @@ const compter = (sortie, nom) => Number(new RegExp(`^# ${nom} (\\d+)`, 'm').exec
  *    test entiers qui échouent en plus (un test qui a fait mourir son
  *    processus, par exemple) : ils ne comptent pas comme un test nommé.
  *  - 'plantage' : tout autre échec (lancement impossible, code autre que 0 ou 1,
- *    signal, résumé absent, aucun test nommé en échec), avec sa `raison`.
+ *    signal, résumé absent, aucun test nommé en échec, code 0 sans aucun test
+ *    nommé lancé), avec sa `raison`.
  * @param {{ status: ?number, signal: ?string, error?: ?{ code?: string, message?: string }, stdout?: ?string }} r
  * @param {string[]} fichiers les fichiers de test passés au lanceur (leur nom entier n'est pas un test)
  */
@@ -81,7 +86,12 @@ export function classerLancement(r, fichiers) {
   const plantage = (raison) => ({ ...bilan, verdict: 'plantage', raison });
   if (r.error?.code === 'ETIMEDOUT') return { ...bilan, verdict: 'delai' };
   if (r.error) return plantage(`le lancement a échoué : ${r.error.code ?? r.error.message}`);
-  if (r.status === 0) return { ...bilan, verdict: 'passe' };
+  // Un code 0 sans résumé, sans test ou avec pour seuls « tests » des fichiers qui n'en déclarent aucun (Node en compte un par fichier vide) ne dit rien de la suite :
+  // aucun essai n'a jugé le mutant, il ne « survit » pas.
+  if (r.status === 0) {
+    if (bilan.lances > 0 && [...sortie.matchAll(/^\s*ok \d+ - (.+)$/gm)].some((m) => !estFichier(m[1]))) return { ...bilan, verdict: 'passe' };
+    return plantage(`aucun essai n'a tourné (${Number.isNaN(bilan.lances) ? 'résumé absent' : bilan.lances === 0 ? '0 test lancé' : 'aucun test nommé, seuls des fichiers sans test'}, code 0)`);
+  }
   if (r.status !== 1) return plantage(r.signal ? `tué par ${r.signal}` : `sorti avec le code ${r.status}`);
   if (Number.isNaN(bilan.echecs)) return plantage("le lanceur n'a pas imprimé son résumé");
   if (!bilan.tueurs.length) {
@@ -132,21 +142,65 @@ const existe = (pid) => {
  * plus. Une copie dont le lot existe encore (un autre lot en parallèle) n'est
  * pas touchée. Rend les copies retirées.
  */
-export function balayerCopiesAbandonnees(tmp = os.tmpdir()) {
+export function balayerCopiesAbandonnees(tmp = racinesTemporaires()) {
   const retirees = [];
-  let noms;
-  try { noms = fs.readdirSync(tmp); } catch { return retirees; }
-  for (const nom of noms) {
-    const m = /^gwaudit-mutants-(\d+)-/.exec(nom);
-    if (!m || existe(Number(m[1]))) continue;
-    try {
-      const dossier = path.join(fs.realpathSync(tmp), nom);
-      tuerProcessusDe(dossier);
-      fs.rmSync(dossier, { recursive: true, force: true });
-      retirees.push(dossier);
-    } catch { /* une copie qui n'est pas à nous (autre utilisateur) : on n'y touche pas */ }
+  for (const racine of Array.isArray(tmp) ? tmp : [tmp]) {
+    let noms;
+    try { noms = fs.readdirSync(racine); } catch { continue; }
+    for (const nom of noms) {
+      const m = /^gwaudit-mutants-(\d+)-/.exec(nom);
+      if (!m || existe(Number(m[1]))) continue;
+      try {
+        const dossier = path.join(fs.realpathSync(racine), nom);
+        tuerProcessusDe(dossier);
+        fs.rmSync(dossier, { recursive: true, force: true });
+        retirees.push(dossier);
+      } catch { /* une copie qui n'est pas à nous (autre utilisateur) : on n'y touche pas */ }
+    }
   }
   return retirees;
+}
+
+/**
+ * Les dossiers où un lot a pu laisser sa copie : celui que `os.tmpdir()` désigne (TMPDIR) et `/tmp`. Un lot lancé avec
+ * un autre TMPDIR que le lot tué avant lui ne verrait pas, sinon, la copie que celui-ci a laissée ; le même dossier
+ * (TMPDIR=/tmp, ou un lien vers lui) n'est balayé qu'une fois.
+ * `GWAUDIT_MUTANTS_RACINE_FIXE` remplace `/tmp` : les essais du moteur le posent sur un dossier à eux, parce que le moteur
+ * qu'ils éprouvent est, tour à tour, un moteur muté qui balaie ce qu'il ne devrait pas — et le vrai `/tmp` porte la copie
+ * de chaque lot qui tourne en parallèle. Observé : un rejeu du lot du moteur a compté 82 mutants sur 84 « tués par un test »,
+ * chacun en 0,5 s au plus, sans que les essais aient eu de terrain ; la cause exacte n'a pas été établie, la piste est celle-ci.
+ */
+export function racinesTemporaires({ tmpdir = os.tmpdir(), fixe = process.env.GWAUDIT_MUTANTS_RACINE_FIXE || '/tmp' } = {}) {
+  const vues = new Set();
+  const racines = [];
+  for (const racine of [tmpdir, fixe]) {
+    let reelle;
+    try { reelle = fs.realpathSync(racine); } catch { continue; }
+    if (vues.has(reelle)) continue;
+    vues.add(reelle);
+    racines.push(racine);
+  }
+  return racines;
+}
+
+/**
+ * Un lot qui lance Chromium en tant que root le lance sous un autre utilisateur (`tests/bac-a-sable-chromium.test.mjs` :
+ * uid 65534) : cet utilisateur doit pouvoir traverser chaque dossier qui mène de `/` à la copie. Un dossier qui ne
+ * l'est pas (`o+x` absent : un TMPDIR sous un dossier personnel en 0700) fait échouer ces essais pour une autre raison
+ * que le mutant, et rien ne le dit. Rend le refus (un message qui nomme le premier dossier et dit quoi faire), ou null
+ * quand tout est traversable ou que le lot n'est pas concerné (pas root, pas de Chromium).
+ */
+export function preconditionTraversable(chemin, { uid = process.getuid?.(), exigerChromium = true, statut = (c) => fs.statSync(c) } = {}) {
+  if (uid !== 0 || !exigerChromium) return null;
+  for (let dossier = path.resolve(chemin); ; dossier = path.dirname(dossier)) {
+    let mode;
+    try { mode = statut(dossier).mode; } catch (e) { return `${dossier} : illisible (${e.code ?? e.message}), impossible de vérifier que les autres utilisateurs peuvent le traverser`; }
+    if ((mode & 0o001) === 0) {
+      return `${dossier} n'est pas traversable par les autres utilisateurs (o+x absent, mode ${(mode & 0o7777).toString(8)}) : sous root, les essais qui lancent Chromium sous un autre utilisateur échoueraient pour une autre raison que le mutant. `
+        + 'Lancer le lot avec un TMPDIR dont tout le chemin est traversable (TMPDIR=/tmp) ou donner o+x à ce dossier.';
+    }
+    if (path.dirname(dossier) === dossier) return null;
+  }
 }
 
 /**
@@ -190,22 +244,39 @@ export function dansLigne(fichier, motif, de, par, libelle, sans = null, racine 
  *   racine?: string,
  *   sortie?: (ligne: string) => void,
  *   erreur?: (ligne: string) => void,
- *   rapporter?: ?((bilan: { retenus: number, tuesParUnTest: number, tuesParUnDelai: number, plantages: number, survivants: number, mutants: Array<{ libelle: string, issue: 'test' | 'delai' | 'plantage' | 'survit', detail: ?string }> }) => void),
+ *   rapporter?: ?((bilan: { retenus: number, tuesParUnTest: number, tuesParUnDelai: number, plantages: number, survivants: number, nonJuges: number, mutants: Array<{ libelle: string, issue: 'test' | 'delai' | 'plantage' | 'survit', detail: ?string, dureeMs: number }> }) => void),
+ *   horloge?: () => number,
  * }} options `groupes` : suites lancées dans l'ordre, la première qui échoue tue le mutant.
  *   `delaiMs` : le délai d'une suite (10 minutes par défaut) ; un lot dont les mutants peuvent boucler sans fin (une file sans garde contre les cycles) le réduit à quelques fois la durée de sa suite, pour
  *   ne pas attendre dix minutes par mutant.
  *   `partie` : ne rejouer que le i-ième des n paquets (1 à n), pour lancer n processus à la fois ; chacun a sa copie, et
  *   vérifie quand même tous les mutants avant de commencer.
  *   `valider` : ne faire que la vérification d'avance et le dire (aucune suite lancée, Chromium non exigé, rien retiré chez les autres lots) ; `--valider` de `argv` par défaut.
- *   `argv` : la ligne de commande du lot (`process.argv.slice(2)` par défaut), où le moteur lit `--valider`.
+ *   `argv` : la ligne de commande du lot (`process.argv.slice(2)` par défaut), où le moteur lit `--valider` et `--part` : une ligne qui demande `--part=i/n` sans que `partie` la transmette (ou en transmettant
+ *   une autre) est refusée, code 2, avant tout : un lot qui la jetterait ferait rejouer à chaque paquet le lot entier, n fois le travail pour des comptes qui s'additionnent faux.
+ *   `horloge` : les millisecondes, pour la durée de chaque mutant (`Date.now` par défaut) ; lue deux fois par mutant, au début et à la fin de son jugement.
+ *   `uid` : l'utilisateur qui lance le lot (`process.getuid()` par défaut) ; sous root, un lot qui exige Chromium refuse un dossier temporaire que les autres utilisateurs ne peuvent pas traverser.
  *   `racine` : le projet à copier (le dépôt par défaut) ; `sortie` et `erreur` : où vont les lignes (la console par défaut) ;
  *   `rapporter` : reçoit le bilan chiffré à la fin (les essais du moteur lui-même le lisent).
- * @returns {number} le code de sortie : 0 tous tués (par un test ou un délai), 1 un mutant survit ou plante, 2 le lot n'a pas pu commencer
+ * @returns {number} le code de sortie : 0 tous tués (par un test ou un délai), 1 un mutant survit ou plante (un lot qui perd sa copie compte son mutant plantage et dit les suivants non jugés), 2 le lot n'a pas pu commencer
  */
 export function rejouerMutants({
   mutants, groupes, exigerChromium = true, partie = null, valider, argv = process.argv.slice(2), dossiers = DOSSIERS_COPIES, delaiMs = DELAI_MS,
-  racine = RACINE, sortie = console.log, erreur = console.error, rapporter = null,
+  racine = RACINE, sortie = console.log, erreur = console.error, rapporter = null, horloge = Date.now, uid = process.getuid?.(),
 }) {
+  // Avant tout, même pour la vérification seule : c'est elle que `tests/lots-de-mutants.test.mjs` lance sur chaque lot avec un `--part`.
+  let demandee;
+  try {
+    demandee = lireArguments(argv).partie;
+  } catch (e) {
+    erreur(e.message);
+    return 2;
+  }
+  if (demandee && (!partie || partie.i !== demandee.i || partie.n !== demandee.n)) {
+    erreur(`La ligne de commande demande --part=${demandee.i}/${demandee.n}, mais le lot ne l'a pas transmise au moteur (\`partie\` ${partie ? `reçue : ${partie.i}/${partie.n}` : 'absente'}) : `
+      + "chaque paquet rejouerait le lot entier et les comptes des paquets s'additionneraient faux. Le lot doit lire `const { partie } = lireArguments(process.argv.slice(2))` et passer `partie` à rejouerMutants.");
+    return 2;
+  }
   const verifierSeulement = valider ?? argv.includes('--valider');
   if (exigerChromium && !verifierSeulement && !process.env.GWAUDIT_CHROMIUM_PATH) {
     erreur('GWAUDIT_CHROMIUM_PATH est requis : le différentiel Chromium fait partie de la preuve, un test sauté ne tuerait rien.');
@@ -214,6 +285,16 @@ export function rejouerMutants({
   if (!mutants.length) {
     erreur('Aucun mutant retenu : rien à rejouer.');
     return 2;
+  }
+
+  if (!verifierSeulement) {
+    let dossierTemporaire = os.tmpdir();
+    try { dossierTemporaire = fs.realpathSync(dossierTemporaire); } catch { /* le dossier n'existe pas : la copie ne pourra pas s'y faire, et le dira */ }
+    const refus = preconditionTraversable(dossierTemporaire, { uid, exigerChromium });
+    if (refus) {
+      erreur(refus);
+      return 2;
+    }
   }
 
   // Un lot tué avant celui-ci (kill, coupure) a pu laisser sa copie et des processus : ils partent d'abord (la vérification seule n'y touche pas : elle ne fait que lire). Le lot lui-même ne pose aucun gestionnaire de signal : tout son travail est synchrone, un gestionnaire ne s'exécuterait qu'à la fin et `kill` n'arrêterait plus rien.
@@ -227,18 +308,51 @@ export function rejouerMutants({
   // mkdtemp crée un dossier 0700 : un test qui lance le code sous un autre utilisateur (bac à sable de Chromium sous root) doit pouvoir le lire. Ce n'est qu'une copie de sources publiques.
   fs.chmodSync(copie, 0o755);
 
+  // Le dossier temporaire des suites est celui de la copie : un essai tué par le délai (ou par le plantage d'un autre) ne peut pas y nettoyer
+  // ce qu'il a créé (`gwaudit-enfant-…`, `gwaudit-surface-…`), et le lot suivant ne le trouverait pas plus qu'il ne sait à qui il est. Il part avec la copie,
+  // et se balaie avec elle : son nom porte le numéro du lot. À côté d'elle et non dedans : un essai qui liste la copie n'y voit que ce que `dossiers` demande.
+  const temporaire = `${copie}-tmp`;
   // Le lanceur d'un essai n'est pas celui d'une suite qui s'exécute déjà sous `node --test` : la variable qui le dit fait croire à un sous-processus.
-  const env = { ...process.env };
+  const env = { ...process.env, TMPDIR: temporaire };
   delete env.NODE_TEST_CONTEXT;
+  // Ouvert à tous comme /tmp : un essai qui tourne sous un autre utilisateur y écrit.
+  const poserTemporaire = () => {
+    fs.mkdirSync(temporaire);
+    fs.chmodSync(temporaire, 0o1777);
+  };
+  const fichiersDeTest = groupes.flatMap((g) => g.fichiers);
+  /**
+   * Ce qui manque au lot après un essai, dit (ou null). Un essai qui retire la copie, un de ses fichiers de test ou son dossier temporaire
+   * (un mutant qui balaie ce qu'il ne devrait pas) fait échouer tout ce qui passe après lui : ces échecs ne jugent pas le mutant, ils le
+   * « tueraient » tous, le bon comme l'équivalent. Le dossier temporaire se repose (un essai en a besoin, et rien d'autre n'a changé) ;
+   * la copie ou un fichier de test, non : le lot s'arrête là.
+   */
+  const perteDuLot = () => {
+    if (!fs.existsSync(copie)) return { fatale: true, raison: "la copie du lot a disparu pendant l'essai" };
+    const manque = fichiersDeTest.find((f) => !fs.existsSync(path.join(copie, f)));
+    if (manque) return { fatale: true, raison: `${manque} a disparu de la copie pendant l'essai` };
+    if (!fs.existsSync(temporaire)) {
+      poserTemporaire();
+      return { fatale: false, raison: "le dossier temporaire du lot a disparu pendant l'essai" };
+    }
+    return null;
+  };
+  let lotPerdu = null;
   const lancer = (fichiers) => {
     const r = spawnSync('node', ['--test', ...fichiers], { cwd: copie, encoding: 'utf8', env, timeout: delaiMs, maxBuffer: 1 << 26 });
-    const bilan = classerLancement(r, fichiers);
+    let bilan = classerLancement(r, fichiers);
+    const perte = perteDuLot();
+    if (perte) {
+      if (perte.fatale) lotPerdu = perte.raison;
+      bilan = { ...bilan, verdict: 'plantage', raison: `${perte.raison} : ce qui a échoué ne juge pas le mutant` };
+    }
     // Un délai ou un plantage laisse des processus derrière lui ; un lancement qui a fini normalement, non.
-    if (bilan.verdict === 'delai' || bilan.verdict === 'plantage') tuerProcessusDe(copie);
+    if (bilan.verdict === 'delai' || bilan.verdict === 'plantage') { tuerProcessusDe(copie); tuerProcessusDe(temporaire); }
     return bilan;
   };
 
   try {
+    poserTemporaire();
     for (const dossier of dossiers) if (fs.existsSync(path.join(racine, dossier))) fs.cpSync(path.join(racine, dossier), path.join(copie, dossier), { recursive: true });
     if (fs.existsSync(path.join(racine, 'package.json'))) fs.copyFileSync(path.join(racine, 'package.json'), path.join(copie, 'package.json'));
     if (fs.existsSync(path.join(racine, 'node_modules'))) fs.symlinkSync(path.join(racine, 'node_modules'), path.join(copie, 'node_modules'));
@@ -277,8 +391,9 @@ export function rejouerMutants({
     }
 
     const base = lancer(groupes.flatMap((g) => g.fichiers));
-    if (base.verdict !== 'passe' || base.saute !== 0 || !(base.lances > 0)) {
-      erreur(`La suite ciblée n'est pas verte et complète sur le code non muté (verdict : ${base.verdict}${base.raison ? `, ${base.raison}` : ''}, sautés : ${base.saute}, lancés : ${base.lances}) : rien à conclure.`);
+    if (base.verdict !== 'passe' || base.saute !== 0) {
+      const enEchec = [...base.tueurs, ...base.fichiersEnEchec].slice(0, 3).map((n) => (n.length > 100 ? `${n.slice(0, 97)}...` : n));
+      erreur(`La suite ciblée n'est pas verte et complète sur le code non muté (verdict : ${base.verdict}${base.raison ? `, ${base.raison}` : ''}${enEchec.length ? `, en échec : ${enEchec.join(' | ')}` : ''}, sautés : ${base.saute}, lancés : ${base.lances}) : rien à conclure.`);
       return 2;
     }
     sortie(`Suite non mutée : ${base.lances} tests, 0 sauté, ${mutants.length} mutants à rejouer.\n`);
@@ -304,31 +419,43 @@ export function rejouerMutants({
     };
     const ETIQUETTE = { test: 'TUÉ      ', delai: 'TUÉ délai', plantage: 'PLANTAGE ', survit: 'SURVIT   ' };
 
-    const bilan = { retenus: retenus.length, tuesParUnTest: 0, tuesParUnDelai: 0, plantages: 0, survivants: 0, mutants: [] };
+    const bilan = { retenus: retenus.length, tuesParUnTest: 0, tuesParUnDelai: 0, plantages: 0, survivants: 0, nonJuges: 0, mutants: [] };
     for (const m of retenus) {
+      // Sans copie, plus rien ne se juge : ce qui reste est dit non jugé, jamais tué ni survivant.
+      if (lotPerdu) { bilan.nonJuges += 1; continue; }
       const chemin = path.join(copie, m.fichier);
       const original = fs.readFileSync(chemin, 'utf8');
       fs.writeFileSync(chemin, original.replace(m.ancien, () => m.nouveau));
       let jugement;
+      const debut = horloge();
       try {
         jugement = juger();
       } finally {
-        fs.writeFileSync(chemin, original);
+        if (!lotPerdu) fs.writeFileSync(chemin, original);
       }
+      const dureeMs = horloge() - debut;
       if (jugement.issue === 'test') bilan.tuesParUnTest += 1;
       else if (jugement.issue === 'delai') bilan.tuesParUnDelai += 1;
       else if (jugement.issue === 'plantage') bilan.plantages += 1;
       else bilan.survivants += 1;
-      bilan.mutants.push({ libelle: m.libelle, ...jugement });
-      sortie(`${ETIQUETTE[jugement.issue]} ${m.libelle}${jugement.detail ? `  (${jugement.detail})` : ''}`);
+      bilan.mutants.push({ libelle: m.libelle, ...jugement, dureeMs });
+      sortie(`${ETIQUETTE[jugement.issue]} ${m.libelle}${jugement.detail ? `  (${jugement.detail})` : ''}  [${Math.round(dureeMs / 100) / 10} s]`);
     }
     const tues = bilan.tuesParUnTest + bilan.tuesParUnDelai;
     sortie('');
-    sortie(`${tues}/${bilan.retenus} mutants tués : ${bilan.tuesParUnTest} par un test, ${bilan.tuesParUnDelai} par un délai ; ${bilan.plantages} plantage${bilan.plantages > 1 ? 's' : ''} ; ${bilan.survivants} survivant${bilan.survivants > 1 ? 's' : ''}`);
+    sortie(`${tues}/${bilan.retenus} mutants tués : ${bilan.tuesParUnTest} par un test, ${bilan.tuesParUnDelai} par un délai ; ${bilan.plantages} plantage${bilan.plantages > 1 ? 's' : ''} ; ${bilan.survivants} survivant${bilan.survivants > 1 ? 's' : ''}${bilan.nonJuges ? ` ; ${bilan.nonJuges} non jugé${bilan.nonJuges > 1 ? 's' : ''}` : ''}`);
+    if (lotPerdu) erreur(`Le lot a perdu son terrain (${lotPerdu})${bilan.nonJuges ? ` : ${bilan.nonJuges} mutant(s) n'ont pas été rejoués` : ''}, le rejeu est à refaire.`);
     if (rapporter) rapporter(bilan);
-    return bilan.survivants || bilan.plantages ? 1 : 0;
+    return bilan.survivants || bilan.plantages ? 1 : 0;   // un lot qui perd sa copie compte son mutant plantage : les non jugés n'ajoutent rien
   } finally {
     fs.rmSync(copie, { recursive: true, force: true });
+    fs.rmSync(temporaire, { recursive: true, force: true });
+    // Un essai qui a lui-même lancé un lot (le moteur muté qu'il éprouve, posant sa copie là où le nôtre ne la cherche pas) et l'a tué laisse une copie
+    // de plus dans un dossier temporaire ; son lot est mort, elle se balaie comme les autres (les copies des lots qui tournent encore ne sont jamais touchées).
+    if (!verifierSeulement) {
+      const laissees = balayerCopiesAbandonnees();
+      if (laissees.length) erreur(`${laissees.length} copie(s) laissée(s) par les essais retirée(s), avec leurs processus : ${laissees.join(', ')}`);
+    }
   }
 }
 

@@ -25,10 +25,10 @@ test('moteur : chaque issue a son compte et son étiquette, un délai est dit d�
     ]);
     assert.equal(r.lignes.length, 8, 'la suite non mutée, cinq mutants, une ligne vide, le bilan : pas de ligne de paquet sans paquet');
     const ligne = (libelle) => r.lignes.find((l) => l.includes(libelle));
-    assert.match(ligne('renvoie 2'), /^TUÉ {7}renvoie 2 {2}\(essai, 1 en échec : f vaut 1\)$/);
-    assert.match(ligne('boucle de 20 s  '), /^TUÉ délai boucle de 20 s {2}\(essai, délai de 4\.5 s dépassé, aucun test n'a jugé le mutant\)$/);
-    assert.match(ligne('quitte au chargement'), /^PLANTAGE {2}quitte au chargement {2}\(essai, seuls des fichiers de test entiers échouent \(.*f\.test\.mjs\), aucun test nommé\)$/);
-    assert.match(ligne('équivalent'), /^SURVIT {4}équivalent$/);
+    assert.match(ligne('renvoie 2'), /^TUÉ {7}renvoie 2 {2}\(essai, 1 en échec : f vaut 1\) {2}\[\d+(\.\d)? s\]$/);
+    assert.match(ligne('boucle de 20 s  '), /^TUÉ délai boucle de 20 s {2}\(essai, délai de 4\.5 s dépassé, aucun test n'a jugé le mutant\) {2}\[\d+(\.\d)? s\]$/);
+    assert.match(ligne('quitte au chargement'), /^PLANTAGE {2}quitte au chargement {2}\(essai, seuls des fichiers de test entiers échouent \(.*f\.test\.mjs\), aucun test nommé\) {2}\[\d+(\.\d)? s\]$/);
+    assert.match(ligne('équivalent'), /^SURVIT {4}équivalent {2}\[\d+(\.\d)? s\]$/);
     assert.equal(r.lignes.at(-1), '3/5 mutants tués : 1 par un test, 2 par un délai ; 1 plantage ; 1 survivant');
     assert.equal(r.lignes.at(-2), '', 'une ligne vide avant le bilan');
     assert.equal(r.lignes[0], 'Suite non mutée : 1 tests, 0 sauté, 5 mutants à rejouer.\n');
@@ -37,6 +37,20 @@ test('moteur : chaque issue a son compte et son étiquette, un délai est dit d�
     assert.ok(await attendreLaMort(orphelin), 'l\'orphelin d\'un mutant tué par le délai est tué avec lui (son répertoire courant est la copie)');
   } finally {
     nettoyer(r);
+  }
+});
+
+test('moteur : un orphelin posé dans le dossier temporaire des suites est tué aussi, après un délai comme après un plantage (son répertoire courant n\'est pas la copie)', async () => {
+  for (const [nom, mutant, options] of [['délai', 'orphelinTmp', { delaiMs: 4500 }], ['plantage', 'plantageEtOrphelinTmp', {}]]) {
+    const r = rejouer([mutant], options);
+    try {
+      assert.equal(r.bilan.mutants[0].issue, nom === 'délai' ? 'delai' : 'plantage', nom);
+      const orphelin = Number(fs.readFileSync(r.fichierPid, 'utf8'));
+      assert.ok(await attendreLaMort(orphelin), `${nom} : l'orphelin du dossier temporaire est mort`);
+      assert.deepEqual(r.copiesRestantes, [], nom);
+    } finally {
+      nettoyer(r);
+    }
   }
 });
 
@@ -138,10 +152,34 @@ test('moteur : une suite déjà en échec sur le code non muté ne conclut rien 
   const r = rejouer(['test'], { groupes: [{ nom: 'essai', fichiers: ['tests/f.test.mjs', 'tests/rouge.test.mjs'] }] });
   try {
     assert.equal(r.code, 2);
-    assert.match(r.erreurs.join('\n'), /pas verte et complète sur le code non muté \(verdict : test, sautés : 0, lancés : 2\)/);
+    assert.match(r.erreurs.join('\n'), /pas verte et complète sur le code non muté \(verdict : test, en échec : déjà rouge, sautés : 0, lancés : 2\)/);
     assert.equal(r.bilan, null, 'rien n\'est rapporté quand rien n\'a été jugé');
     assert.equal(r.lignes.length, 0);
     assert.deepEqual(r.copiesRestantes, []);
+  } finally {
+    nettoyer(r);
+  }
+});
+
+test('moteur : la suite non mutée rouge nomme ce qui échoue, tests nommés d\'abord puis fichiers entiers, sans en perdre (le fichier qui plante s\'ajoute au test rouge)', () => {
+  const r = rejouer(['test'], { groupes: [{ nom: 'essai', fichiers: ['tests/f.test.mjs', 'tests/rouge.test.mjs', 'tests/plante.test.mjs'] }] });
+  try {
+    assert.equal(r.code, 2);
+    assert.match(r.erreurs.join('\n'), /verdict : test, en échec : déjà rouge \| tests\/plante\.test\.mjs, sautés : 0, lancés : \d+\)/);
+  } finally {
+    nettoyer(r);
+  }
+});
+
+test('moteur : le nom d\'un test rouge de plus de 100 caractères est coupé à 97 puis « ... » dans la suite non mutée refusée', () => {
+  const nom = `un nom de test très long : ${'y'.repeat(120)}`;
+  const fichier = `import test from 'node:test';\ntest(${JSON.stringify(nom)}, () => { throw new Error('rouge'); });\n`;
+  const r = rejouer(['test'], { groupes: [{ nom: 'essai', fichiers: ['tests/f.test.mjs', 'tests/rouge-long.test.mjs'] }] }, { fichiers: { 'tests/rouge-long.test.mjs': fichier } });
+  try {
+    assert.equal(r.code, 2);
+    const message = r.erreurs.join('\n');
+    assert.ok(message.includes(`en échec : ${nom.slice(0, 97)}..., sautés`), message);
+    assert.ok(!message.includes(nom), 'le nom entier n\'est pas repris');
   } finally {
     nettoyer(r);
   }
@@ -151,7 +189,7 @@ test('moteur : la suite non mutée est jugée en entier : un groupe rouge, même
   const r = rejouer(['test'], { groupes: [{ nom: 'un', fichiers: ['tests/f.test.mjs'] }, { nom: 'deux', fichiers: ['tests/rouge.test.mjs'] }] });
   try {
     assert.equal(r.code, 2);
-    assert.match(r.erreurs.join('\n'), /verdict : test, sautés : 0, lancés : 2\)/);
+    assert.match(r.erreurs.join('\n'), /verdict : test, en échec : déjà rouge, sautés : 0, lancés : 2\)/);
   } finally {
     nettoyer(r);
   }
@@ -172,7 +210,7 @@ test('moteur : une suite qui ne lance aucun test ne prouve rien (code 2), même 
   const r = rejouer(['test'], { groupes: [{ nom: 'essai', fichiers: ['tests/sans-test.test.mjs'] }] });
   try {
     assert.equal(r.code, 2);
-    assert.match(r.erreurs.join('\n'), /verdict : passe, sautés : 0, lancés : 0\)/);
+    assert.match(r.erreurs.join('\n'), /verdict : plantage, aucun essai n'a tourné \(0 test lancé, code 0\), sautés : 0, lancés : 0\)/);
   } finally {
     nettoyer(r);
   }
@@ -253,6 +291,31 @@ test('moteur : un fichier de test qui n\'existe pas est dit avant tout essai (no
     assert.equal(r.code, 2);
     assert.match(r.erreurs.join('\n'), /groupe « essai » : le fichier de test tests\/absent\.test\.mjs n'existe pas/);
     assert.equal(r.lignes.length, 0, 'aucun essai n\'a été lancé');
+  } finally {
+    nettoyer(r);
+  }
+});
+
+test('durée par mutant : la ligne et le bilan disent le temps de son jugement, lu sur l\'horloge au début et à la fin (deux lectures par mutant)', () => {
+  const lectures = [1000, 2234, 5000, 66000];
+  let lues = 0;
+  const r = rejouer(['test', 'survivant'], { horloge: () => { lues += 1; return lectures.shift(); } });
+  try {
+    assert.equal(r.code, 1, 'le survivant fait échouer le lot');
+    assert.equal(lues, 4, 'deux lectures par mutant, aucune ailleurs');
+    assert.deepEqual(r.bilan.mutants.map((m) => m.dureeMs), [1234, 61000]);
+    assert.match(r.lignes.find((l) => l.includes('renvoie 2')), / {2}\[1\.2 s\]$/);
+    assert.match(r.lignes.find((l) => l.includes('équivalent')), /^SURVIT {4}équivalent {2}\[61 s\]$/);
+  } finally {
+    nettoyer(r);
+  }
+});
+
+test('durée par mutant : sans horloge donnée, le temps réel (un mutant tué par un délai dure au moins ce délai)', () => {
+  const r = rejouer(['delai'], { delaiMs: 2000 });
+  try {
+    assert.equal(r.bilan.mutants[0].issue, 'delai');
+    assert.ok(r.bilan.mutants[0].dureeMs >= 2000 && r.bilan.mutants[0].dureeMs < 60000, `${r.bilan.mutants[0].dureeMs} ms`);
   } finally {
     nettoyer(r);
   }

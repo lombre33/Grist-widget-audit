@@ -62,7 +62,7 @@ const MUTANTS = [
   [L, 'empreinte: m.groups.empreinte,', "empreinte: m.groups.empreinte.slice(0, 40),", 'lib : empreinte tronquée'],
   [L, 'etiquette: m.groups.etiquette ?? null,', "etiquette: m.groups.etiquette ?? 'latest',", 'lib : étiquette absente remplacée par latest'],
 ];
-const { restants } = lireArguments(process.argv.slice(2));
+const { partie, restants } = lireArguments(process.argv.slice(2));
 const filtre = restants[0] ? new RegExp(restants[0]) : null;
 const mutants = MUTANTS
   .filter(([, , , libelle]) => !filtre || filtre.test(libelle))
@@ -73,4 +73,5 @@ process.exitCode = rejouerMutants({
   groupes: [{ nom: 'tests dérive', fichiers: TESTS }],
   exigerChromium: false,
   dossiers: [...DOSSIERS_COPIES, 'docker'],
+  partie,
 });
