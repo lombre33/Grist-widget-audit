@@ -375,11 +375,21 @@ async function npmAudit(racine) {
   }
 }
 
-/** Le nom d'un fichier de licence à la racine : `LICENSE`, `LICENCE` ou `COPYING`, une extension facultative. Aucun séparateur de dossier : `docs/LICENSE` n'est pas la licence du dépôt. */
-const NOM_DE_LICENCE = /^(LICEN[SC]E|COPYING)(\.[a-z]+)?$/i;
+/**
+ * Le nom d'un fichier de licence à la racine : `LICENSE`, `LICENCE`, `COPYING` ou `UNLICENSE`, une extension facultative ; la licence d'un dépôt à double licence, que le nom d'une
+ * licence ou un numéro de version suit après un tiret ou un souligné (`LICENSE-MIT`, `LICENSE_APACHE.txt`, `LICENSE-2.0.txt`) ; un fichier du dossier `LICENSES/`, où la
+ * norme REUSE range un texte par licence. Aucun autre séparateur de dossier : `docs/LICENSE` n'est pas la licence du dépôt.
+ */
+const NOM_DE_LICENCE = /^(?:(?:LICEN[SC]E|COPYING|UNLICENSE)(?:\.[a-z]+)?|(?:LICEN[SC]E|COPYING)[-_](?:MIT|APACHE|BSD|GPL|LGPL|AGPL|MPL|EUPL|ISC|CC0|ZLIB|UNLICENSE|\d[\d.]*)(?:\.[a-z]+)?|LICENSES\/[^/]+)$/i;
 
 /** Un fichier dont l'inventaire a lu le texte : un fichier trop gros, un format binaire (`LICENSE.pdf`), le plafond cumulé atteint ou une lecture refusée n'en ont pas. */
 const estLu = (f) => typeof f.contenu === 'string';
+
+/** Le nom de la LGPL et celui de la GPL : le texte de chacune nomme l'autre (le préambule de la GPL 2 renvoie à la Lesser, la LGPL 3 reprend les termes de la GPL 3). */
+const NOM_LGPL = /GNU (LESSER|LIBRARY) GENERAL PUBLIC/i;
+const NOM_GPL = /GNU (AFFERO )?GENERAL PUBLIC/i;
+/** La place d'un nom dans le texte, l'infini s'il n'y est pas. */
+const placeDe = (nom, texte) => { const i = texte.search(nom); return i === -1 ? Infinity : i; };
 
 /** Les fichiers dont le texte est lu d'abord, puis l'ordre des noms. */
 const rangDeLicence = (f) => (estLu(f) ? 0 : 1);
@@ -407,7 +417,8 @@ export function analyserLicence(ctx) {
     const type = /MIT License/i.test(t) ? 'MIT'
       : /Apache License/i.test(t) ? 'Apache 2.0'
       : /EUROPEAN UNION PUBLIC LICENCE|EUPL/i.test(t) ? 'EUPL'
-      : /GNU (AFFERO )?GENERAL PUBLIC/i.test(t) ? 'GPL/AGPL'
+      : placeDe(NOM_LGPL, t) < placeDe(NOM_GPL, t) ? 'LGPL'                // celle des deux dont le nom vient d'abord, le titre, est la licence : l'autre n'est que citée
+      : NOM_GPL.test(t) ? 'GPL/AGPL'
       : /BSD/i.test(t) ? 'BSD' : 'non identifiée';
     constats.push(constat({
       regle: 'E-LIC-02', axe: 'E', severite: type === 'non identifiée' ? 'mineur' : 'info', confiance: 'certain',
@@ -418,6 +429,8 @@ export function analyserLicence(ctx) {
         : "Fichier de licence présent, dont l'outil n'a pas lu le texte (fichier trop gros, format binaire ou lecture refusée) : son type n'a pas pu être détecté.",
       impact: type === 'GPL/AGPL'
         ? "Licence à effet contaminant : à vérifier avec l'équipe Grist.Gouv avant intégration, elle contraint la redistribution du reste de l'instance."
+        : type === 'LGPL'
+        ? "Licence à copyleft faible : le code qui l'utilise garde sa licence, mais les modifications du widget lui-même se redistribuent sous la même ; à vérifier avec l'équipe Grist.Gouv avant intégration."
         : type === 'non identifiée'
         ? "Le type de licence n'a pas pu être déterminé automatiquement : à vérifier manuellement."
         : 'Licence compatible avec un fork par l\'équipe Grist.Gouv.',
