@@ -398,7 +398,7 @@ const rangDeLicence = (f) => (estLu(f) ? 0 : 1);
 export function analyserLicence(ctx) {
   const constats = [];
   // Plusieurs fichiers de licence à la racine : celui dont l'outil a lu le texte d'abord (un `COPYING.png` qu'il ne lit pas ne doit pas passer devant un
-  // `LICENSE` qu'il lit), puis l'ordre des noms (l'inventaire suit celui du système de fichiers : il ne décide de rien).
+  // `LICENSE` qu'il lit), puis l'ordre des noms (le rang du fichier dans l'inventaire ne décide de rien).
   const licence = ctx.fichiers
     .filter((f) => NOM_DE_LICENCE.test(f.chemin))
     .sort((a, b) => rangDeLicence(a) - rangDeLicence(b) || (a.chemin < b.chemin ? -1 : a.chemin > b.chemin ? 1 : 0))[0];

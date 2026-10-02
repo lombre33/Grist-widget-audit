@@ -121,10 +121,16 @@ function estJsonValide(texte) {
   try { JSON.parse(texte); return true; } catch { return false; }
 }
 
+/**
+ * Les entrées d'un dossier dans l'ordre de leurs noms. Celui de `readdirSync` suit le système de fichiers (ext4, NTFS, overlayfs) : le même dépôt donnerait deux
+ * inventaires, et un plafond (les fichiers, les octets lus, les entrées listées) laisserait de côté des fichiers différents, selon la machine qui l'audite.
+ */
+const entreesDuDossier = (dossier) => fs.readdirSync(dossier, { withFileTypes: true }).sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+
 function parcourir(racine, dossier, acc, etat) {
   if (etat.tronqueFichiers) return;
   let entrees;
-  try { entrees = fs.readdirSync(dossier, { withFileTypes: true }); } catch { return; }
+  try { entrees = entreesDuDossier(dossier); } catch { return; }
   for (const e of entrees) {
     if (etat.tronqueFichiers) return;
     const abs = path.join(dossier, e.name);
@@ -294,7 +300,7 @@ export function nouveauListeur(racine, fichiers, etat, maxEntrees) {
       while (pile.length) {
         const rel = pile.pop();
         let lus;
-        try { lus = fs.readdirSync(path.join(racine, rel), { withFileTypes: true }); } catch { continue; }
+        try { lus = entreesDuDossier(path.join(racine, rel)); } catch { continue; }
         for (const e of lus) {
           if (e.name === '.git') continue;
           if (--restant < 0) { etat.tronqueListage = true; return chemins.sort(); }

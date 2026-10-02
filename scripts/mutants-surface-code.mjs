@@ -232,7 +232,7 @@ MUTANTS.push(
   dansLigne(I, 'else if (e.isFile() && MODULE_JS.test(e.name))', 'e.isFile() && ', '', 'listeur : un lien nommé comme un module est rendu'),
   dansLigne(I, 'else if (e.isFile() && MODULE_JS.test(e.name))', 'MODULE_JS.test(e.name)', 'true', 'listeur : tout fichier d\'un dossier exclu est un module'),
   dansLigne(I, 'else if (e.isFile() && MODULE_JS.test(e.name))', '${rel}/${e.name}', '${e.name}', 'listeur : le chemin d\'un module perd son dossier'),
-  dansLigne(I, 'try { lus = fs.readdirSync(', 'catch { continue; }', 'catch (erreur) { throw erreur; }', 'listeur : un dossier absent fait échouer'),
+  dansLigne(I, 'try { lus = entreesDuDossier(', 'catch { continue; }', 'catch (erreur) { throw erreur; }', 'listeur : un dossier absent fait échouer'),
   dansLigne(I, 'modules ??= construire();', '??=', '=', 'listeur : les dossiers exclus sont relus à chaque appel'),
   // Équivalent, donc absent : `let haut = modules.length - 1` — la première recherche s'arrête alors sur le dernier indice au plus tôt, et la seconde relit cet élément (`startsWith`, faux puisqu'il précède le préfixe) : mêmes résultats pour tout préfixe.
   dansLigne(I, 'let bas = 0;', '0', '1', 'listeur : le premier module n\'est jamais rendu'),
