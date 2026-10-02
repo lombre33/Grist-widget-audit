@@ -109,6 +109,18 @@ plus être « conforme » sans réserve.
 Se dire généré, ou porter une licence, n'exempte rien : le code généré que la
 page exécute se compare.
 
+Deux motifs de lenteur se disent en information (A-PERF-01 et A-PERF-02), sans
+pénalité : un appel à l'API de Grist ou à `fetch` attendu (`await`) à chaque tour
+d'une boucle, et `innerHTML +=` dans une boucle ou dans le rappel d'un parcours
+de tableau. Ce que coûte une boucle dépend de la taille de la table que le
+widget lit, et le code ne la dit pas : une règle qui pénaliserait un motif sans
+la connaître se tromperait plus souvent qu'elle n'aurait raison. Ces deux motifs
+se reconnaissent sans elle, le constat dit où ils sont, et l'auditeur juge si la
+boucle est assez longue pour compter. Le reste de l'efficience (recherche
+répétée sur les lignes de la table, boucles imbriquées, accumulateur recopié,
+interrogation d'une table que Grist pousse déjà) demande de savoir d'où viennent
+les données : c'est un jugement, que le prompt d'audit par IA pose.
+
 ## Axe B — Lisibilité humaine
 
 C'est l'axe le plus spécifique au guide Grist.Gouv, qui pose une exigence
@@ -340,6 +352,35 @@ Fonts, Google Analytics, CDN publics, API d'IA hors UE…), vérifications
 RGAA statiques, poids de la surface exécutée (écoconception), et
 conventions du guide de contribution (nom de dépôt, `SECURITY.md`,
 cohérence d'un éventuel `manifest.json`).
+
+## Le test algorithmique et l'analyse IA : ce que chacun fait
+
+Les deux se complètent. L'outil mesure ce qui se décide sur un fait lisible dans
+le code, et la même mesure donne le même résultat à chaque audit. Un LLM juge ce
+qui demande de comprendre le widget, et ne note rien. Le prompt
+`docs/PROMPT-AUDIT-LLM.md` s'emploie de deux façons : *en reproduction*, avec le
+seul code, pour comparer deux audits partis de la même grille ; *en complément*,
+avec le rapport de l'outil, que le modèle ne refait pas : il tranche les signaux
+que l'outil laisse ouverts et fait les jugements de la section 8 du prompt.
+
+Les critères d'un code de widget, et à qui revient chacun :
+
+| Le code du widget doit être | L'outil mesure | L'IA juge |
+|---|---|---|
+| Court et concis | taille des fichiers et des fonctions (A-TAILLE-01, A-FONC-01), volume du code exécuté (B-VERB-01), poids envoyé au navigateur (F-ECO-01) | ce qui peut se dire plus court sans perdre en clarté |
+| Efficient | deux motifs de lenteur, en information (A-PERF-01, A-PERF-02) | d'où vient la collection qu'une boucle parcourt, et si la complexité est justifiée : recherche répétée sur les lignes de la table, boucles imbriquées, rendu entier refait à chaque mise à jour, interrogation d'une table que Grist pousse déjà |
+| Sans code mort | code inatteignable (A-MORT-01) | ce qui est déclaré sans être lu ni affiché (colonnes, options, boutons, gestionnaires), les fichiers que la page ne charge pas |
+| Sans duplication | blocs de même forme sur l'arbre syntaxique (A-DUP-01), et ce que la recherche n'a pas comparé (A-DUP-00) | les blocs qui se ressemblent sans être identiques, et si les factoriser serait plus clair |
+| Aux fonctions claires | longueur, complexité, imbrication (A-FONC-01 à 03), noms non descriptifs (B-NOM-01) | si un humain suit la fonction, les noms qui ne disent rien, les valeurs qui portent une règle qu'on ne devine pas, l'état partagé dispersé |
+| Au périmètre délimité et abouti | README présent et complet (B-DOC-01 et 02), niveau d'accès et services externes documentés (B-DOC-03 et 04), marqueurs de travail inachevé (A-DEV-03) | un seul métier, la description conforme au code, les chemins qui s'arrêtent en route, le niveau d'accès le plus bas qui suffit |
+
+Trois dispositions gardent les deux lectures complémentaires, non redondantes.
+Le modèle ne refait pas ce que l'outil mesure : il cite l'identifiant du constat.
+Ses jugements sont des informations, hors barème : le score ne les compte jamais,
+si bien qu'une divergence entre une règle et le modèle se lit côte à côte sans
+être comptée deux fois. Et quand la lecture ne donne rien, il écrit « aucun
+constat sur ce point » et dit ce qu'il a cherché : un faux constat est le pire
+défaut d'un audit, et le modèle n'en invente pas pour remplir une case.
 
 ## Ce que l'outil n'a pas lu
 
