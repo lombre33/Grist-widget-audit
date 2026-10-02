@@ -981,6 +981,9 @@ function referencesSortantes(f, commeCode = false) {
  */
 const SIGNATURE_BUNDLEUR = /\b(__defProp|__getOwnPropNames|__getOwnPropDesc|__getProtoOf|__commonJS|__esModule|__toESM|__webpack_require__|webpackBootstrap)\b/;
 
+/** Le texte d'un fichier porte-t-il, dans ses 5 000 premiers caractères, la signature d'un empaqueteur ? */
+export const aSignatureDeBundleur = (texte) => SIGNATURE_BUNDLEUR.test(texte.slice(0, 5000));
+
 /**
  * Fichier qui présente les caractéristiques d'une bibliothèque tierce
  * recopiée dans le dépôt (bundlée ou minifiée), au sens de la règle E-DEP-02 :
@@ -997,7 +1000,7 @@ export function estVendorise(f) {
   if (f.binaire || !f.contenu || !['.js', '.mjs'].includes(f.ext)) return false;
   return cheminVendorise(f.chemin) ||
     ((f.locSignificatives ?? 0) > 300 && (f.taille / Math.max(1, f.lignes.length)) > 200) ||
-    ((f.locSignificatives ?? 0) > 300 && SIGNATURE_BUNDLEUR.test(f.contenu.slice(0, 5000)));
+    ((f.locSignificatives ?? 0) > 300 && aSignatureDeBundleur(f.contenu));
 }
 
 /**

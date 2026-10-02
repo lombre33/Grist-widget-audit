@@ -136,7 +136,7 @@ MUTANTS.push(
   dansLigne(J, 'if (ignorerVendorise && (f.vendorise || f.dossierExclu)) continue;', ' || f.dossierExclu', '', 'A/B : les fonctions et noms d\'un dossier exclu sont jugés'),
   dansLigne(QA, '.filter((f) => f.executee && !f.vendorise && !f.dossierExclu', ' && !f.dossierExclu', '', 'A-TAILLE-01 : un fichier de dist/ est jugé'),
   dansLigne(QA, 'if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || estCarteDeSources(f)) continue;', ' || f.dossierExclu', '', 'A-DEV-03 : les marqueurs d\'un fichier de dist/ sont comptés'),
-  dansLigne(QA, "if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || !['.js', '.mjs'].includes(f.ext)) continue;", ' || f.dossierExclu', '', 'A-DUP-01 : les blocs d\'un fichier de dist/ sont comparés'),
+  dansLigne(QA, "if (fichier.vendorise || fichier.dossierExclu) return 'tierce';", ' || fichier.dossierExclu', '', 'A-DUP-01 : les blocs d\'un fichier de dist/ sont comparés'),
   [QB, "    if (!f.executee || f.vendorise || f.dossierExclu || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;\n    const { code, commentaire, exacte } = mesurerLignes(f);", "    if (!f.executee || f.vendorise || !['.js', '.mjs'].includes(f.ext) || !f.contenu) continue;\n    const { code, commentaire, exacte } = mesurerLignes(f);", 'B-COM-01 : un fichier de dist/ est jugé'],
   dansLigne(QB, "if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || !['.js', '.mjs', '.html'].includes(f.ext)) continue;", ' || f.dossierExclu', '', 'B-IA-01 : les marqueurs d\'un fichier de dist/ sont comptés'),
   dansLigne(QB, 'const surface = ctx.fichiers.filter((f) => f.executee && !f.vendorise && !f.dossierExclu', ' && !f.dossierExclu', '', 'B-VERB-01 : les lignes de dist/ sont comptées'),

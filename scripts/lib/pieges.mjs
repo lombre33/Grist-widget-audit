@@ -149,3 +149,38 @@ export function widgetAvecFichierNonLu(nom, forme, nature, octets) {
     [nom]: nature === 'binaire' ? Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(200, 0), Buffer.from([0xff, 0xfe, 0x01])]) : 'a'.repeat(octets),
   };
 }
+
+const repeter = (n, f) => Array.from({ length: n }, (_, i) => f(i)).join('');
+/** Des entiers tirés d'une graine : les mêmes à chaque lancement, pour qu'un piège ne change pas d'un essai à l'autre. */
+const tirage = (graine) => { let x = graine >>> 0; return () => { x = (Math.imul(x, 1664525) + 1013904223) >>> 0; return x >>> 8; }; };
+const PAGE_DU_CODE = '<!doctype html><html lang="fr"><head><meta charset="utf-8"><title>t</title></head><body><script src="app.js"></script></body></html>\n';
+/** Une fonction de masse et de logique assez grosses pour être un clone, dont le nom change. */
+const FONCTION_LOURDE = (nom) => `function ${nom}(x, y) {\n  if (x > 1) { y.push(g(x) + h(x)); }\n  for (let i = 0; i < y.length; i++) { y[i] = k(y[i], x); }\n  return y.map((v) => m(v)).filter(Boolean);\n}\n`;
+
+/**
+ * Des widgets dont le code se répète de façon à mettre en difficulté la recherche de code dupliqué (`src/moteur/clones.js`) : une instruction répétée cent mille fois, des suites
+ * qui se prolongent de mille façons, des milliers de copies d'une fonction, des copies dans des milliers de fichiers, un arbre très profond. `[nom, fichiers, attendu]` : `fichiers()`
+ * fabrique le widget (nom de fichier → contenu ; la page `index.html` charge `app.js`) ; `attendu`, ce que la recherche rend sans qu'on en juge le temps :
+ *  - `repete` : le code se répète à l'évidence, la recherche rend des clones (A-DUP-01) ou, si un plafond l'a arrêtée, dit qu'elle n'a pas tout comparé (A-DUP-00 d'une mesure partielle) : jamais rien ;
+ *  - `ecarte` : le code est écarté de la comparaison (minifié), A-DUP-00 le dit et aucun clone n'est rendu ;
+ *  - `libre` : aucune exigence sur ce qui est rendu, la recherche ne lève pas (un code que l'analyseur ne lit pas à cette profondeur n'a pas d'arbre à comparer).
+ */
+export const PIEGES_CLONES = [
+  ['cent mille instructions identiques dans une fonction', () => ({ 'index.html': PAGE_DU_CODE, 'app.js': `function f() {\n${'a++;\n'.repeat(100_000)}}\n` }), 'repete'],
+  ['f(a); g(b); répétés quarante mille fois (une suite qui se prolonge de période deux)', () => ({ 'index.html': PAGE_DU_CODE, 'app.js': `function f() {\n${'f(a);\ng(b);\n'.repeat(40_000)}}\n` }), 'repete'],
+  ['une suite de trois instructions tirées au hasard, soixante mille fois', () => {
+    const tire = tirage(7);
+    return { 'index.html': PAGE_DU_CODE, 'app.js': `function f() {\n${repeter(60_000, () => ['f(a);\n', 'g(b);\n', 'h(c);\n'][tire() % 3])}}\n` };
+  }, 'repete'],
+  ['soixante mille instructions de même forme, aux noms tous différents', () => ({ 'index.html': PAGE_DU_CODE, 'app.js': `function f() {\n${repeter(60_000, (i) => `v${i} = w${i}(${i});\n`)}}\n` }), 'repete'],
+  ['des blocs qui ne diffèrent que d\'une instruction, trois mille fois', () => {
+    const tire = tirage(11);
+    return { 'index.html': PAGE_DU_CODE, 'app.js': `function f() {\n${repeter(3000, () => `{ a(1); b(2); c(3); d(${tire() % 5}); e(5); f(6); g(7); }\n`)}}\n` };
+  }, 'repete'],
+  ['une période de sept instructions dont un argument change tous les cinq tours (fenêtre glissante)', () => ({ 'index.html': PAGE_DU_CODE, 'app.js': `function f() {\n${repeter(20_000, (i) => `s${i % 7}(${i % 5 === 0 ? i : 1});\n`)}}\n` }), 'repete'],
+  ['quatre mille fonctions identiques aux noms distincts', () => ({ 'index.html': PAGE_DU_CODE, 'app.js': repeter(4000, (i) => FONCTION_LOURDE(`f${i}`)) }), 'repete'],
+  ['six mille fonctions identiques (au-delà du nombre d\'exemplaires d\'une duplication massive)', () => ({ 'index.html': PAGE_DU_CODE, 'app.js': repeter(6000, (i) => FONCTION_LOURDE(`f${i}`)) }), 'repete'],
+  ['la même fonction dans deux mille fichiers', () => ({ 'index.html': PAGE_DU_CODE, ...Object.fromEntries(Array.from({ length: 2000 }, (_, i) => [`m${i}.js`, FONCTION_LOURDE('f')])) }), 'repete'],
+  ['mille fonctions imbriquées, une par ligne, deux fois', () => ({ 'index.html': PAGE_DU_CODE, 'app.js': `${repeter(1000, (i) => `function a${i}() {\n`)}${'}\n'.repeat(1000)}${repeter(1000, (i) => `function b${i}() {\n`)}${'}\n'.repeat(1000)}` }), 'libre'],
+  ['deux mille fonctions imbriquées sur une seule ligne, deux fois (code minifié)', () => ({ 'index.html': PAGE_DU_CODE, 'app.js': `${'function a() {'.repeat(2000)}${'}'.repeat(2000)}\n${'function b() {'.repeat(2000)}${'}'.repeat(2000)}\n` }), 'ecarte'],
+];

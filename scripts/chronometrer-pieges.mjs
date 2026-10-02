@@ -26,7 +26,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { parseArgs } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-import { PIEGES_CSS, contextesCss, PIEGES_PAGES_CSS, PIEGES_BLANCS, PIEGES_ACCESSIBILITE, PIEGES_README, PAGE_FEUILLES_DATA, PAGE_LINK_DATA_GEANT } from './lib/pieges.mjs';
+import { PIEGES_CSS, contextesCss, PIEGES_PAGES_CSS, PIEGES_BLANCS, PIEGES_ACCESSIBILITE, PIEGES_README, PIEGES_CLONES, PAGE_FEUILLES_DATA, PAGE_LINK_DATA_GEANT } from './lib/pieges.mjs';
 
 const ICI = fileURLToPath(import.meta.url);
 const RACINE_PAR_DEFAUT = path.resolve(path.dirname(ICI), '..');
@@ -310,6 +310,8 @@ const CAS = [
   ...PIEGES_BLANCS.map(([nom, html]) => [`analyse : blancs de bord « ${nom} » (1 Mio)`, 'analyse', () => ({ 'index.html': html })]),
   ...PIEGES_ACCESSIBILITE.map(([nom, html]) => [`analyse : page piégée « ${nom} » (accessibilité)`, 'analyse', () => ({ 'index.html': html })]),
   ...PIEGES_README.map(([nom, contenu]) => [`analyse : un README de 1 Mio ${nom}`, 'analyse', () => ({ 'index.html': `${TETE}<script src="app.js"></script>`, 'app.js': '1;', 'README.md': contenu })]),
+  // La recherche de code dupliqué est bornée par des plafonds de nœuds et de pas (`src/moteur/clones.js`) : ce qui se mesure ici, c'est ce que coûte une entrée qui les atteint, en temps et en mémoire.
+  ...PIEGES_CLONES.map(([nom, fichiers]) => [`analyse : code qui se répète « ${nom} »`, 'analyse', fichiers]),
   ['analyse : trois feuilles data: de 600 Kio importées (borne de volume)', 'analyse', () => ({ 'index.html': PAGE_FEUILLES_DATA })],
   ['analyse : une feuille <link> data: de plus de 4 Mio (borne de volume)', 'analyse', () => ({ 'index.html': PAGE_LINK_DATA_GEANT })],
   ['analyse : un <button> jamais fermé suivi de 2 000 <i> (F-RGAA-05, retour arrière)', 'analyse', () => ({ 'index.html': `<!doctype html><html><body>\n<button>${'<i> '.repeat(2000)}X\n</body></html>` })],

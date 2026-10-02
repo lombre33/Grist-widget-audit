@@ -65,7 +65,7 @@ const MUTANTS = [
 
   // Ce que la lecture qui a échoué devient : relevée, sans arrêter le parcours des autres fichiers -------------------------------
   dansLigne(AJ, 'if (f.executee) noterIllisible(releves, f, u,', 'if (f.executee)', 'if (false)', 'lecture qui lève : le code exécuté que la lecture refuse n\'est jamais relevé'),
-  brut(AJ, "        noterLectureRefusee(releverDans, f, u, erreur);\n        continue;", "        noterLectureRefusee(releverDans, f, u, erreur);\n        return;", 'lecture qui lève : le premier code illisible interrompt le parcours des autres fichiers'),
+  brut(AJ, "      noterLectureRefusee(releverDans, f, u, erreur);\n      continue;", "      noterLectureRefusee(releverDans, f, u, erreur);\n      return;", 'lecture qui lève : le premier code illisible interrompt le parcours des autres fichiers'),
   dansLigne(AJ, "const cle = `${f.chemin}\\0${cleDUnite(u)}`;", "cleDUnite(u)}`", "cleDUnite(u)}${liste.size}`", 'lecture qui lève : chaque règle qui rencontre le fichier le relève de nouveau'),
 
   // Le constat, et ce qu'il empêche --------------------------------------------------------------------------------------------
