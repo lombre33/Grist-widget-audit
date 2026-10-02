@@ -72,6 +72,12 @@ export function ligneDans(unite, noeud) {
   return noeud?.loc?.start?.line ?? 0;
 }
 
+/** Ligne (1-based) où un nœud finit dans le fichier réel, par les mêmes positions que `ligneDans`. */
+export function ligneFinDans(unite, noeud) {
+  if (unite.positionDe) return unite.positionDe(typeof noeud?.end === 'number' ? noeud.end : 0).ligne;
+  return noeud?.loc?.end?.line ?? 0;
+}
+
 /** Colonne (1-based) d'un nœud dans le fichier réel, par les mêmes positions que `ligneDans`. */
 export function colonneDans(unite, noeud) {
   if (unite.positionDe) return unite.positionDe(typeof noeud?.start === 'number' ? noeud.start : 0).colonne + 1;
@@ -322,6 +328,15 @@ export function releverEchecsDeLInventaire(contexte) {
   }
 }
 
+/** Les unités JS d'un contexte, une à une avec le fichier qui les porte, dans l'ordre de l'inventaire ; rien n'est lu avant que l'appelant ne demande la suivante. */
+function* unitesAVisiter(contexte, { surfaceSeulement, ignorerVendorise, garder }) {
+  for (const f of contexte.fichiers) {
+    if (surfaceSeulement && !f.executee) continue;
+    if (ignorerVendorise && (f.vendorise || f.dossierExclu)) continue;
+    for (const u of unitesJs(f)) if (!garder || garder({ fichier: f, unite: u })) yield { fichier: f, unite: u };
+  }
+}
+
 /**
  * Parcourt toutes les unités JS du contexte en appelant `visiteur` avec
  * l'AST et un utilitaire `signaler(noeud, …)` qui gère le décalage de ligne
@@ -333,22 +348,24 @@ export function releverEchecsDeLInventaire(contexte) {
  * qu'aucune règle n'a lu ne se passe pas sous silence. Seul le code de la surface est relevé quand c'est la lecture
  * qui échoue (du JSX ou du TypeScript qu'aucune page ne charge n'est pas du code exécuté) ; un parcours qui échoue
  * est toujours relevé.
+ *
+ * `garder` : une fonction de `{ fichier, unite }` qui dit si l'unité se visite, appelée avant toute lecture (une règle qui compte ce qu'elle laisse de côté
+ * s'en sert, au lieu de lire pour rien ce qu'elle ne compare pas).
+ * Les unités se visitent dans l'ordre de l'inventaire, qui est celui du système de fichiers : une règle dont le résultat en dépend (un plafond
+ * partagé entre les unités) donne `ordre`, une comparaison de deux `{ fichier, unite }`. Les arbres ne sont lus qu'une fois l'ordre fait, un à la fois.
  */
-export function pourChaqueUniteJs(contexte, { surfaceSeulement = false, ignorerVendorise = false, releverDans = contexte } = {}, visiteur) {
-  for (const f of contexte.fichiers) {
-    if (surfaceSeulement && !f.executee) continue;
-    if (ignorerVendorise && (f.vendorise || f.dossierExclu)) continue;
-    for (const u of unitesJs(f)) {
-      const { ast, erreur } = lireUnite(f, u);
-      if (!ast) {
-        noterLectureRefusee(releverDans, f, u, erreur);
-        continue;
-      }
-      try {
-        visiteur({ unite: u, ast, fichier: f, ligneDe: (noeud) => ligneDans(u, noeud), walk });
-      } catch (e) {
-        noterIllisible(releverDans, f, u, { ...erreurDeParcours(e), etape: 'parcours' });
-      }
+export function pourChaqueUniteJs(contexte, { surfaceSeulement = false, ignorerVendorise = false, garder = null, releverDans = contexte, ordre = null } = {}, visiteur) {
+  const paires = unitesAVisiter(contexte, { surfaceSeulement, ignorerVendorise, garder });
+  for (const { fichier: f, unite: u } of ordre ? [...paires].sort(ordre) : paires) {
+    const { ast, erreur } = lireUnite(f, u);
+    if (!ast) {
+      noterLectureRefusee(releverDans, f, u, erreur);
+      continue;
+    }
+    try {
+      visiteur({ unite: u, ast, fichier: f, ligneDe: (noeud) => ligneDans(u, noeud), walk });
+    } catch (e) {
+      noterIllisible(releverDans, f, u, { ...erreurDeParcours(e), etape: 'parcours' });
     }
   }
 }

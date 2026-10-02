@@ -9,10 +9,13 @@
  */
 import path from 'node:path';
 import { constat } from '../moteur/modele.js';
-import { pourChaqueUniteJs, nomPointe, aCommentaireDansPortee } from '../moteur/analyse-js.js';
+import { pourChaqueUniteJs, nomPointe, aCommentaireDansPortee, ligneFinDans, erreurDeParcours } from '../moteur/analyse-js.js';
 import { numeroLigne } from '../moteur/lignes.js';
 import { mesurerFonction, mesurerProgramme, nomDeFonction, nomDuNiveauSuperieur, estAutoAppelee } from '../moteur/fonctions.js';
 import { mesurerLignes, NOTE_LIGNES_APPROCHEES } from '../moteur/lignes-de-code.js';
+import { creerRecherche } from '../moteur/clones.js';
+import { aSignatureDeBundleur } from '../contexte/inventaire.js';
+import { citerSiBesoin } from '../moteur/texte-du-widget.js';
 
 const SEUILS = {
   fichierLong: 600,        // lignes de code
@@ -245,58 +248,176 @@ export function analyserTracesDev(ctx) {
   return constats;
 }
 
-/** Duplication de blocs entre fichiers — explicitement visée par le guide. */
-export function analyserDuplication(ctx) {
-  const constats = [];
-  const TAILLE = 8;                 // fenêtre de lignes normalisées
-  const empreintes = new Map();
+/** Le nombre de clones, et d'exemplaires par clone, que la preuve de A-DUP-01 garde : les plus gros ; le titre dit le total, `groupesOmis` et `instancesOmises` le reste. */
+const MAX_CLONES_DANS_LA_PREUVE = 100;
+const MAX_EXEMPLAIRES_DANS_LA_PREUVE = 20;
 
-  for (const f of ctx.fichiers) {
-    if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || !['.js', '.mjs'].includes(f.ext)) continue;
-    const lignes = f.lignes
-      .map((l, i) => ({ i: i + 1, t: l.trim() }))
-      .filter((l) => l.t && !/^(\/\/|\/\*|\*)/.test(l.t));
+/** Le nombre de clones que le texte de A-DUP-01 décrit : les plus gros. */
+const CLONES_DITS = 3;
 
-    for (let i = 0; i + TAILLE <= lignes.length; i++) {
-      const bloc = lignes.slice(i, i + TAILLE);
-      // Normalisation : on ignore les noms d'identifiants et les littéraux,
-      // pour attraper le copier-coller légèrement retouché.
-      const cle = bloc.map((l) => l.t.replace(/["'`][^"'`]*["'`]/g, 'S').replace(/\b\d+(\.\d+)?\b/g, 'N').replace(/\s+/g, '')).join('|');
-      if (cle.length < 120) continue;
-      (empreintes.get(cle) ?? empreintes.set(cle, []).get(cle)).push({ fichier: f.chemin, ligne: bloc[0].i });
-    }
+/** Au-delà de ce nombre d'exemplaires, un clone est une duplication massive, majeure à elle seule : un plafond qui laisserait passer sans rien dire le code répété plus souvent ferait gagner à répéter. */
+const EXEMPLAIRES_MAJEUR = 5000;
+
+/** Le nombre de fichiers dont A-DUP-00 dit le nom : quelques-uns, pas les dix mille d'un dépôt hostile. */
+const MAX_NOMMES = 10;
+
+/**
+ * Un code qu'on dit minifié : des lignes de plus de 200 caractères en moyenne, sur plus de 1 Kio. Rien sur le nombre de lignes : une seule ligne de 20 Kio l'est. Le plancher
+ * laisse hors de cause un court script d'une page, sans écarter les morceaux de quelques Kio qu'un empaqueteur découpe (les morceaux d'une même bibliothèque, minifiés,
+ * se ressemblent entre eux : comparés, ils feraient du code de la bibliothèque un défaut du widget).
+ */
+const MINIFIE = { ligneMoyenne: 200, taille: 1024 };
+
+/** Ce que les outils de génération écrivent en tête de leur sortie (`@generated`, « DO NOT EDIT », « auto-generated »…), lu dans les premiers caractères d'un fichier ou d'un script de page. */
+const MARQUE_DE_GENERATION = /@generated\b|\bDO NOT EDIT\b|\bauto-?generated\b|\bautomatically generated\b|\bcode generated\b/i;
+const DEBUT_LU = 5000;
+
+/** Pourquoi on ne compare pas ce code, dans l'ordre où A-DUP-00 le dit : la clé de `raisonDeNePasComparer` et ce qu'il en dit. */
+const RAISONS_DE_NE_PAS_COMPARER = [
+  ['tierce', 'de bibliothèques tierces ou de code construit (dossiers vendor, node_modules, dist…) ne sont pas comparés'],
+  ['minifiee', `minifiés (lignes de plus de ${MINIFIE.ligneMoyenne} caractères en moyenne) ne sont pas comparés`],
+  ['empaquetee', 'empaquetés par un outil de build ne sont pas comparés'],
+  ['generee', "générés par un outil et que la page n'exécute pas ne sont pas comparés"],
+];
+
+/** Un texte minifié : sans condition sur le nombre de lignes, qu'un code minifié n'a pas. */
+function estMinifie(texte) {
+  if (texte.length <= MINIFIE.taille) return false;
+  let lignes = 1;
+  for (let i = texte.indexOf('\n'); i !== -1; i = texte.indexOf('\n', i + 1)) lignes++;
+  return texte.length / lignes > MINIFIE.ligneMoyenne;
+}
+
+/** L'en-tête de la page ou du fichier, ou celui du script, dit-il qu'un outil a généré le code ? */
+const estGenere = (fichier, unite) => [fichier.contenu, unite.source].some((texte) => MARQUE_DE_GENERATION.test(texte.slice(0, DEBUT_LU)));
+
+/**
+ * Pourquoi une unité n'entre pas dans la comparaison, ou null : le code d'un autre (une bibliothèque, ce qu'un outil a construit), le code qu'aucun humain ne relit
+ * (minifié, empaqueté), ce qu'un outil a généré et que la page n'exécute pas. Une bannière de licence n'y change rien, et le code généré que la page exécute se compare :
+ * rien ne s'esquive en s'en disant l'auteur.
+ */
+function raisonDeNePasComparer(fichier, unite) {
+  if (fichier.vendorise || fichier.dossierExclu) return 'tierce';
+  if (estMinifie(unite.source)) return 'minifiee';
+  if (aSignatureDeBundleur(unite.source)) return 'empaquetee';
+  if (!fichier.executee && estGenere(fichier, unite)) return 'generee';
+  return null;
+}
+
+/** Au-delà de ce nombre de caractères, le chemin d'un fichier du widget n'est cité que par sa fin : le nom du fichier se lit, un chemin de milliers de caractères ne remplit pas un constat. */
+const LONGUEUR_CHEMIN_CITE = 120;
+
+/** Le chemin d'un fichier du widget tel qu'une phrase de constat le dit : borné, en extrait de code, cité quand un de ses caractères a un sens pour une sortie. */
+function cheminEnCode(chemin) {
+  const borne = chemin.length > LONGUEUR_CHEMIN_CITE ? `…${chemin.slice(-LONGUEUR_CHEMIN_CITE).toWellFormed()}` : chemin;
+  const cite = citerSiBesoin(borne);
+  return cite === borne ? `\`${borne}\`` : cite;
+}
+
+/** Où se trouve un exemplaire d'un clone : `js/a.js` lignes 10 à 45. */
+const endroit = (e) => `${cheminEnCode(e.chemin)} lignes ${e.ligne} à ${e.ligneFin}`;
+
+/** Un clone en une phrase : ses deux premiers exemplaires, les autres comptés, et sa taille. */
+function direClone(c) {
+  const autres = c.instances.length - 2;
+  return `${endroit(c.instances[0])} et ${endroit(c.instances[1])}${autres > 0 ? ` (et ${autres} autre${autres > 1 ? 's' : ''})` : ''}, ${c.lignes} lignes`;
+}
+
+/** Le constat des clones trouvés (A-DUP-01) : un seul pour tout le dépôt, les clones dans sa preuve. */
+function constatDuplication(clones, exemplairesMajeur) {
+  const entreFichiers = clones.filter((c) => new Set(c.instances.map((e) => e.chemin)).size > 1);
+  const enTest = clones.filter((c) => c.instances.every((e) => estFichierDeTest(e.chemin)));
+  const massifs = clones.filter((c) => c.instances.length > exemplairesMajeur);
+  const lignesCopiees = clones.reduce((total, c) => total + c.lignes * (c.instances.length - 1), 0);
+  const plusGros = clones[0].instances[0];
+  return constat({
+    regle: 'A-DUP-01', axe: 'A',
+    severite: entreFichiers.length > 5 || massifs.length ? 'majeur' : 'mineur', confiance: 'probable',
+    titre: `${clones.length} bloc(s) de code dupliqué(s)${entreFichiers.length ? `, dont ${entreFichiers.length} entre fichiers différents` : ''}`,
+    fichier: plusGros.chemin, ligne: plusGros.ligne,
+    constat: `Des fonctions, des blocs ou des suites d'instructions se répètent à l'identique, ou aux noms et aux valeurs près : environ ${lignesCopiees} lignes sont la copie d'un autre endroit. Seul ce qui porte de la logique compte, ni les tableaux de données, ni les suites d'appels du même nom. Les plus gros : ${clones.slice(0, CLONES_DITS).map(direClone).join(' ; ')}.`
+      + (enTest.length ? ` ${enTest.length} de ces blocs sont entièrement dans des fichiers de test.` : '')
+      + (massifs.length ? ` ${massifs.length} bloc(s) sont répétés plus de ${exemplairesMajeur} fois : une duplication massive.` : ''),
+    impact: "Le guide le dit explicitement : « un défaut corrigé à un endroit restera silencieusement présent dans les autres ». La duplication entre fichiers est aussi ce qui fait grossir le temps de revue sans rien apporter.",
+    remediation: 'Extraire la logique partagée dans une fonction ou un module commun, appelé par chacun des emplacements.',
+    referentiels: ['Guide de contribution Grist.Gouv — « Duplicated code is harder to review and creates maintenance debt »'],
+    preuve: {
+      groupes: clones.slice(0, MAX_CLONES_DANS_LA_PREUVE).map((c) => ({
+        forme: c.forme, type: c.type, lignes: c.lignes, masse: c.masse,
+        instances: c.instances.slice(0, MAX_EXEMPLAIRES_DANS_LA_PREUVE).map((e) => ({ fichier: e.chemin, ligne: e.ligne, ligneFin: e.ligneFin })),
+        ...(c.instances.length > MAX_EXEMPLAIRES_DANS_LA_PREUVE ? { instancesOmises: c.instances.length - MAX_EXEMPLAIRES_DANS_LA_PREUVE } : {}),
+      })),
+      ...(clones.length > MAX_CLONES_DANS_LA_PREUVE ? { groupesOmis: clones.length - MAX_CLONES_DANS_LA_PREUVE } : {}),
+    },
+  });
+}
+
+/**
+ * Ce que la recherche n'a pas comparé (A-DUP-00, une information) : l'absence de A-DUP-01 ne dit rien de ces parties. Du code que la page exécute qu'un plafond a laissé
+ * de côté, ou qu'une erreur de l'outil a interrompu, rend la mesure partielle : l'axe garde ce qu'il a vu, sans prix, et le verdict ne peut pas être CONFORME sans réserve.
+ * @param {{laissees: Object<string, number>, trop: Array<{chemin: string, executee: boolean}>, executeesLues: number}} bilan
+ * @param {{pasEpuises: boolean, echec?: string}} limites `echec` : ce que dit l'erreur qui a interrompu la recherche
+ */
+function constatCodeNonCompare({ laissees, trop, executeesLues }, limites) {
+  const causes = RAISONS_DE_NE_PAS_COMPARER.filter(([raison]) => laissees[raison]).map(([raison, texte]) => `${laissees[raison]} fichier(s) ou script(s) ${texte}`);
+  const tropExecutes = trop.filter((u) => u.executee).length;
+  if (trop.length) {
+    const chemins = [...new Set(trop.map((u) => u.chemin))];                    // une page à plusieurs scripts n'est nommée qu'une fois
+    causes.push(`${trop.length} fichier(s) ou script(s) trop volumineux pour être gardés en mémoire${tropExecutes ? ` (dont ${tropExecutes} que la page exécute)` : ''} n'ont pas été comparés (${chemins.slice(0, MAX_NOMMES).map(cheminEnCode).join(', ')}${chemins.length > MAX_NOMMES ? ', …' : ''})`);
   }
+  if (limites.pasEpuises) causes.push("la recherche a atteint le plafond de travail fixé et s'est arrêtée avant la fin");
+  if (limites.echec) causes.push(`la recherche s'est interrompue sur une erreur de l'outil (${limites.echec}) : aucun clone n'a été rendu`);
+  if (!causes.length) return null;
+  const partielle = tropExecutes > 0 || ((limites.pasEpuises || Boolean(limites.echec)) && executeesLues > 0);
+  return constat({
+    regle: 'A-DUP-00', axe: 'A', severite: 'info', confiance: 'certain',
+    titre: partielle ? "Du code que la page exécute n'a pas été comparé par la recherche de code dupliqué" : 'Code laissé de côté par la recherche de code dupliqué',
+    constat: `La recherche de code dupliqué n'a pas tout comparé : ${causes.join(' ; ')}.`,
+    impact: "Du code dupliqué peut subsister dans ce qui n'a pas été comparé : l'absence de constat A-DUP-01 ne dit rien de ces parties.",
+    remediation: "Rien à corriger pour cela : c'est ce que l'outil ne compare pas, dit pour que l'absence de constat ne passe pas pour une preuve. Du code minifié, empaqueté ou trop volumineux se relit dans ses sources, à part.",
+    mesurePartielle: partielle,
+  });
+}
 
-  const groupes = [...empreintes.values()]
-    .filter((occ) => occ.length > 1)
-    .filter((occ) => new Set(occ.map((o) => o.fichier)).size > 1 || occ.length > 2);
-
-  // Fusion des groupes chevauchants : un bloc de 40 lignes dupliqué produit
-  // sinon 33 groupes qui décrivent le même copier-coller.
-  const retenus = [];
-  const vus = new Set();
-  for (const occ of groupes.sort((a, b) => b.length - a.length)) {
-    const cle = occ.map((o) => `${o.fichier}:${Math.floor(o.ligne / 10)}`).sort().join(',');
-    if (vus.has(cle)) continue;
-    vus.add(cle);
-    retenus.push(occ);
+/** La recherche, ou ce qu'une erreur de l'outil (la mémoire, la pile) en a laissé : l'audit ne s'arrête pas pour elle, A-DUP-00 la dit. */
+function chercherSansAbandon(recherche) {
+  try {
+    return recherche.chercher();
+  } catch (e) {
+    return { clones: [], limites: { pasEpuises: false, echec: erreurDeParcours(e).message } };
   }
+}
 
-  if (retenus.length) {
-    const inter = retenus.filter((o) => new Set(o.map((x) => x.fichier)).size > 1);
-    constats.push(constat({
-      regle: 'A-DUP-01', axe: 'A',
-      severite: inter.length > 5 ? 'majeur' : 'mineur', confiance: 'probable',
-      titre: `${retenus.length} bloc(s) de code dupliqué(s)${inter.length ? `, dont ${inter.length} entre fichiers différents` : ''}`,
-      fichier: retenus[0][0].fichier, ligne: retenus[0][0].ligne,
-      constat: `Des séquences d'au moins ${TAILLE} lignes se répètent à l'identique (aux noms et littéraux près).`,
-      impact: "Le guide le dit explicitement : « un défaut corrigé à un endroit restera silencieusement présent dans les autres ». La duplication entre fichiers est aussi ce qui fait grossir le temps de revue sans rien apporter.",
-      remediation: 'Extraire la logique partagée dans un module commun importé par les deux emplacements.',
-      referentiels: ['Guide de contribution Grist.Gouv — « Duplicated code is harder to review and creates maintenance debt »'],
-      preuve: { groupes: retenus },
-    }));
-  }
-  return constats;
+/**
+ * L'ordre où les unités entrent dans la recherche : le code exécuté d'abord, puis du plus court au plus long, puis par chemin. Les nœuds gardés ont un plafond pour tout le
+ * dépôt, et ce qui ne tient pas n'est pas comparé : mieux vaut que ce soit le plus gros fichier, ou du code que la page ne charge pas, que du code que le widget exécute, et
+ * que le choix ne soit pas celui de l'inventaire, qui suit le système de fichiers (le même dépôt n'aurait pas le même rapport sous Linux et sous Windows).
+ */
+const ordreDesUnites = (a, b) => Number(Boolean(b.fichier.executee)) - Number(Boolean(a.fichier.executee))
+  || a.unite.source.length - b.unite.source.length
+  || (a.unite.chemin < b.unite.chemin ? -1 : a.unite.chemin > b.unite.chemin ? 1 : 0);
+
+/**
+ * Duplication de code, explicitement visée par le guide : des fonctions, des blocs et des suites d'instructions qui se répètent, à l'identique ou aux noms et
+ * aux valeurs près (voir `moteur/clones.js`), dans un fichier ou entre fichiers. Tout le code lisible qui n'est pas celui d'un autre se compare, exécuté ou non, tests
+ * compris ; le code des scripts de page se compare comme celui des fichiers. Ce qui ne se compare pas est dit (A-DUP-00).
+ * `seuils` : ceux de la recherche (les essais les abaissent ; la suite des règles n'en donne aucun) ; `exemplairesMajeur` : le nombre d'exemplaires d'un clone qui en fait un constat majeur.
+ */
+export function analyserDuplication(ctx, { seuils, exemplairesMajeur = EXEMPLAIRES_MAJEUR } = {}) {
+  const recherche = creerRecherche(seuils);
+  const bilan = { laissees: {}, trop: [], executeesLues: 0 };
+  const garder = ({ fichier, unite }) => {
+    const raison = raisonDeNePasComparer(fichier, unite);
+    if (raison) bilan.laissees[raison] = (bilan.laissees[raison] ?? 0) + 1;
+    return !raison;
+  };
+  pourChaqueUniteJs(ctx, { garder, ordre: ordreDesUnites }, ({ ast, unite, fichier, ligneDe }) => {
+    const gardee = recherche.ajouter({ chemin: unite.chemin, ast, ligneDe, ligneFinDe: (noeud) => ligneFinDans(unite, noeud) });
+    if (!gardee) bilan.trop.push({ chemin: unite.chemin, executee: Boolean(fichier.executee) });
+    else if (fichier.executee) bilan.executeesLues++;
+  });
+  const { clones, limites } = chercherSansAbandon(recherche);
+  return [...(clones.length ? [constatDuplication(clones, exemplairesMajeur)] : []), ...[constatCodeNonCompare(bilan, limites)].filter(Boolean)];
 }
 
 /** Présence et nature des tests, exigence explicite du guide. */
@@ -320,10 +441,11 @@ const CHEMIN_TEST_UNITAIRE = /(^|[/\\_-])tests?([/\\_-]|$)/i;
 // Playwright/Puppeteer eux-mêmes plutôt qu'au nom exact du paquet cité.
 const CONTENU_TEST_E2E = /require\(['"][^'"]*playwright|from\s+['"][^'"]*playwright|@playwright\/test|require\(['"]puppeteer|\.launch\(|\.newPage\(|\bchromium\./i;
 
+const estFichierDeTest = (chemin) => CHEMIN_TEST_UNITAIRE.test(chemin) || /\.(test|spec)\.(m?js|ts|jsx|tsx)$/i.test(chemin);
+
 export function analyserTests(ctx) {
   const constats = [];
-  const testsUnitaires = ctx.fichiers.filter((f) =>
-    CHEMIN_TEST_UNITAIRE.test(f.chemin) || /\.(test|spec)\.(m?js|ts|jsx|tsx)$/i.test(f.chemin));
+  const testsUnitaires = ctx.fichiers.filter((f) => estFichierDeTest(f.chemin));
   const e2e = ctx.fichiers.filter((f) =>
     /(playwright|cypress|puppeteer|e2e|integration|browser)/i.test(f.chemin) ||
     (f.contenu && !estCarteDeSources(f) && CONTENU_TEST_E2E.test(f.contenu)));

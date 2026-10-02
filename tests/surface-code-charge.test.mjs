@@ -112,8 +112,19 @@ const DECLENCHEURS = {
     'var a = 1;',
   ].join('\n') + '\n',
 };
-// A-DUP-01 compare deux fichiers : le même bloc de 10 lignes dans deux fichiers.
-const BLOC_DUPLIQUE = Array.from({ length: 12 }, (_, i) => `const valeur${i} = calculer(donnees, ${i}, 'clef ${i}', options.parametre${i});`).join('\n') + '\n';
+// A-DUP-01 compare deux fichiers : la même fonction, de onze lignes, dans deux fichiers.
+const BLOC_DUPLIQUE = `function filtrer(liste, transformer) {
+  const resultat = [];
+  for (let i = 0; i < liste.length; i++) {
+    if (liste[i].actif && liste[i].valeur > 0) {
+      resultat.push(transformer(liste[i]));
+    } else {
+      suivre('ignoré', liste[i]);
+    }
+  }
+  return resultat;
+}
+`;
 
 for (const [regle, contenu] of Object.entries(DECLENCHEURS)) {
   test(`B : ${regle} juge un fichier du widget et laisse en paix le même fichier rangé dans dist/`, async () => {

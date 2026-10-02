@@ -76,6 +76,35 @@ Deux mesures se font sur ce que le code est, non sur ce qu'il ressemble.
   est du code. Un fichier qu'`acorn` ne lit pas (JSX, TypeScript, erreur de
   syntaxe) se compte encore d'après le premier caractère, et le constat le dit.
 
+Le code dupliqué (A-DUP-01) se cherche, lui aussi, sur l'arbre et non sur le
+texte : des fonctions, des blocs ou des suites d'instructions de même forme, à
+l'identique ou aux noms et aux valeurs près, dans un fichier ou entre fichiers,
+scripts de page compris. Le renommage doit rester cohérent : `a + b * a` et
+`x + y * x` sont des copies, `x + y * y` n'en est pas une. Seul ce qui porte de
+la logique compte : ni les tableaux de données, ni les suites d'appels du même
+nom (`set('a', 1); set('b', 2); …`) ou d'affectations de littéraux, où la
+répétition est l'idiome. Un clone plus gros couvre ce qu'il contient : une
+fonction copiée ne fait pas trente blocs, elle en fait un. Tout le code lisible
+qui n'est pas celui d'un autre se compare, que la page l'exécute ou non, tests
+compris (le constat dit la part des blocs qui n'est que dans des fichiers de
+test). Jusqu'à cinq clones entre fichiers, le constat est mineur ; au-delà, ou
+pour un clone répété plus de cinq mille fois, il est majeur.
+
+Ce que la recherche ne compare pas est dit (A-DUP-00, une information), pour que
+l'absence de constat ne passe pas pour une preuve : le code d'un autre
+(bibliothèques tierces, code construit), le code qu'aucun humain ne relit
+(minifié, empaqueté par un outil de build), ce qu'un outil a généré et que la
+page n'exécute pas, et ce qui ne tient pas dans les plafonds de mémoire et de
+travail de la recherche. Ces plafonds se comptent, ils ne se chronomètrent pas :
+le même dépôt donne le même rapport sur une machine lente ou rapide. Une erreur
+de l'outil pendant la recherche n'arrête pas l'audit : elle se dit de la même
+façon. Quand le code laissé de côté par un plafond, ou par une erreur, est du
+code que la page exécute, la mesure est partielle : l'axe garde ce qu'il a vu,
+sans lui faire payer ce que l'outil n'a pas pu lire, mais le verdict ne peut
+plus être « conforme » sans réserve.
+Se dire généré, ou porter une licence, n'exempte rien : le code généré que la
+page exécute se compare.
+
 ## Axe B — Lisibilité humaine
 
 C'est l'axe le plus spécifique au guide Grist.Gouv, qui pose une exigence
