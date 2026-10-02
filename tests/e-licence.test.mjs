@@ -39,6 +39,14 @@ const PAS_UNE_LICENCE = [
   ['un nom qui continue après LICENSE', 'LICENSEE'],
   ['une sauvegarde de licence', 'LICENSE.md.bak'],
   ['un autre fichier de la racine', 'README.md'],
+  ['un fichier qui ne dit aucune licence après le tiret', 'LICENSE-notes.md'],
+  ['un tiret sans rien après', 'LICENSE-'],
+  ['un souligné sans nom de licence', 'LICENSE_header'],
+  ['un outil de licences', 'license-checker.js'],
+  ['une sauvegarde de licence à double licence', 'LICENSE-MIT.txt.bak'],
+  ['la liste des licences tierces, un fichier au pluriel', 'LICENSES'],
+  ['un dossier LICENSES qui n\'est pas à la racine', 'docs/LICENSES/MIT.txt'],
+  ['un dossier dans le dossier LICENSES', 'LICENSES/tiers/MIT.txt'],
 ];
 for (const [nom, chemin] of PAS_UNE_LICENCE) {
   test(`E-LIC-01 : ${nom} (${chemin}) n'est pas la licence du dépôt : il n'y en a pas`, () => {
@@ -49,7 +57,10 @@ for (const [nom, chemin] of PAS_UNE_LICENCE) {
   });
 }
 
-const NOMS_DE_LICENCE = ['LICENSE', 'LICENSE.md', 'LICENSE.txt', 'LICENCE', 'LICENCE.md', 'license', 'License.TXT', 'COPYING', 'COPYING.md', 'Licence.Md'];
+const NOMS_DE_LICENCE = ['LICENSE', 'LICENSE.md', 'LICENSE.txt', 'LICENCE', 'LICENCE.md', 'license', 'License.TXT', 'COPYING', 'COPYING.md', 'Licence.Md',
+  'UNLICENSE', 'unlicense.txt', 'LICENSE-MIT', 'LICENSE_MIT', 'LICENSE-MIT.txt', 'license_mit.md', 'LICENCE-MIT', 'COPYING-MIT', 'COPYING.LESSER',
+  'LICENSE-APACHE', 'LICENSE-BSD', 'LICENSE-GPL', 'LICENSE-LGPL', 'LICENSE-AGPL', 'LICENSE-MPL', 'LICENSE-EUPL', 'LICENSE-ISC', 'LICENSE-CC0', 'LICENSE-ZLIB',
+  'LICENSE-UNLICENSE', 'LICENSE-2.0.txt', 'LICENSE_3', 'LICENSE-2.0', 'LICENSES/MIT.txt', 'LICENSES/Apache-2.0.txt', 'licenses/mit.txt'];
 for (const chemin of NOMS_DE_LICENCE) {
   test(`E-LIC-02 : ${chemin} à la racine est la licence du dépôt`, () => {
     assert.deepEqual(types([lu(chemin)]), [['E-LIC-02', chemin, 'MIT']]);
@@ -70,6 +81,10 @@ const TYPES = [
   ['GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007', 'GPL/AGPL', 'info'],
   ['GNU AFFERO GENERAL PUBLIC LICENSE\nVersion 3', 'GPL/AGPL', 'info'],
   ['gnu general public license', 'GPL/AGPL', 'info'],
+  ['GNU LESSER GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007\n\nThis version of the GNU Lesser General Public License incorporates\nthe terms and conditions of version 3 of the GNU General Public\nLicense', 'LGPL', 'info'],
+  ['GNU LIBRARY GENERAL PUBLIC LICENSE\nVersion 2, June 1991', 'LGPL', 'info'],
+  ['GNU LESSER GENERAL PUBLIC LICENSE\nVersion 2.1, February 1999\n\n[This is the first released version of the Lesser GPL.  It also counts\nas the successor of the GNU Library Public License, version 2, hence\nthe version number 2.1.]', 'LGPL', 'info'],
+  ['gnu lesser general public license', 'LGPL', 'info'],
   ['BSD 3-Clause License', 'BSD', 'info'],
   ['bsd license', 'BSD', 'info'],
   ['Tous droits réservés.', 'non identifiée', 'mineur'],
@@ -83,17 +98,26 @@ for (const [texte, type, severite] of TYPES) {
     assert.ok(!c.bloquant);
     assert.match(c.constat, new RegExp(`type détecté : ${type.replace('/', '\\/')}\\.$`));
     if (type === 'GPL/AGPL') assert.match(c.impact, /effet contaminant/);
+    else if (type === 'LGPL') assert.match(c.impact, /^Licence à copyleft faible : le code qui l'utilise garde sa licence/);
     else if (type === 'non identifiée') assert.match(c.impact, /à vérifier manuellement/);
     else assert.match(c.impact, /compatible avec un fork/);
     assert.equal(c.remediation, type === 'non identifiée' ? "Utiliser le texte standard non modifié d'une licence reconnue." : 'Rien à corriger.');
   });
 }
 
-// Quand un texte porte plusieurs noms, le premier de la liste l'emporte, où que les noms soient dans le texte.
+// Quand un texte porte plusieurs noms, le premier de la liste l'emporte, où que les noms soient dans le texte ; la GPL et la LGPL, dont chaque texte nomme l'autre, se départagent
+// par la place : le nom qui vient d'abord est le titre.
 const PRIORITES = [
   ['MIT passe avant Apache', 'Apache License. MIT License.', 'MIT'],
   ['Apache passe avant EUPL', 'EUPL. Apache License.', 'Apache 2.0'],
   ['EUPL passe avant la GPL', 'GNU GENERAL PUBLIC LICENSE, ou EUPL.', 'EUPL'],
+  ['EUPL passe avant la LGPL', 'GNU LESSER GENERAL PUBLIC LICENSE, ou EUPL.', 'EUPL'],
+  ['Apache passe avant la LGPL', 'GNU LESSER GENERAL PUBLIC LICENSE, ou Apache License.', 'Apache 2.0'],
+  ['MIT passe avant la LGPL', 'GNU LESSER GENERAL PUBLIC LICENSE, ou MIT License.', 'MIT'],
+  ['la LGPL passe avant la GPL, dont son texte reprend le nom', 'GNU LESSER GENERAL PUBLIC LICENSE. Elle reprend les termes de la GNU GENERAL PUBLIC LICENSE.', 'LGPL'],
+  ['la GPL passe avant la LGPL, que son préambule cite', 'GNU GENERAL PUBLIC LICENSE\nVersion 2, June 1991\n\n(Some other Free Software Foundation software is covered by\nthe GNU Lesser General Public License instead.)', 'GPL/AGPL'],
+  ['la GPL affero passe avant la LGPL, que son texte cite', 'GNU AFFERO GENERAL PUBLIC LICENSE. Voir aussi la GNU LIBRARY GENERAL PUBLIC LICENSE.', 'GPL/AGPL'],
+  ['la LGPL passe avant BSD', 'BSD. GNU LESSER GENERAL PUBLIC LICENSE.', 'LGPL'],
   ['la GPL passe avant BSD', 'BSD. GNU GENERAL PUBLIC LICENSE.', 'GPL/AGPL'],
 ];
 for (const [nom, texte, type] of PRIORITES) {
@@ -161,6 +185,20 @@ test('E-LIC-02 : plusieurs licences à la racine, on cite la première dans l\'o
   assert.deepEqual(types([png, pdf]), [['E-LIC-02', 'COPYING.png', 'non identifiée']]);
 });
 
+test('E-LIC-02 : une double licence : on cite la première dans l\'ordre des noms, LICENSE-APACHE avant LICENSE-MIT, quel que soit l\'ordre de l\'inventaire', () => {
+  const apache = lu('LICENSE-APACHE', 'Apache License\nVersion 2.0');
+  const mit = lu('LICENSE-MIT', MIT);
+  assert.deepEqual(types([mit, apache]), [['E-LIC-02', 'LICENSE-APACHE', 'Apache 2.0']]);
+  assert.deepEqual(types([apache, mit]), [['E-LIC-02', 'LICENSE-APACHE', 'Apache 2.0']]);
+});
+
+test('E-LIC-02 : un LICENSE passe avant les textes du dossier LICENSES et avant UNLICENSE, un COPYING avant LICENSE', () => {
+  const [reuse, licence, unlicence, copying] = [lu('LICENSES/MIT.txt', 'Apache License'), lu('LICENSE', MIT), lu('UNLICENSE', 'EUPL'), lu('COPYING', 'GNU GENERAL PUBLIC LICENSE')];
+  assert.deepEqual(types([reuse, unlicence, licence]), [['E-LIC-02', 'LICENSE', 'MIT']]);
+  assert.deepEqual(types([unlicence, reuse]), [['E-LIC-02', 'LICENSES/MIT.txt', 'Apache 2.0']]);
+  assert.deepEqual(types([licence, unlicence, reuse, copying]), [['E-LIC-02', 'COPYING', 'GPL/AGPL']]);
+});
+
 test('E-LIC-02 : l\'ordre des fichiers de l\'inventaire n\'est pas modifié', () => {
   const fichiers = [lu('LICENSE'), lu('COPYING'), lu('LICENCE')];
   constatsDe(fichiers);
@@ -173,6 +211,15 @@ const PAGE = page('<script src="app.js"></script>');
 const SANS_RIEN = 'var a = 1;\n';
 const PLAFOND = 400;
 const GROS = 'x'.repeat(PLAFOND + 1);
+
+test('un dépôt dont la licence est dans LICENSES/ ou dans LICENSE-MIT : l\'inventaire la lit, la licence est présente', async () => {
+  const texte = { MIT, 'Apache 2.0': 'Apache License\nVersion 2.0', 'non identifiée': 'This is free and unencumbered software released into the public domain.' };
+  for (const [chemin, type] of [['LICENSES/MIT.txt', 'MIT'], ['LICENSE-MIT', 'MIT'], ['LICENSE_APACHE', 'Apache 2.0'], ['UNLICENSE', 'non identifiée']]) {
+    const a = await auditer({ 'index.html': PAGE, 'app.js': SANS_RIEN, [chemin]: texte[type] });
+    assert.deepEqual(a.de('E-LIC-01'), [], chemin);
+    assert.deepEqual(a.de('E-LIC-02').map((c) => [c.fichier, c.titre]), [[chemin, `Licence du dépôt : ${type}`]], chemin);
+  }
+});
 
 test('un LICENSE.pdf dans le dépôt : l\'audit va à son terme, la licence est présente et son type n\'est pas identifié', async () => {
   const a = await auditer({ 'index.html': PAGE, 'app.js': SANS_RIEN, 'LICENSE.pdf': '%PDF-1.4\n\u0000\u0001' });

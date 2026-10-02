@@ -1,11 +1,13 @@
 #!/usr/bin/env node
 /**
  * Rejoue les mutants de la règle de licence (`src/regles/e-dependances.js`, méthode : `scripts/lib/rejouer-mutants.mjs`) : les noms qu'on prend pour une
- * licence (`LICENSE`, `LICENCE`, `COPYING`, une extension), ce qu'on n'en prend pas (un dossier, une sauvegarde), la licence qu'on cite quand il y en a
+ * licence (`LICENSE`, `LICENCE`, `COPYING`, `UNLICENSE`, une extension, `LICENSE-MIT`, le dossier `LICENSES/`), ce qu'on n'en prend pas (un dossier, une sauvegarde), la licence qu'on cite quand il y en a
  * plusieurs, la fenêtre lue et le type reconnu (avec l'ordre où on les essaie), la sévérité, la taille dite, et la licence dont l'outil n'a pas lu le
  * texte (présente, d'un type non identifié, sans échec). Chaque mutant est tué par une assertion de `tests/e-licence.test.mjs`. Les essais de
  * `tests/fichiers-non-lus-regles.test.mjs` n'ont pas de mutant : ils gardent une famille de défauts (une règle, quelle qu'elle soit, qui lirait le texte
  * d'un fichier non lu), pas une ligne.
+ *
+ * Mutant équivalent, non écrit : `LICENSES\/[^/]+` à `LICENSES\/[^/]*` dans le nom d'une licence : le chemin d'un fichier ne finit jamais par `/`, un nom vide du dossier n'existe pas.
  *
  * Usage : node scripts/mutants-licence.mjs [expression régulière sur le libellé] [--part=i/n]
  */
@@ -20,19 +22,44 @@ const L1 = "regle: 'E-LIC-01'";
 const L2 = "regle: 'E-LIC-02'";
 const TAILLE = '`Fichier de licence présent (';
 const IMPACT_GPL = "impact: type === 'GPL/AGPL'";
+const NOM_GPL = 'const NOM_GPL = ';
+const NOM_LGPL = 'const NOM_LGPL = ';
+const PLACE = 'const placeDe = ';
+const CHOIX_LGPL = "placeDe(NOM_LGPL, t) < placeDe(NOM_GPL, t) ? 'LGPL'";
+const CHOIX_GPL = ": NOM_GPL.test(t) ? 'GPL/AGPL'";
 
 // [fichier, chaîne d'origine (une seule occurrence), chaîne mutée, libellé]
 const MUTANTS = [
   // --- le nom d'une licence
-  dansLigne(E, NOM, '^(LICEN', '(LICEN', 'nom : un nom qui contient LICENSE n\'importe où est une licence (MYLICENSE)'),
-  dansLigne(E, NOM, '?$/i', '?/i', 'nom : un nom qui commence par LICENSE est une licence (LICENSEE, LICENSE.md.bak)'),
-  dansLigne(E, NOM, '$/i', '$/', 'nom : la casse compte (license, License.TXT)'),
-  dansLigne(E, NOM, 'LICEN[SC]E', 'LICENSE', 'nom : LICENCE n\'est pas une licence'),
-  dansLigne(E, NOM, 'LICEN[SC]E', 'LICENCE', 'nom : LICENSE n\'est pas une licence'),
-  dansLigne(E, NOM, '|COPYING', '', 'nom : COPYING n\'est pas une licence'),
-  dansLigne(E, NOM, '(\\.[a-z]+)?$', '(\\.[a-z]+)$', 'nom : une licence sans extension n\'est pas une licence'),
-  dansLigne(E, NOM, '[a-z]+)?$', '[a-z])?$', 'nom : une extension de plus d\'une lettre n\'est pas une extension (LICENSE.md)'),
-  dansLigne(E, NOM, '(\\.[a-z]+)?$', '(\\.[a-z]+)*$', 'nom : plusieurs extensions sont une extension (LICENSE.md.bak)'),
+  dansLigne(E, NOM, '^(?:', '(?:', 'nom : un nom qui contient LICENSE n\'importe où est une licence (MYLICENSE)'),
+  dansLigne(E, NOM, ')$/i', ')/i', 'nom : un nom qui commence par LICENSE est une licence (LICENSEE, LICENSE.md.bak)'),
+  dansLigne(E, NOM, ')$/i', ')$/', 'nom : la casse compte (license, License.TXT)'),
+  dansLigne(E, NOM, '(?:LICEN[SC]E|COPYING|UNLICENSE)', '(?:LICENSE|COPYING|UNLICENSE)', 'nom : LICENCE n\'est pas une licence'),
+  dansLigne(E, NOM, '(?:LICEN[SC]E|COPYING|UNLICENSE)', '(?:LICENCE|COPYING|UNLICENSE)', 'nom : LICENSE n\'est pas une licence'),
+  dansLigne(E, NOM, '|COPYING|UNLICENSE)', '|UNLICENSE)', 'nom : COPYING n\'est pas une licence'),
+  dansLigne(E, NOM, '|UNLICENSE)(?:', ')(?:', 'nom : UNLICENSE n\'est pas une licence'),
+  dansLigne(E, NOM, '(?:\\.[a-z]+)?|(?:LICEN', '(?:\\.[a-z]+)|(?:LICEN', 'nom : une licence sans extension n\'est pas une licence'),
+  dansLigne(E, NOM, '(?:\\.[a-z]+)?|(?:LICEN', '(?:\\.[a-z])?|(?:LICEN', 'nom : une extension de plus d\'une lettre n\'est pas une extension (LICENSE.md)'),
+  dansLigne(E, NOM, '(?:\\.[a-z]+)?|(?:LICEN', '(?:\\.[a-z]+)*|(?:LICEN', 'nom : plusieurs extensions sont une extension (LICENSE.md.bak)'),
+  // une double licence : un nom de licence ou une version après un tiret ou un souligné
+  dansLigne(E, NOM, '(?:LICEN[SC]E|COPYING)[-_]', '(?:LICENSE|COPYING)[-_]', 'nom : LICENCE-MIT n\'est pas une licence'),
+  dansLigne(E, NOM, '(?:LICEN[SC]E|COPYING)[-_]', '(?:LICENCE|COPYING)[-_]', 'nom : LICENSE-MIT n\'est pas une licence'),
+  dansLigne(E, NOM, '(?:LICEN[SC]E|COPYING)[-_]', '(?:LICEN[SC]E)[-_]', 'nom : COPYING-MIT n\'est pas une licence'),
+  dansLigne(E, NOM, '[-_](?:MIT', '[-](?:MIT', 'nom : LICENSE_MIT n\'est pas une licence'),
+  dansLigne(E, NOM, '[-_](?:MIT', '[_](?:MIT', 'nom : LICENSE-MIT n\'est pas une licence, bis'),
+  dansLigne(E, NOM, '(?:MIT|', '(?:', 'nom : LICENSE-MIT n\'est pas une licence, ter'),
+  ...['APACHE', 'BSD', 'GPL', 'LGPL', 'AGPL', 'MPL', 'EUPL', 'ISC', 'CC0', 'ZLIB'].map((nom) => dansLigne(E, NOM, `|${nom}|`, '|', `nom : LICENSE-${nom} n'est pas une licence`)),
+  dansLigne(E, NOM, '|UNLICENSE|\\d', '|\\d', 'nom : LICENSE-UNLICENSE n\'est pas une licence'),
+  dansLigne(E, NOM, '\\d[\\d.]*)', '\\d)', 'nom : LICENSE-2.0 n\'est pas une licence'),
+  dansLigne(E, NOM, '|\\d[\\d.]*)', '|[\\d.]*)', 'nom : LICENSE- est une licence'),
+  dansLigne(E, NOM, '[\\d.]*)(?:\\.[a-z]+)?|LICENSES', '[\\d.]*)|LICENSES', 'nom : LICENSE-MIT.txt n\'est pas une licence'),
+  dansLigne(E, NOM, '[\\d.]*)(?:\\.[a-z]+)?|LICENSES', '[\\d.]*)(?:\\.[a-z])?|LICENSES', 'nom : une extension de plus d\'une lettre n\'est pas une extension (LICENSE-MIT.txt)'),
+  dansLigne(E, NOM, '[\\d.]*)(?:\\.[a-z]+)?|LICENSES', '[\\d.]*)(?:\\.[a-z]+)*|LICENSES', 'nom : plusieurs extensions sont une extension (LICENSE-MIT.txt.bak)'),
+  // le dossier LICENSES
+  dansLigne(E, NOM, '|LICENSES\\/[^/]+)', ')', 'nom : un texte du dossier LICENSES n\'est pas une licence'),
+  dansLigne(E, NOM, 'LICENSES\\/[^/]+', 'LICENSES\\/.+', 'nom : un dossier du dossier LICENSES est une licence'),
+  dansLigne(E, NOM, 'LICENSES\\/[^/]+', 'LICENSES[^/]+', 'nom : LICENSES/MIT.txt n\'est pas une licence'),
+  dansLigne(E, NOM, '|LICENSES\\/', '|(?:.*\\/)?LICENSES\\/', 'nom : un dossier LICENSES qui n\'est pas à la racine est une licence'),
 
   // --- quels fichiers
   dansLigne(E, FILTRE, 'NOM_DE_LICENCE.test(f.chemin)', 'true', 'licence : tout fichier de la racine est une licence'),
@@ -65,17 +92,34 @@ const MUTANTS = [
   dansLigne(E, 'EUROPEAN UNION PUBLIC LICENCE|EUPL', '/i.test', '/.test', 'type : EUPL se reconnaît avec la casse'),
   dansLigne(E, 'EUROPEAN UNION PUBLIC LICENCE|EUPL', 'EUROPEAN UNION PUBLIC LICENCE|', '', 'type : « EUROPEAN UNION PUBLIC LICENCE » n\'est pas EUPL'),
   dansLigne(E, 'EUROPEAN UNION PUBLIC LICENCE|EUPL', '|EUPL', '', 'type : « EUPL » seul n\'est pas EUPL'),
-  dansLigne(E, 'GNU (AFFERO )?GENERAL PUBLIC', '(AFFERO )?', '', 'type : la GNU AFFERO GENERAL PUBLIC LICENSE n\'est pas reconnue'),
-  dansLigne(E, 'GNU (AFFERO )?GENERAL PUBLIC', '(AFFERO )?', '(AFFERO )', 'type : la GNU GENERAL PUBLIC LICENSE n\'est pas reconnue'),
-  dansLigne(E, 'GNU (AFFERO )?GENERAL PUBLIC', '/i.test', '/.test', 'type : la GPL se reconnaît avec la casse'),
-  dansLigne(E, 'GNU (AFFERO )?GENERAL PUBLIC', "? 'GPL/AGPL'", "? 'GPL'", 'type : la GPL s\'écrit autrement'),
+  dansLigne(E, NOM_GPL, '(AFFERO )?', '', 'type : la GNU AFFERO GENERAL PUBLIC LICENSE n\'est pas reconnue'),
+  dansLigne(E, NOM_GPL, '(AFFERO )?', '(AFFERO )', 'type : la GNU GENERAL PUBLIC LICENSE n\'est pas reconnue'),
+  dansLigne(E, NOM_GPL, '/i;', '/;', 'type : la GPL se reconnaît avec la casse'),
+  dansLigne(E, CHOIX_GPL, "? 'GPL/AGPL'", "? 'GPL'", 'type : la GPL s\'écrit autrement'),
+  dansLigne(E, NOM_LGPL, '(LESSER|LIBRARY)', '(LESSER)', 'type : la GNU LIBRARY GENERAL PUBLIC LICENSE n\'est pas reconnue'),
+  dansLigne(E, NOM_LGPL, '(LESSER|LIBRARY)', '(LIBRARY)', 'type : la GNU LESSER GENERAL PUBLIC LICENSE n\'est pas reconnue'),
+  dansLigne(E, NOM_LGPL, '/i;', '/;', 'type : la LGPL se reconnaît avec la casse'),
+  dansLigne(E, CHOIX_LGPL, "? 'LGPL'", "? 'GPL/AGPL'", 'type : la LGPL est une GPL'),
+  dansLigne(E, CHOIX_LGPL, "? 'LGPL'", "? 'lgpl'", 'type : la LGPL s\'écrit autrement'),
+  // La GPL et la LGPL se citent l'une l'autre : le nom qui vient d'abord, le titre, décide.
+  dansLigne(E, CHOIX_LGPL, 'placeDe(NOM_LGPL, t) < placeDe(NOM_GPL, t)', 'NOM_LGPL.test(t)', 'type : une GPL qui cite la LGPL est une LGPL'),
+  dansLigne(E, CHOIX_LGPL, 'placeDe(NOM_LGPL, t) < placeDe(NOM_GPL, t)', 'NOM_LGPL.test(t) && !NOM_GPL.test(t)', 'type : une LGPL qui cite la GPL est une GPL'),
+  dansLigne(E, CHOIX_LGPL, 'placeDe(NOM_LGPL, t) < placeDe(NOM_GPL, t)', 'placeDe(NOM_LGPL, t) > placeDe(NOM_GPL, t)', 'type : le nom qui vient en dernier est le titre'),
+  dansLigne(E, CHOIX_LGPL, 'placeDe(NOM_LGPL, t) < placeDe(NOM_GPL, t)', 'placeDe(NOM_LGPL, t) <= placeDe(NOM_GPL, t)', 'type : sans nom de la GPL ni de la LGPL, la LGPL'),
+  dansLigne(E, PLACE, 'Infinity', '0', 'type : un nom absent est à la place 0'),
+  dansLigne(E, PLACE, 'Infinity', '-1', 'type : un nom absent est avant tous les autres'),
+  dansLigne(E, PLACE, 'i === -1', 'i === 0', 'type : un nom en tête du texte est absent'),
   dansLigne(E, ": /BSD/i.test(t)", '/BSD/i', '/BSD/', 'type : BSD se reconnaît avec la casse'),
   dansLigne(E, ": /BSD/i.test(t)", "'non identifiée'", "'BSD'", 'type : ce qu\'on ne reconnaît pas est BSD'),
   // L'ordre : le premier de la liste l'emporte, où que les noms soient dans le texte.
   dansLigne(E, TYPE, "/MIT License/i.test(t) ?", "/MIT License/i.test(t) && !/Apache License/i.test(t) ?", 'type : Apache passe avant MIT'),
   dansLigne(E, ': /Apache License/i', "/Apache License/i.test(t) ?", "/Apache License/i.test(t) && !/EUPL/i.test(t) ?", 'type : EUPL passe avant Apache'),
   dansLigne(E, 'EUROPEAN UNION PUBLIC LICENCE|EUPL', "/i.test(t) ?", "/i.test(t) && !/GNU (AFFERO )?GENERAL PUBLIC/i.test(t) ?", 'type : la GPL passe avant EUPL'),
-  dansLigne(E, 'GNU (AFFERO )?GENERAL PUBLIC', "/i.test(t) ?", "/i.test(t) && !/BSD/i.test(t) ?", 'type : BSD passe avant la GPL'),
+  dansLigne(E, CHOIX_GPL, ': NOM_GPL.test(t) ?', ': NOM_GPL.test(t) && !/BSD/i.test(t) ?', 'type : BSD passe avant la GPL'),
+  dansLigne(E, TYPE, "/MIT License/i.test(t) ?", "/MIT License/i.test(t) && !/GNU (LESSER|LIBRARY) GENERAL PUBLIC/i.test(t) ?", 'type : la LGPL passe avant MIT'),
+  dansLigne(E, ': /Apache License/i', "/Apache License/i.test(t) ?", "/Apache License/i.test(t) && !/GNU (LESSER|LIBRARY) GENERAL PUBLIC/i.test(t) ?", 'type : la LGPL passe avant Apache'),
+  dansLigne(E, 'EUROPEAN UNION PUBLIC LICENCE|EUPL', "/i.test(t) ?", "/i.test(t) && !/GNU (LESSER|LIBRARY) GENERAL PUBLIC/i.test(t) ?", 'type : la LGPL passe avant EUPL'),
+  dansLigne(E, CHOIX_LGPL, 'placeDe(NOM_LGPL, t) < placeDe(NOM_GPL, t) ?', 'placeDe(NOM_LGPL, t) < placeDe(NOM_GPL, t) && !/BSD/i.test(t) ?', 'type : BSD passe avant la LGPL'),
 
   // --- E-LIC-01
   dansLigne(E, L1, "severite: 'majeur'", "severite: 'mineur'", 'E-LIC-01 : n\'est que mineur'),
@@ -101,6 +145,8 @@ const MUTANTS = [
   dansLigne(E, "n'a pas lu le texte", "n'a pas lu le texte", 'a lu le texte', 'E-LIC-02 : le texte d\'une licence non lue dit qu\'elle est lue'),
   dansLigne(E, IMPACT_GPL, "'GPL/AGPL'", "'BSD'", 'E-LIC-02 : la GPL a l\'impact des licences compatibles'),
   dansLigne(E, 'Licence à effet contaminant', 'effet contaminant', 'effet', 'E-LIC-02 : l\'impact de la GPL ne dit plus l\'effet contaminant'),
+  dansLigne(E, ": type === 'LGPL'", "'LGPL'", "'MIT'", 'E-LIC-02 : la LGPL a l\'impact des licences compatibles'),
+  dansLigne(E, 'Licence à copyleft faible', 'copyleft faible', 'copyleft', 'E-LIC-02 : l\'impact de la LGPL ne dit plus le copyleft faible'),
   dansLigne(E, 'à vérifier manuellement', 'à vérifier manuellement', 'rien à vérifier', 'E-LIC-02 : l\'impact d\'un type non identifié ne dit plus de vérifier'),
   dansLigne(E, "'Licence compatible avec un fork", 'compatible avec un fork', 'sans fork', 'E-LIC-02 : l\'impact d\'une licence reconnue ne dit plus qu\'elle est compatible'),
   dansLigne(E, 'remediation: !lue', '!lue', 'lue', 'E-LIC-02 : la remédiation d\'une licence non lue est celle d\'une licence lue'),
