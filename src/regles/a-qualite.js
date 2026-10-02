@@ -16,6 +16,7 @@ import { mesurerLignes, NOTE_LIGNES_APPROCHEES } from '../moteur/lignes-de-code.
 import { creerRecherche } from '../moteur/clones.js';
 import { aSignatureDeBundleur } from '../contexte/inventaire.js';
 import { citerSiBesoin } from '../moteur/texte-du-widget.js';
+import { analyserEfficacite } from './a-efficacite.js';
 
 const SEUILS = {
   fichierLong: 600,        // lignes de code
@@ -578,5 +579,5 @@ export function analyserCodeInatteignable(ctx) {
 export const reglesA = [
   analyserTailleFichiers, analyserFonctions, analyserGestionErreurs,
   analyserTracesDev, analyserDuplication, analyserTests, analyserPratiques,
-  analyserCodeInatteignable,
+  analyserCodeInatteignable, analyserEfficacite,
 ];
