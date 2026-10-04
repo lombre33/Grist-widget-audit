@@ -1,0 +1,2 @@
+# Le lanceur Windows doit rester en fins de ligne CRLF, quelle que soit la config git de la machine.
+*.cmd text eol=crlf

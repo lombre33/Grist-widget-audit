@@ -212,6 +212,13 @@ node bin/gwaudit.js --interface          # http://127.0.0.1:4317
 node bin/gwaudit.js --interface --port 8080
 ```
 
+Sous Windows, un double-clic sur `lancer-interface.cmd` (à la racine) fait la
+même chose : il démarre l'interface et ouvre le navigateur par défaut. Il
+garde aussi tout le travail sur le disque de l'outil : les rapports vont dans
+ce dossier et les fichiers temporaires dans `.tmp-travail`, au lieu du
+dossier temporaire de `C:`. `lancer-interface.sh` est l'équivalent pour Linux
+et macOS.
+
 Cette interface ne réimplémente rien : elle pilote `gwaudit` lui-même en
 sous-processus et affiche ce qu'il imprime déjà (mêmes rapports, mêmes
 codes de sortie). C'est le même code, quel que soit l'endroit où il
