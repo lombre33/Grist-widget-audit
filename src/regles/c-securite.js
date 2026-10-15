@@ -23,9 +23,7 @@ import { nomFinal, plierLitteraux, decoderAtobLitteral, decoderFromCharCodeLitte
 import { lireFeuille, nouveauBudgetCss, LIMITES_CSS } from '../moteur/css.js';
 import { numeroLigne } from '../moteur/lignes.js';
 import { analyserSecrets } from './c-secrets.js';
-
-/** Hôtes considérés comme faisant partie de l'infrastructure Grist elle-même. */
-const HOTES_GRIST = [/(^|\.)getgrist\.com$/i, /(^|\.)grist\.numerique\.gouv\.fr$/i, /(^|\.)gristlabs\.com$/i];
+import { estGrist } from '../contexte/hotes-grist.js';
 
 const REF_ANSSI = 'ANSSI — Recommandations pour la sécurisation des sites web';
 const REF_GUIDE = 'Guide de contribution Grist.Gouv — « Safe : no requests to undocumented external services »';
@@ -33,7 +31,6 @@ const REF_GUIDE = 'Guide de contribution Grist.Gouv — « Safe : no requests to
 function hote(url) {
   try { return new URL(url, 'https://widget.local/').hostname; } catch { return null; }
 }
-const estGrist = (h) => h && HOTES_GRIST.some((r) => r.test(h));
 const estLocal = (h) => !h || h === 'widget.local' || h === 'localhost' || h === '127.0.0.1';
 
 /** Mémorise un hôte externe réellement contacté, pour le contrôle croisé « documenté dans le README » de l'axe B (B-DOC-04). */

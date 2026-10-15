@@ -35,6 +35,7 @@ import * as esbuild from 'esbuild';
 import { demarrerServeur } from './serveur.js';
 import { constat } from '../moteur/modele.js';
 import { analyserAccesAppat } from '../regles/d-perimetre.js';
+import { estGrist } from '../contexte/hotes-grist.js';
 
 // `new URL(import.meta.url).pathname` casse sur Windows : un chemin
 // `file:///D:/...` donne un pathname `/D:/...` (barre oblique de tête que
@@ -816,8 +817,10 @@ export async function auditDynamique(ctx, options = {}) {
   return { constats, brut };
 }
 
-function constatsReseau(requetes, substitutionApiGrist = [], { scenarioComplet = true } = {}) {
+function constatsReseau(toutesRequetes, substitutionApiGrist = [], { scenarioComplet = true } = {}) {
   const constats = [];
+  // Un appel à l'API Grist officielle (ou à l'instance de l'État) est l'usage normal d'un widget : il reste neutralisé comme les autres, mais n'est pas un contact avec un tiers.
+  const requetes = toutesRequetes.filter((r) => !estGrist(r.hote));
   if (substitutionApiGrist.length) {
     constats.push(constat({
       regle: 'D-RESEAU-02', axe: 'D', severite: 'info', confiance: 'prouve',
@@ -835,7 +838,7 @@ function constatsReseau(requetes, substitutionApiGrist = [], { scenarioComplet =
     constats.push(constat({
       regle: 'D-RESEAU-00', axe: 'D', severite: 'info', confiance: 'prouve',
       titre: 'Aucune requête vers un domaine tiers observée à l\'exécution',
-      constat: "En dehors du chargement de l'API Grist elle-même, le widget n'a émis, pendant le scénario joué (chargement, réception de données, modification simulée), aucune requête réseau vers un domaine tiers.",
+      constat: "En dehors de l'API Grist elle-même (son chargement et les appels aux hôtes Grist officiels), le widget n'a émis, pendant le scénario joué (chargement, réception de données, modification simulée), aucune requête réseau vers un domaine tiers.",
       impact: "Sur ce scénario précis, les constats C-EXFIL-02 (destination calculée à l'exécution) éventuels sont infirmés : ils ne se sont pas déclenchés. Un scénario plus long ou une autre action de l'agent pourrait en déclencher d'autres — cette vérification n'est pas exhaustive.",
       remediation: 'Rien à corriger sur ce point.',
     }));
