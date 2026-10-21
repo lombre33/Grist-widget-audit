@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 /**
  * Rejoue les mutants de la carte de sources (méthode : `scripts/lib/rejouer-mutants.mjs`) : A-DEV-03 (marqueurs de travail
- * inachevé) et A-TEST-02 (preuve d'un test de bout en bout) cherchent leurs signes dans le texte de tout le dépôt, et une
- * carte de sources (`.map`), générée, embarque celui des bibliothèques tierces : elle ne compte ni dans l'un ni dans l'autre.
+ * inachevé, lus dans les commentaires du code, que la carte, qui n'est pas du code, ne porte pas) et A-TEST-02 (preuve d'un test
+ * de bout en bout, cherchée dans le texte de tout le dépôt) : une carte de sources (`.map`), générée, embarque celui des
+ * bibliothèques tierces, et ne compte ni dans l'un ni dans l'autre.
  *
  * Usage : node scripts/mutants-cartes-de-sources.mjs [expression régulière sur le libellé] [--part=i/n]
  */
@@ -13,8 +14,7 @@ const TESTS = ['tests/cartes-de-sources.test.mjs'];
 
 // [fichier, chaîne d'origine (une seule occurrence), chaîne mutée, libellé]
 const MUTANTS = [
-  dansLigne(A, 'if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || estCarteDeSources(f)) continue;', ' || estCarteDeSources(f)', '', 'A-DEV-03 : les marqueurs d\'une carte de sources sont comptés'),
-  dansLigne(A, 'if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || estCarteDeSources(f)) continue;', 'estCarteDeSources(f)', '!estCarteDeSources(f)', 'A-DEV-03 : seuls les marqueurs d\'une carte de sources sont comptés'),
+  dansLigne(A, 'for (const { debut, fin } of ast.commentaires ?? []) {', 'ast.commentaires ?? []', '[]', 'A-DEV-03 : aucun commentaire du code n\'est lu'),
   dansLigne(A, '(f.contenu && !estCarteDeSources(f) && CONTENU_TEST_E2E.test(f.contenu)));', ' && !estCarteDeSources(f)', '', 'A-TEST-02 : le texte d\'une carte de sources fait preuve d\'un test de bout en bout'),
   dansLigne(A, '(f.contenu && !estCarteDeSources(f) && CONTENU_TEST_E2E.test(f.contenu)));', '!estCarteDeSources(f)', 'estCarteDeSources(f)', 'A-TEST-02 : seul le texte d\'une carte de sources fait preuve'),
   dansLigne(A, 'const estCarteDeSources = (f) => f.ext', "'.map'", "'.maps'", 'carte de sources : une extension qui n\'est pas celle d\'une carte'),

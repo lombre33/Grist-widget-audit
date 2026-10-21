@@ -240,7 +240,7 @@ export function analyserTracesDev(ctx) {
   if (marqueurs.length > 5) {
     constats.push(constat({
       regle: 'A-DEV-03', axe: 'A', severite: 'mineur', confiance: 'certain',
-      titre: `${marqueurs.length} marqueurs TODO / FIXME dans les commentaires du code`,
+      titre: `${marqueurs.length} marqueurs TODO / FIXME dans le dépôt`,
       fichier: marqueurs[0].fichier, ligne: marqueurs[0].ligne,
       constat: `Les commentaires du code contiennent ${marqueurs.length} marqueurs de travail inachevé.`,
       impact: "Difficile pour un relecteur de distinguer ce qui est volontairement hors périmètre de ce qui est un défaut connu non traité.",
@@ -301,7 +301,8 @@ const estGenere = (fichier, unite) => [fichier.contenu, unite.source].some((text
  */
 function raisonDeNePasComparer(fichier, unite) {
   // Un fichier que sa seule forme fait vendoriser (`f.minifie`) est minifié : ni sa bibliothèque, ni un dossier ne le disent tiers.
-  if (fichier.dossierExclu || cheminVendorise(fichier.chemin) || (fichier.vendorise && !fichier.minifie)) return 'tierce';
+  if (fichier.minifie && !fichier.dossierExclu && !cheminVendorise(fichier.chemin)) return 'minifiee';
+  if (fichier.vendorise || fichier.dossierExclu) return 'tierce';
   if (estMinifie(unite.source)) return 'minifiee';
   if (aSignatureDeBundleur(unite.source)) return 'empaquetee';
   if (!fichier.executee && estGenere(fichier, unite)) return 'generee';
