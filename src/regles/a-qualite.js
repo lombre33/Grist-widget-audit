@@ -181,13 +181,12 @@ export function analyserGestionErreurs(ctx) {
 }
 
 /**
- * Un marqueur de travail inachevé : le mot entier, suivi d'une espace ou de deux-points.
- * `\b` ne borne que des caractères de mot ASCII, et « À » n'en est pas un : devant « À FAIRE »,
- * il ne trouvait de frontière que si le caractère d'avant était une lettre ou un chiffre, donc
- * le marqueur ne correspondait qu'accolé à un mot (« xÀ FAIRE ») et jamais isolé. Le marqueur
- * accentué a sa propre borne (ni lettre, ni chiffre, ni soulignement avant lui), et son propre groupe.
+ * Un marqueur de travail inachevé, lu dans un commentaire du code : le mot entier (`TODO`, `TODO:`, `TODO(nom)`, `//TODO` en fin de ligne). Ni un texte de
+ * donnée, ni une chaîne affichée, ni un README : un `HACK` dans un JSON n'est pas un travail inachevé.
+ * `\b` ne borne que des caractères de mot ASCII, et « À » n'en est pas un : devant « À FAIRE », il ne trouvait de frontière que si le caractère d'avant
+ * était une lettre ou un chiffre. Le marqueur accentué a sa propre borne (ni lettre, ni chiffre, ni soulignement avant lui), et son propre groupe.
  */
-const MARQUEUR_INACHEVE = /(?:\b(TODO|FIXME|XXX|HACK|BUG)|(?<![\p{L}\p{N}_])(À FAIRE))\b[ :]/gu;
+const MARQUEUR_INACHEVE = /(?:\b(TODO|FIXME|XXX|HACK|BUG)|(?<![\p{L}\p{N}_])(À FAIRE))(?![\p{L}\p{N}_])/gu;
 
 /** Traces de développement laissées dans le code livré. */
 export function analyserTracesDev(ctx) {
@@ -216,12 +215,15 @@ export function analyserTracesDev(ctx) {
     });
   });
 
-  for (const f of ctx.fichiers) {
-    if (!f.contenu || f.binaire || f.vendorise || f.dossierExclu || estCarteDeSources(f)) continue;
-    for (const m of f.contenu.matchAll(MARQUEUR_INACHEVE)) {
-      marqueurs.push({ fichier: f.chemin, ligne: numeroLigne(f.contenu, m.index), type: m[1] ?? m[2] });
+  // Tout le code du dépôt, exécuté ou non : un marqueur dit un travail inachevé où qu'il soit. Les commentaires viennent de la lecture du code ; ceux d'une page HTML ou d'une feuille de style n'y sont pas.
+  pourChaqueUniteJs(ctx, { ignorerVendorise: true }, ({ ast, unite }) => {
+    for (const { debut, fin } of ast.commentaires ?? []) {
+      for (const m of unite.source.slice(debut, fin).matchAll(MARQUEUR_INACHEVE)) {
+        const decalage = debut + m.index;
+        marqueurs.push({ fichier: unite.chemin, ligne: unite.positionDe ? unite.positionDe(decalage).ligne : numeroLigne(unite.source, decalage), type: m[1] ?? m[2] });
+      }
     }
-  }
+  });
 
   if (consoles.length > 10) {
     const fichiers = [...new Set(consoles.map((c) => c.fichier))];
@@ -238,9 +240,9 @@ export function analyserTracesDev(ctx) {
   if (marqueurs.length > 5) {
     constats.push(constat({
       regle: 'A-DEV-03', axe: 'A', severite: 'mineur', confiance: 'certain',
-      titre: `${marqueurs.length} marqueurs TODO / FIXME dans le dépôt`,
+      titre: `${marqueurs.length} marqueurs TODO / FIXME dans les commentaires du code`,
       fichier: marqueurs[0].fichier, ligne: marqueurs[0].ligne,
-      constat: `Le dépôt contient ${marqueurs.length} marqueurs de travail inachevé.`,
+      constat: `Les commentaires du code contiennent ${marqueurs.length} marqueurs de travail inachevé.`,
       impact: "Difficile pour un relecteur de distinguer ce qui est volontairement hors périmètre de ce qui est un défaut connu non traité.",
       remediation: 'Convertir en tickets, ou supprimer ceux qui ne sont plus d\'actualité.',
       preuve: { emplacements: marqueurs },

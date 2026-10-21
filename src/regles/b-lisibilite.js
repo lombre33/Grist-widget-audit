@@ -69,6 +69,30 @@ const NOM_DE_README = /^(?:readme|lisez[-_]?moi)(?:[._-](?:[a-z]{2}|[a-z]{3}(?=\
 /** `README.md` d'abord (le nom que le guide demande), puis les autres dans l'ordre des codes de leurs noms : le constat cite toujours le même fichier. */
 const rangDeReadme = (f) => (f.chemin.toLowerCase() === 'readme.md' ? 0 : 1);
 
+/**
+ * Ce qu'un README dit quand il explique l'accès demandé : le nom de l'option, le niveau lui-même (`full`, `read table`), ou un passage où l'accès, la lecture
+ * ou l'écriture se disent de la table et du document, en français ou en anglais. Large à dessein : un README qui explique l'accès sans ces mots exacts
+ * (« accès en lecture à la table liée », « lecture de la table sélectionnée ») est documenté, et l'accuser à tort est le pire défaut de la règle. `full` ne
+ * compte pas dans « fully featured » ni « full-width », qui ne parlent pas d'accès.
+ */
+const MOT = (alternatives) => `(?<![\\p{L}\\p{N}_])(?:${alternatives})(?![\\p{L}\\p{N}_])`;
+const DIT_L_ACCES = new RegExp([
+  MOT("requiredaccess|access ?level|niveau d['’]acc[eè]s|read table"),
+  `${MOT('full')}(?!-)`,
+  `${MOT('acc[eè]s')}[^.\\n]{0,40}${MOT('complet|total|lecture|lire|écriture|ecriture|document|tables?|read|write')}`,
+  `${MOT('access|reads?|writes?|lecture|lire|lit|écriture|ecriture|écrit|ecrit|écrire|ecrire')}[^.\\n]{0,40}${MOT('tables?|documents?|colonnes?|columns?|donn[ée]es|data')}`,
+].join('|'), 'iu');
+
+/**
+ * Le niveau d'accès que le README doit expliquer, et où le code le demande : le plus étendu des niveaux demandés par le code que la page exécute. `none` ne
+ * demande rien à expliquer. Un niveau relevé dans un fichier que l'outil sait non exécuté n'est pas demandé.
+ */
+function accesADocumenter(ctx) {
+  const parChemin = new Map(ctx.fichiers.map((f) => [f.chemin, f]));
+  const demandes = (ctx.usagesGrist?.acces ?? []).filter((a) => a.niveau !== 'none' && parChemin.get(a.fichier)?.executee !== false);
+  return demandes.find((a) => a.niveau === 'full') ?? demandes[0] ?? null;
+}
+
 /** README : présence et couverture des trois points exigés par le guide. */
 export function analyserReadme(ctx) {
   const constats = [];
@@ -120,13 +144,14 @@ export function analyserReadme(ctx) {
 
   // Le niveau d'accès demandé doit être documenté : c'est le point de contrôle
   // du relecteur sécurité, et l'agent doit savoir ce qu'il accorde.
-  const acces = ctx.usagesGrist?.acces?.[0]?.niveau;
-  if (acces && !/requiredaccess|niveau d'accès|acc[eè]s (complet|full|lecture)|read table|full/i.test(texte)) {
+  const demande = accesADocumenter(ctx);
+  if (demande && !DIT_L_ACCES.test(texte)) {
+    const { niveau: acces, fichier, ligne } = demande;
     constats.push(constat({
-      regle: 'B-DOC-03', axe: 'B', severite: 'majeur', confiance: 'certain',
+      regle: 'B-DOC-03', axe: 'B', severite: 'majeur', confiance: 'probable',
       titre: `Le niveau d'accès \`${acces}\` demandé au document n'est pas documenté dans le README`,
       fichier: readme.chemin,
-      constat: `Le code demande \`requiredAccess: '${acces}'\` mais le README n'explique nulle part ce que le widget fait de cet accès.`,
+      constat: `Le code demande \`requiredAccess: '${acces}'\`${fichier ? ` (\`${fichier}\`${ligne ? ` ligne ${ligne}` : ''})` : ''} mais le README n'explique nulle part ce que le widget fait de cet accès.`,
       impact: "L'agent qui installe le widget voit passer une demande d'accès sans pouvoir la justifier, et le relecteur sécurité doit reconstruire l'information depuis le code. C'est le premier motif de renvoi d'une contribution.",
       remediation: `Ajouter une rubrique « Accès au document » indiquant : le niveau demandé (\`${acces}\`), les tables lues, les tables écrites, et pourquoi un niveau inférieur ne suffit pas.`,
       referentiels: ['Guide de contribution Grist.Gouv — Code review process / Security'],
