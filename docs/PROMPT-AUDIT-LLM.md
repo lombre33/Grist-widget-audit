@@ -351,7 +351,15 @@ Les axes A et B ne jugent que le code que le contributeur a écrit : une
 bibliothèque tierce recopiée (`vendor/`, `lib/`, `libs/`, `third-party/`,
 `*.min.js`), un fichier minifié ou empaqueté par un outil de build et le
 contenu d'un dossier exclu (`dist/`, `build/`…) en sont exemptés. Ils restent
-jugés par C, D, E et F.
+jugés par C, D, E et F. Cette exemption ne fait jamais mieux noter un code que
+le même code lisible : un fichier exécuté minifié (lignes de plus de 200
+caractères en moyenne, sur plus de 1 Kio, faites de code ; des commentaires
+longs, une image en base64 ou un tableau de nombres n'en font pas un), dont
+l'en-tête ne donne pas à la fois une version et une licence, donne un seul
+constat B-MIN-01 (majeur) et plafonne la note globale à 79/100. Fais de même :
+signale-le une fois, plafonne ta note, et ne juge pas son code. Si l'en-tête
+donne version et licence, c'est une bibliothèque tierce suivie par l'axe E
+(E-DEP-02, info), sans plafond.
 
 | Règle | Déclenchement | Sévérité |
 |---|---|---|
@@ -362,7 +370,7 @@ jugés par C, D, E et F.
 | A-ERR-01 | Bloc `catch` vide, sans commentaire expliquant le choix | majeur |
 | A-DEV-01 | Plus de 10 appels `console.log/debug/info/table/dir` dans le code exécuté | mineur |
 | A-DEV-02 | Instruction `debugger` présente | majeur |
-| A-DEV-03 | Plus de 5 marqueurs `TODO`/`FIXME`/`XXX`/`HACK`/`À FAIRE`/`BUG` dans le dépôt | mineur |
+| A-DEV-03 | Plus de 5 marqueurs `TODO`/`FIXME`/`XXX`/`HACK`/`À FAIRE`/`BUG` (le mot entier : `//TODO`, `TODO(nom)`) dans les commentaires du code JavaScript, y compris les scripts d'une page ; ni un JSON, ni un README, ni une chaîne affichée, ni un commentaire HTML ou CSS | mineur |
 | A-DUP-01 | Code dupliqué, cherché sur la structure du code et non sur son texte : au moins deux exemplaires disjoints de même forme (fonction, bloc, suite d'instructions) d'**au moins 50 nœuds d'arbre dont 6 de logique** (appels, affectations, contrôle de flux, fonctions), identiques ou aux noms et aux valeurs près si le renommage est cohérent (`a + b * a` et `x + y * x` sont des copies, `x + y * y` n'en est pas une). Ne comptent pas : les données (tableaux, objets), les suites d'appels du même appelé ou d'affectations de littéraux (la répétition y est l'idiome), ce qu'un clone plus gros couvre déjà. Tout le code du contributeur se compare, qu'une page l'exécute ou non, tests compris. Un seul constat pour tout le dépôt, qui cite les plus gros | mineur ; majeur au-delà de 5 clones entre fichiers différents, ou pour un clone répété plus de 5 000 fois |
 | A-DUP-00 | Ce que la recherche de A-DUP-01 n'a pas comparé : code d'un autre, code minifié ou empaqueté, code généré que la page n'exécute pas, ce qu'un plafond de travail ou une erreur de l'outil a laissé de côté. Dis ce que tu n'as pas comparé, pour que l'absence de A-DUP-01 ne passe pas pour une preuve | info ; mesure partielle (3.4) quand le code laissé de côté est du code que la page exécute |
 | A-TEST-01 | Aucun test unitaire trouvé (dossier/fichier `test(s)`, `*.test.js`, `*.spec.js`, y compris variantes `dev-tests/`, `test-utils/`) | majeur |
@@ -391,11 +399,12 @@ pour le comprendre ».
 | B-NOM-01 | Plus de 3 identifiants au nom non descriptif (`a`, `tmp`, `data`, `foo`, `truc`… hors variables de boucle courtes tolérées `i,j,k,n,e,x,y,_`) | mineur |
 | B-DOC-01 | Aucun README à la racine : `README` ou `LISEZMOI` (`LISEZ-MOI`, `LISEZ_MOI`), avec une langue facultative (`README.fr.md`) et une extension de texte facultative (`.md`, `.rst`, `.adoc`, `.txt`…) ; `docs/README.md` ne compte pas | **majeur, BLOQUANT** |
 | B-DOC-02 | README présent mais incomplet sur une des 3 rubriques attendues : ce que fait le widget / comment le configurer / ses dépendances | mineur |
-| B-DOC-03 | Le niveau d'accès demandé (`requiredAccess`) n'est documenté nulle part dans le README | majeur |
+| B-DOC-03 | Le niveau d'accès demandé (`requiredAccess`, `read table` ou `full`, le plus étendu que le code exécuté demande ; `none` n'a rien à expliquer) n'est expliqué nulle part dans le README, ni par son nom ni par des mots qui disent l'accès à la table ou au document (« accès en lecture à la table liée ») | majeur, confiance probable |
 | B-DOC-04 | Un service externe réellement contacté (vu par l'axe C) n'est nommé nulle part dans le README | majeur |
 | B-COM-01 | Fichier de ≥ 200 lignes significatives avec moins de 4 % de lignes commentées | mineur |
 | B-IA-01 | ≥ 2 familles de marqueurs de génération IA non relue (commentaires « Étape N », formules d'assistant conversationnel, ```` ``` ```` laissés dans un fichier source, commentaires de journal de modif, JSDoc générique anglais dans du code francophone, commentaires qui paraphrasent la ligne suivante), avec ≥ 8 occurrences cumulées | mineur, confiance à_vérifier |
 | B-VERB-01 | Plus de 4000 lignes de code exécuté (JS + HTML cumulés) | mineur (> 12000 : majeur) |
+| B-MIN-01 | Fichier `.js`/`.mjs` exécuté et minifié (voir l'ouverture de l'axe A), sans version ET licence dans ses 2 000 premiers caractères ; un seul constat pour le dépôt | majeur ; plafonne la note globale à 79/100 |
 | B-LANG-01 | Commentaires mélangeant français et anglais de façon significative (> 25 lignes qualifiantes, la langue minoritaire représentant > 25 %) | mineur |
 
 ### Axe C — Sécurité applicative, analyse statique, point de vue RSSI (poids 25)
@@ -527,12 +536,13 @@ maximal), embarquées dans le dépôt (risque maîtrisé), de développement
 | Règle | Déclenchement | Sévérité |
 |---|---|---|
 | E-DEP-01 | `<script src="https://...">` chargeant une bibliothèque tierce à l'exécution (hors `grist-plugin-api.js`), **ou** entrée d'un `<script type="importmap">` (clés `imports`/`scopes`) résolue vers un hôte externe, **ou** module que le code JS charge par son adresse (`import`, `export … from`, `import()` à littéral : seule la clé `integrity` d'une import map de la page le protège, jamais dans un worker ni quand la carte est lue après le script) : la sévérité dépend **uniquement** de `integrity` (attribut de balise, ou clé `integrity` de premier niveau de l'import map pour ces cas) — absent → **critique, BLOQUANT** ; présent → majeur, **que la version soit figée dans l'URL ou non**. Une version non figée n'apparaît que dans le texte du constat, jamais dans la sévérité |
-| E-DEP-02 | Bibliothèque tierce recopiée dans le dépôt (fichier « vendorisé ») : version ET licence identifiables en en-tête → info ; sinon → mineur |
+| E-DEP-02 | Bibliothèque tierce recopiée dans le dépôt (fichier « vendorisé ») : version ET licence identifiables en en-tête → info ; sinon → mineur (sauf un fichier exécuté minifié sans origine identifiée, dit une seule fois par B-MIN-01) |
 | E-DEP-03 | (neutre) Pas de `package.json` du tout | info |
 | E-DEP-04 | Dépendances npm déclarées sans fichier de verrouillage (`package-lock.json`/`yarn.lock`/`pnpm-lock.yaml`) | majeur |
 | E-DEP-05 | Dépendances de production à version non figée (`^`, `~`, `*`, `latest`, `>`) | mineur |
 | E-DEP-06 | Plus de 12 dépendances de production directes | mineur |
 | E-VULN-00/01/02 | `npm audit` sur les dépendances verrouillées — **tu ne peux pas l'exécuter** ; voir section 6 |
+| E-VULN-OPTION | `npm audit` non lancé à la demande de l'utilisateur (`--sans-reseau`) sur un dépôt qui verrouille ses dépendances : une absence de mesure, non de vulnérabilité ; le verdict ne peut pas être « CONFORME » | info ; axe E mesuré en partie |
 | E-LIC-01 | Aucun fichier de licence à la racine : `LICENSE`, `LICENCE`, `COPYING` ou `UNLICENSE` (extension de texte facultative), `LICENSE-MIT`, `LICENSE_APACHE`, `COPYING-GPL`…, ou un fichier sous `LICENSES/` | **majeur, BLOQUANT** |
 | E-LIC-02 | Licence présente : type reconnu (MIT/Apache 2.0/EUPL/BSD) → info ; GPL/AGPL → info avec réserve (effet contaminant à vérifier) ; LGPL → info avec réserve (copyleft faible, à vérifier) ; non identifiée, ou texte que tu n'as pas pu lire (trop gros, binaire) → mineur |
 
