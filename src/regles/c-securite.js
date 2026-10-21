@@ -46,6 +46,18 @@ function enregistrerDestination(ctx, h) {
 // C-EXFIL — sortie de données hors du périmètre
 // ---------------------------------------------------------------------------
 
+const DESTINATION_CALCULEE = '(URL calculée)';
+
+/**
+ * La destination d'un appel réseau : l'adresse quand elle se lit en entier, un littéral ou une concaténation de
+ * littéraux (`'https://a' + '.org/x'` est l'adresse `https://a.org/x`, pas une inconnue), sinon une destination
+ * calculée, que l'axe D tranche en observant la requête.
+ */
+function destination(noeud) {
+  const url = plierLitteraux(noeud);
+  return url === null ? { cible: DESTINATION_CALCULEE, dynamique: estDynamique(noeud) } : { cible: url, dynamique: false };
+}
+
 /** Appels réseau sortants dans le code JavaScript exécuté. */
 export function analyserSortiesReseau(ctx) {
   const constats = [];
@@ -107,36 +119,29 @@ export function analyserSortiesReseau(ctx) {
 
   pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
     if (!ast) return;
-    const appel = (n, canal, cible, dynamique) => signaler({ unite, ligne: ligneDe(n), canal, cible, dynamique });
+    const appel = (n, canal, arg) => signaler({ unite, ligne: ligneDe(n), canal, ...destination(arg) });
 
     walk.simple(ast, {
       CallExpression(n) {
         const nom = nomPointe(n.callee) || '';
-        if (/(^|\.)fetch$/.test(nom)) {
-          const arg = n.arguments[0];
-          appel(n, 'fetch()', chaineLitterale(arg) ?? '(URL calculée)', estDynamique(arg));
-        }
-        if (/\.open$/.test(nom) && n.arguments.length >= 2) {
-          const arg = n.arguments[1];
-          const v = chaineLitterale(arg);
-          if (v !== null || estDynamique(arg)) appel(n, 'XMLHttpRequest', v ?? '(URL calculée)', estDynamique(arg));
-        }
-        if (/sendBeacon$/.test(nom)) appel(n, 'navigator.sendBeacon()', chaineLitterale(n.arguments[0]) ?? '(URL calculée)', estDynamique(n.arguments[0]));
+        if (/(^|\.)fetch$/.test(nom)) appel(n, 'fetch()', n.arguments[0]);
+        if (/\.open$/.test(nom) && n.arguments.length >= 2) appel(n, 'XMLHttpRequest', n.arguments[1]);
+        if (/sendBeacon$/.test(nom)) appel(n, 'navigator.sendBeacon()', n.arguments[0]);
         if (/importScripts$/.test(nom)) {
           // `importScripts(a, b, c)` charge TOUS ses arguments, pas seulement
           // le premier — un seul appel avec une source sûre en tête et une
           // source externe en second argument échappait entièrement à ce
           // constat avant cette boucle.
-          for (const arg of n.arguments) {
-            appel(n, 'importScripts()', chaineLitterale(arg) ?? '(URL calculée)', estDynamique(arg));
-          }
+          for (const arg of n.arguments) appel(n, 'importScripts()', arg);
         }
       },
       NewExpression(n) {
         const nom = nomPointe(n.callee) || '';
-        if (/^(WebSocket|EventSource)$/.test(nom)) {
-          appel(n, nom, chaineLitterale(n.arguments[0]) ?? '(URL calculée)', estDynamique(n.arguments[0]));
-        }
+        if (/^(WebSocket|EventSource)$/.test(nom)) appel(n, nom, n.arguments[0]);
+      },
+      // `import('https://a' + '.org/m.js')` : un littéral simple est lu plus bas par `importsDistants`, sa concaténation de littéraux non.
+      ImportExpression(n) {
+        if (chaineLitterale(n.source) === null && !destination(n.source).dynamique) appel(n, 'import() distant', n.source);
       },
     });
   });
@@ -2190,9 +2195,8 @@ export function analyserScriptDynamique(ctx) {
       const nomBalise = type === 'script' ? '<script>' : '<link>';
       const attribut = type === 'script' ? 'src' : 'href';
 
-      const valeur = chaineLitterale(valeurNoeud);
-      const dynamique = estDynamique(valeurNoeud);
-      const h = hote(valeur ?? '');
+      const { cible, dynamique } = destination(valeurNoeud);
+      const h = hote(cible);
       if (!dynamique && (estLocal(h) || estGrist(h))) return;
 
       const cle = `${unite.chemin}:${ligneDe(noeud)}:${nomVariable}`;
