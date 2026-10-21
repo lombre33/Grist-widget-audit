@@ -342,7 +342,7 @@ chargée à l'exécution depuis un CDN (le code livré au navigateur peut
 changer sans que le dépôt bouge), bibliothèque embarquée dans le dépôt sans
 version ni licence traçable, dépendances npm (verrouillage, versions
 figées, `npm audit` contre la base d'avis GitHub quand un accès réseau est
-disponible). Complété par la vérification de la licence du dépôt — condition
+disponible ; sans réseau, l'option `--sans-reseau` le dit par E-VULN-OPTION, axe mesuré en partie et verdict plafonné à SOUS RÉSERVE). Complété par la vérification de la licence du dépôt — condition
 de fait pour qu'un fork par l'équipe Grist.Gouv soit juridiquement possible.
 
 ## Axe F — Conformité, souveraineté, accessibilité, sobriété

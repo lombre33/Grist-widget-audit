@@ -11,6 +11,7 @@ import { reglesF } from '../regles/f-conformite.js';
 import { analyserSurface } from '../regles/c-surface.js';
 import { analyserIllisibles } from '../regles/c-illisibles.js';
 import { mentionsParLigne } from './analyse-js.js';
+import { constat } from './modele.js';
 
 // Règles dont l'emplacement est une balise de la page et non du code : elles disent elles-mêmes ce que la page a de particulier (gabarit, standard seul).
 const REGLES_DE_PAGE = new Set(['C-EXFIL-03', 'C-DOM-01', 'C-DOM-02', 'C-CSP-01', 'C-CSP-02']);
@@ -34,6 +35,24 @@ function ajouterMentions(ctx, constats) {
   }
 }
 
+// Même test que `e-dependances.js`, qui ne lance `npm audit` que sur un dépôt qui verrouille ses dépendances.
+const VERROU_DE_DEPENDANCES = /^(package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/;
+
+/**
+ * `--sans-reseau` : `npm audit` (E-VULN-01) n'a pas été lancé. Pour un dépôt qui verrouille ses dépendances, l'axe E est vu en
+ * partie, non propre : sans ce constat, un E à 100 se lisait comme « aucune vulnérabilité connue ». Même statut qu'un `npm audit` en échec (E-VULN-00).
+ */
+function constatsSansReseau(ctx) {
+  if (!ctx.fichiers.some((f) => VERROU_DE_DEPENDANCES.test(f.chemin))) return [];
+  return [constat({
+    regle: 'E-VULN-OPTION', axe: 'E', severite: 'info', confiance: 'certain', mesurePartielle: true,
+    titre: 'Recherche de vulnérabilités connues non lancée : option --sans-reseau',
+    constat: "L'audit a été lancé avec --sans-reseau : `npm audit` n'a pas interrogé le registre npm, les dépendances verrouillées du dépôt n'ont donc pas été comparées aux avis de vulnérabilité publiés.",
+    impact: "L'axe E est noté sans cette vérification. L'absence de constat de vulnérabilité ne vaut pas absence de vulnérabilité : c'est une absence de mesure ; le verdict ne peut pas être « CONFORME » sans elle.",
+    remediation: "Relancer sans --sans-reseau depuis un poste qui atteint registry.npmjs.org (derrière un proxy d'entreprise, HTTP(S)_PROXY).",
+  })];
+}
+
 export async function analyseStatique(ctx, options = {}) {
   const constats = [];
   // C avant B : B-DOC-03/04 lisent ctx.usagesGrist et ctx.destinationsExternes,
@@ -47,6 +66,7 @@ export async function analyseStatique(ctx, options = {}) {
     const r = await regle(ctx, options);
     constats.push(...(r ?? []));
   }
+  if (options.reseau === false) constats.push(...constatsSansReseau(ctx));
   constats.push(...analyserSurface(ctx));
   constats.push(...analyserIllisibles(ctx));
   ajouterMentions(ctx, constats);

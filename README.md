@@ -132,7 +132,7 @@ Le rapport est écrit dans `./rapport-<nom-du-widget>/rapport.md`.
 
 Options :
 - `--sans-dynamique` : n'exécute que l'analyse statique (pas de navigateur).
-- `--sans-reseau` : ne consulte pas `npm audit` (fonctionne hors-ligne).
+- `--sans-reseau` : ne consulte pas `npm audit` (fonctionne hors-ligne). Pour un dépôt qui verrouille ses dépendances, le rapport dit alors l'axe E mesuré en partie (E-VULN-OPTION) et le verdict ne peut pas être « CONFORME ».
 - `--sortie <dossier>` : change le dossier de sortie.
 - `--json` : écrit aussi `rapport.json`, pour intégration outillée.
 - `--sarif` : écrit aussi `rapport.sarif` (SARIF 2.1.0), pour l'ingestion CI

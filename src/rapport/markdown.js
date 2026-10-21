@@ -51,11 +51,16 @@ export function genererMarkdown({ ctx, notation, meta }) {
   l.push('| Axe | Score | Critique | Majeur | Mineur |');
   l.push('|---|---:|---:|---:|---:|');
   for (const a of Object.values(notation.parAxe)) {
-    l.push(`| ${a.code} — ${a.titre} | ${a.nonExecute ? 'non exécuté' : a.score + '/100'} | ${a.repartition.critique} | ${a.repartition.majeur} | ${a.repartition.mineur} |`);
+    l.push(`| ${a.code} — ${a.titre} | ${a.nonExecute ? 'non exécuté' : a.score + '/100' + (a.partiel ? ' (partiel)' : '')} | ${a.repartition.critique} | ${a.repartition.majeur} | ${a.repartition.mineur} |`);
   }
   l.push('');
   if (notation.axesNonExecutes.length) {
     l.push(`> Axes non exécutés lors de cet audit : ${notation.axesNonExecutes.join(', ')}. Leur absence de score ne vaut pas conformité — voir la méthodologie.`);
+    l.push('');
+  }
+
+  if (notation.axesPartiels.length) {
+    l.push(`> Axes mesurés en partie : ${notation.axesPartiels.join(', ')}. Une vérification n'a pas été faite (voir le motif du verdict) : le score ne vaut pas absence de problème sur ce qui n'a pas été vérifié.`);
     l.push('');
   }
 
@@ -87,6 +92,10 @@ export function genererMarkdown({ ctx, notation, meta }) {
     } else {
       l.push(`Score : **${axe.score}/100** — ${axe.repartition.critique} critique(s), ${axe.repartition.majeur} majeur(s), ${axe.repartition.mineur} mineur(s), ${axe.repartition.info} information(s).`);
       l.push('');
+      if (axe.partiel) {
+        l.push("> ⚠ Mesure partielle : une vérification de cet axe n'a pas été faite, voir l'information qui la nomme ci-dessous.");
+        l.push('');
+      }
       if (axe.empeche) {
         // Un 0 se lit comme « mauvais » si rien n'en donne la raison.
         l.push(`> ⛔ Mesure empêchée par le widget : cet axe est noté 0, il n'a pas pu être mesuré en entier. Sur ce qui a pu être lu, il vaut ${axe.scoreMesure}/100. Cause : ${axe.causes.map((c) => `[${c.regle}] ${c.titre}`).join(' ; ')}.`);

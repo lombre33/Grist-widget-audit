@@ -172,6 +172,8 @@ export function noter(constats, axesNonExecutes = new Set()) {
     }
   }
 
+  for (const code of axesPartiels.keys()) parAxe[code] = { ...parAxe[code], partiel: true };
+
   if (axesNonExecutes.size || axesPartiels.size) {
     const detailNonExecutes = [...axesNonExecutes]
       .map((code) => `${code} (${AXES[code].titre}, poids ${AXES[code].poids}/100) — non exécuté`);
