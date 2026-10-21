@@ -42,11 +42,16 @@ export function estMinifie(texte) {
   return jetons / nombreDeLignes(debut) >= JETONS_PAR_LIGNE && mots / jetons >= PART_DE_MOTS;
 }
 
+const DEBUT_D_EN_TETE = 2000;
+
+/** Le numéro de version que l'en-tête d'un fichier donne (`v2.4.1`), ou undefined. */
+export const versionEnTete = (texte) => texte.slice(0, DEBUT_D_EN_TETE).match(/v?\d+\.\d+\.\d+/)?.[0];
+
+/** L'en-tête d'un fichier porte-t-il une licence ? */
+export const licenceEnTete = (texte) => /@license|MIT License|Apache License|BSD|\(c\)\s*\d{4}/i.test(texte.slice(0, DEBUT_D_EN_TETE));
+
 /**
  * L'en-tête d'un fichier dit-il ce qu'il est : un numéro de version et une licence dans ses 2 000 premiers caractères ? C'est ce qui fait d'un fichier minifié une
  * bibliothèque tierce que l'axe E suit (E-DEP-02, en information), non un code que personne ne peut relire.
  */
-export function enTeteIdentifiee(texte) {
-  const debut = texte.slice(0, 2000);
-  return /v?\d+\.\d+\.\d+/.test(debut) && /@license|MIT License|Apache License|BSD|\(c\)\s*\d{4}/i.test(debut);
-}
+export const enTeteIdentifiee = (texte) => Boolean(versionEnTete(texte) && licenceEnTete(texte));

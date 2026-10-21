@@ -55,6 +55,7 @@ test('un bundle minifié sans nom ni dossier : un seul constat B-MIN-01, la note
   assert.equal(min[0].fichier, 'app.js');
   assert.equal(min[0].plafonneLaNote, true);
   assert.equal(constats.filter((c) => ['A-FONC-01', 'A-FONC-02', 'A-FONC-03', 'B-NOM-01'].includes(c.regle) && c.fichier === 'app.js').length, 0, 'le bundle est exempté des axes A et B');
+  assert.equal(constats.filter((c) => c.regle === 'E-DEP-02').length, 0, 'la même minification ne se pénalise pas deux fois');
   assert.ok(notation.global <= 79);
   assert.notEqual(notation.verdict, 'CONFORME');
   assert.deepEqual(notation.plafonne?.causes.map((c) => c.regle), ['B-MIN-01']);

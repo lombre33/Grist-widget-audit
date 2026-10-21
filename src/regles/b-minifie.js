@@ -13,8 +13,11 @@ import { enTeteIdentifiee } from '../moteur/minifie.js';
 /** Le nombre de fichiers que le constat nomme : quelques-uns, pas les milliers d'un dépôt hostile. */
 const MAX_NOMMES = 5;
 
+/** Un fichier exécuté, minifié, dont l'en-tête n'en fait pas une bibliothèque identifiée : celui que B-MIN-01 dit, et que E-DEP-02 ne redit pas. */
+export const minifieSansOrigine = (f) => Boolean(f.minifie && f.executee && !enTeteIdentifiee(f.contenu));
+
 export function analyserMinifie(ctx) {
-  const fichiers = ctx.fichiers.filter((f) => f.minifie && f.executee && !enTeteIdentifiee(f.contenu));
+  const fichiers = ctx.fichiers.filter(minifieSansOrigine);
   if (!fichiers.length) return [];
   const nommes = fichiers.slice(0, MAX_NOMMES).map((f) => f.chemin);
   const autres = fichiers.length - nommes.length;

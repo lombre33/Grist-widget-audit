@@ -20,6 +20,8 @@ import { promisify } from 'node:util';
 import fs from 'node:fs';
 import { constat } from '../moteur/modele.js';
 import { extraireImportMaps } from '../moteur/analyse-js.js';
+import { versionEnTete, licenceEnTete } from '../moteur/minifie.js';
+import { minifieSansOrigine } from './b-minifie.js';
 import { importsDistants, raisonCarteTardiveBalise, raisonLienDePrechargement, raisonsEntreeNonProtegee } from '../contexte/imports-distants.js';
 import { lirePage, integriteProtege, urlDe, urlDeCarte, mentionDe } from '../moteur/page-html.js';
 
@@ -188,11 +190,12 @@ export function analyserDependancesEmbarquees(ctx) {
   // `litteralImbrique` (axe C, voir preparerCodeExecuteEnChaine) est aussi
   // marqué `vendorise` pour hériter de l'exemption A/B, mais ce n'est pas une
   // bibliothèque tierce à documenter : à exclure ici spécifiquement.
-  const suspects = ctx.fichiers.filter((f) => f.vendorise && !f.litteralImbrique);
+  // Un fichier minifié sans origine identifiée est dit par B-MIN-01 : la même minification ne se pénalise pas deux fois.
+  const suspects = ctx.fichiers.filter((f) => f.vendorise && !f.litteralImbrique && !minifieSansOrigine(f));
 
   for (const f of suspects) {
-    const version = (f.contenu.slice(0, 2000).match(/v?\d+\.\d+\.\d+/) || [])[0];
-    const licence = /@license|MIT License|Apache License|BSD|\(c\)\s*\d{4}/i.test(f.contenu.slice(0, 2000));
+    const version = versionEnTete(f.contenu);
+    const licence = licenceEnTete(f.contenu);
     constats.push(constat({
       regle: 'E-DEP-02', axe: 'E',
       severite: version && licence ? 'info' : 'mineur', confiance: 'probable',
