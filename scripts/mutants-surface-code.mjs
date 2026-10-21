@@ -158,7 +158,7 @@ MUTANTS.push(
   dansLigne(J, "ImportDeclaration(n) { importer(n, n.source, 'import statique'); },", "importer(n, n.source, 'import statique');", '', 'import : import statique n\'est plus visité'),
   dansLigne(J, "ExportAllDeclaration(n) { importer(n, n.source, 'export … from'); },", "importer(n, n.source, 'export … from');", '', 'import : export * from n\'est plus visité'),
   dansLigne(J, "ExportNamedDeclaration(n) { if (n.source) importer(n, n.source, 'export … from'); },", "importer(n, n.source, 'export … from');", 'void 0;', 'import : export { … } from n\'est plus visité'),
-  dansLigne(S, 'if (estGrist(h)) return;                               // API Grist', 'estGrist(h)', 'false', 'import : l\'hôte de Grist est signalé'),
+  dansLigne(S, '// API Grist : hors périmètre de ce constat, sauf un document précis', 'estGrist(h)', 'false', 'import : l\'hôte de Grist est signalé'),
 );
 
 // --- C-XSS-04 suit ce qu'est la valeur passée -------------------------------------------------------------------------

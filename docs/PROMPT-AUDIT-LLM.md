@@ -419,6 +419,7 @@ C'est l'axe le plus dense du référentiel — largement devant les autres rien 
 | C-EXFIL-04 | `grist-plugin-api.js` chargé depuis un domaine externe (ex. `docs.getgrist.com`) plutôt qu'en relatif depuis l'instance hôte | majeur |
 | C-EXFIL-05 | `<script>` ou `<link>` créé dynamiquement (`createElement('script'\|'link')`, puis `.src`/`.href` affecté **ou** passé à `setAttribute`, peu importe l'ordre avec un éventuel `integrity`) pointé vers un hôte externe : `<script>` statique externe sans `integrity` → **critique, BLOQUANT** ; `<script>` statique externe avec `integrity` (affecté ou via `setAttribute('integrity', ...)`) → critique, non bloquant ; `<script>` à destination calculée → majeur, à_vérifier, non bloquant ; `<link>` statique externe → majeur, jamais bloquant ; `<link>` à destination calculée → mineur, à_vérifier |
 | C-EXFIL-06 | `import()` dynamique à source calculée (ni littéral simple, ni chemin relatif certain de type découpage de code `./chunk-${x}.js`) | majeur, à_vérifier |
+| C-EXFIL-08 | Requête sortante vers un document précis d'un hôte Grist (`/api/docs/<identifiant>…`), l'identifiant étant écrit dans le code : le document ouvert par l'agent ne se connaît qu'à l'exécution (`baseUrl` de `getAccessToken`), un identifiant écrit désigne un autre document (celui de l'auteur, un document public). Un appel à l'API Grist sans document nommé n'est pas signalé | majeur, probable, non bloquant |
 
 **C-XSS — injection et exécution dynamique**
 | Règle | Déclenchement | Sévérité |
@@ -498,6 +499,7 @@ par les colonnes attendues.
 | D-RESEAU-00 | (positif) Aucune requête vers un tiers observée pendant le scénario | info |
 | D-RESEAU-01 | Une requête vers un hôte tiers a **réellement été émise** pendant le scénario | **critique, BLOQUANT** (par hôte distinct) |
 | D-RESEAU-02 | Confirme à l'exécution le chargement externe de `grist-plugin-api.js` (C-EXFIL-04) | info |
+| D-RESEAU-03 | Une requête vers un document précis d'un hôte Grist a **réellement été émise** pendant le scénario (le document ouvert est joint par la `baseUrl` de `getAccessToken`, à l'adresse de l'hôte de test, jamais chez Grist) : un constat par document | majeur, non bloquant |
 | D-XSS-01 | La charge XSS placée dans une cellule s'est **réellement exécutée** | **critique, BLOQUANT** |
 | D-GRIST-01 | Le widget n'a jamais négocié son accès pendant le scénario (`grist.ready()` sans effet observé) | majeur |
 | D-GRIST-02 | Des appels RPC ont échoué pendant le scénario (mesure partielle) | info, mesure partielle |

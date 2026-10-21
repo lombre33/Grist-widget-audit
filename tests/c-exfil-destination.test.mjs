@@ -43,7 +43,7 @@ test("une adresse dont une partie est calculée reste une destination calculée,
 });
 
 test("l'API Grist officielle et le local ne sont pas des destinations externes, concaténées ou non", () => {
-  assert.equal(reseau("fetch('https://docs.getgrist' + '.com/api/docs/x')"), 'rien');
+  assert.equal(reseau("fetch('https://docs.getgrist' + '.com/api/orgs')"), 'rien');
   assert.equal(reseau("fetch('./data' + '.json')"), 'rien');
   assert.equal(reseau("fetch('http://local' + 'host:8080/x')"), 'rien');
 });

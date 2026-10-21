@@ -23,7 +23,7 @@ import { nomFinal, plierLitteraux, decoderAtobLitteral, decoderFromCharCodeLitte
 import { lireFeuille, nouveauBudgetCss, LIMITES_CSS } from '../moteur/css.js';
 import { numeroLigne } from '../moteur/lignes.js';
 import { analyserSecrets } from './c-secrets.js';
-import { estGrist } from '../contexte/hotes-grist.js';
+import { estGrist, documentGristVise } from '../contexte/hotes-grist.js';
 import { analyserAccesGrist } from './c-grist.js';
 
 export { analyserAccesGrist };
@@ -58,6 +58,19 @@ function destination(noeud) {
   return url === null ? { cible: DESTINATION_CALCULEE, dynamique: estDynamique(noeud) } : { cible: url, dynamique: false };
 }
 
+/** C-EXFIL-08 : une requête vers un document précis de l'API Grist, dont l'identifiant est écrit dans le code (voir `documentGristVise`). */
+function constatDocumentGrist({ unite, ligne, canal, h, document, cible }) {
+  return constat({
+    regle: 'C-EXFIL-08', axe: 'C', severite: 'majeur', confiance: 'probable',
+    titre: `Requête vers un document Grist précis, écrit dans le code : ${document}`,
+    fichier: unite.chemin, ligne, extrait: cible,
+    constat: `Le widget émet une requête ${canal} vers le document \`${document}\` de \`${h}\`, dont l'identifiant est écrit dans le code.`,
+    impact: "Le document que l'agent a ouvert ne se connaît qu'à l'exécution, par l'adresse que renvoie `grist.docApi.getAccessToken()`. Un identifiant écrit dans le code désigne un autre document, celui de l'auteur ou un document public : ce que le widget y envoie sort du document de l'agent sans passer pour un hôte tiers, puisque l'hôte est celui de Grist.",
+    remediation: "Viser le document ouvert par la `baseUrl` de `getAccessToken()`. Si un autre document est voulu, documenter dans le README lequel, pourquoi, et qui en contrôle l'accès.",
+    referentiels: [REF_GUIDE, 'RGPD art. 5 (minimisation)'],
+  });
+}
+
 /** Appels réseau sortants dans le code JavaScript exécuté. */
 export function analyserSortiesReseau(ctx) {
   const constats = [];
@@ -67,7 +80,12 @@ export function analyserSortiesReseau(ctx) {
   const signaler = ({ unite, ligne, canal, cible, dynamique, protection = null }) => {
     const h = hote(cible);
     if (estLocal(h) && !dynamique) return;                 // requête sur soi-même
-    if (estGrist(h)) return;                               // API Grist : hors périmètre de ce constat
+    if (estGrist(h)) {                                     // API Grist : hors périmètre de ce constat, sauf un document précis écrit dans le code
+      const document = documentGristVise(cible);
+      const cleDocument = `grist:${unite.chemin}:${ligne}:${canal}:${cible}`;
+      if (document && !vus.has(cleDocument)) { vus.add(cleDocument); constats.push(constatDocumentGrist({ unite, ligne, canal, h, document, cible })); }
+      return;
+    }
     // `cible` fait partie de la clé : `importScripts('./a.js', 'https://x')`
     // signale les deux arguments sur le même nœud, avec le même `canal` —
     // sans elle, le second argument serait pris pour un doublon du premier.

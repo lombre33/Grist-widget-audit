@@ -35,7 +35,7 @@ import * as esbuild from 'esbuild';
 import { demarrerServeur } from './serveur.js';
 import { constat } from '../moteur/modele.js';
 import { analyserAccesAppat } from '../regles/d-perimetre.js';
-import { estGrist } from '../contexte/hotes-grist.js';
+import { estGrist, documentGristVise } from '../contexte/hotes-grist.js';
 
 // `new URL(import.meta.url).pathname` casse sur Windows : un chemin
 // `file:///D:/...` donne un pathname `/D:/...` (barre oblique de tête que
@@ -817,10 +817,34 @@ export async function auditDynamique(ctx, options = {}) {
   return { constats, brut };
 }
 
+/** D-RESEAU-03 : les requêtes vers un document précis d'un hôte Grist, un constat par document. */
+function constatsDocumentsGrist(requetes) {
+  const parDocument = new Map();
+  for (const r of requetes) {
+    const document = documentGristVise(r.url);
+    if (!document) continue;
+    const cle = `${r.hote}/${document}`;
+    if (!parDocument.has(cle)) parDocument.set(cle, { hote: r.hote, document, liste: [] });
+    parDocument.get(cle).liste.push(r);
+  }
+  return [...parDocument.values()].map(({ hote, document, liste }) => constat({
+    regle: 'D-RESEAU-03', axe: 'D', severite: 'majeur', confiance: 'prouve',
+    titre: `Requête confirmée à l'exécution vers un document Grist précis (${document}), qui n'est pas le document ouvert`,
+    constat: `${liste.length} requête(s) effectivement émise(s) vers le document \`${document}\` de \`${hote}\` pendant le scénario de test : ${liste.slice(0, 5).map((r) => `${r.methode} ${r.url}`).join(' ; ')}.`,
+    impact: "Le document ouvert par l'agent est joint par la `baseUrl` de `getAccessToken()`, pas par un identifiant écrit dans le code ou tiré d'ailleurs. Cette requête a été interceptée et neutralisée ; en usage réel, ce que le widget y met sort du document de l'agent vers un document que l'auteur ou un tiers peut contrôler, sans passer pour un hôte tiers puisque l'hôte est celui de Grist.",
+    remediation: "Viser le document ouvert par la `baseUrl` de `getAccessToken()`. Si un autre document est voulu, documenter dans le README lequel, pourquoi, et qui en contrôle l'accès.",
+    referentiels: ['OWASP Top 10 A10:2021'],
+    preuve: { hote, document, requetes: liste.slice(0, 10) },
+  }));
+}
+
 function constatsReseau(toutesRequetes, substitutionApiGrist = [], { scenarioComplet = true } = {}) {
   const constats = [];
   // Un appel à l'API Grist officielle (ou à l'instance de l'État) est l'usage normal d'un widget : il reste neutralisé comme les autres, mais n'est pas un contact avec un tiers.
   const requetes = toutesRequetes.filter((r) => !estGrist(r.hote));
+  // Sauf vers un document précis : le document ouvert dans le scénario est joint par la `baseUrl` de `getAccessToken`, à l'adresse de l'hôte de test, jamais chez Grist.
+  const constatsDocuments = constatsDocumentsGrist(toutesRequetes);
+  constats.push(...constatsDocuments);
   if (substitutionApiGrist.length) {
     constats.push(constat({
       regle: 'D-RESEAU-02', axe: 'D', severite: 'info', confiance: 'prouve',
@@ -834,7 +858,7 @@ function constatsReseau(toutesRequetes, substitutionApiGrist = [], { scenarioCom
     // Un scénario interrompu (D-TIMEOUT-01) n'a pas « joué » chargement,
     // réception de données et modification : il ne peut pas conclure que
     // rien n'est sorti. L'absence de requête n'est alors pas un constat.
-    if (!scenarioComplet) return constats;
+    if (!scenarioComplet || constatsDocuments.length) return constats;
     constats.push(constat({
       regle: 'D-RESEAU-00', axe: 'D', severite: 'info', confiance: 'prouve',
       titre: 'Aucune requête vers un domaine tiers observée à l\'exécution',
