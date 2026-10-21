@@ -111,7 +111,7 @@ function blocLectureVerdict() {
  * le score sans voir qu'il est incomplet.
  */
 function blocMotif(notation) {
-  const partiel = notation.axesNonExecutes.length > 0 || (notation.axesPartiels ?? []).length > 0 || (notation.axesEmpeches ?? []).length > 0;
+  const partiel = notation.axesNonExecutes.length > 0 || (notation.axesPartiels ?? []).length > 0 || (notation.axesEmpeches ?? []).length > 0 || Boolean(notation.plafonne);
   return `<p class="motif-verdict${partiel ? ' motif-partiel' : ''}">${echapper(notation.motif)}</p>`;
 }
 

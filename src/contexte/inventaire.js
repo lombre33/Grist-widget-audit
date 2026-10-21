@@ -19,6 +19,7 @@ import { lirePage, urlDe, urlDeCarte, cheminLocal, mentionDe } from '../moteur/p
 import { lireUnite, noterParcoursEchoue, chaineLitterale, nomPointe, extraireImportMaps, resolveurDeCartes } from '../moteur/analyse-js.js';
 import { lireFeuille, nouveauBudgetCss } from '../moteur/css.js';
 import { numeroLigne } from '../moteur/lignes.js';
+import { estMinifie } from '../moteur/minifie.js';
 
 /**
  * Dossiers que l'inventaire ne parcourt pas : du code généré ou tiers, ou de
@@ -84,6 +85,7 @@ export function construireContexte(racine, { maxEntreesListees = MAX_ENTREES_LIS
     // Du JSON valide n'exécute rien, quelle que soit l'adresse qui le désigne : un objet ne se lit ni comme un module ni comme un script, une valeur seule n'a pas d'effet. Ce n'est pas du code que l'outil ne saurait pas lire.
     f.commeCode = designe && estJsonValide(f.contenu) ? false : designe;
     f.mention = mentions.get(f.chemin) ?? null;
+    f.minifie = estFichierJs(f) && estMinifie(f.contenu);
     f.vendorise = estVendorise(f);
   }
 
@@ -987,8 +989,9 @@ export const aSignatureDeBundleur = (texte) => SIGNATURE_BUNDLEUR.test(texte.sli
 /**
  * Fichier qui présente les caractéristiques d'une bibliothèque tierce
  * recopiée dans le dépôt (bundlée ou minifiée), au sens de la règle E-DEP-02 :
- * chemin `vendor/`, `libs/`, `third-party/`, suffixe `.min.js`, ligne
- * moyenne très longue (minification), ou signature d'empaqueteur.
+ * chemin `vendor/`, `libs/`, `third-party/`, suffixe `.min.js`, code minifié
+ * (`f.minifie`, voir `src/moteur/minifie.js`), ligne moyenne très longue sur
+ * plus de 300 lignes, ou signature d'empaqueteur.
  *
  * Point de vérité unique : les axes A et B s'appuient sur `f.vendorise`
  * pour ne pas juger la qualité et la lisibilité d'un code que le
@@ -997,11 +1000,14 @@ export const aSignatureDeBundleur = (texte) => SIGNATURE_BUNDLEUR.test(texte.sli
  * entiers quelle que soit l'origine du fichier.
  */
 export function estVendorise(f) {
-  if (f.binaire || !f.contenu || !['.js', '.mjs'].includes(f.ext)) return false;
-  return cheminVendorise(f.chemin) ||
+  if (!estFichierJs(f)) return false;
+  return cheminVendorise(f.chemin) || Boolean(f.minifie) ||
     ((f.locSignificatives ?? 0) > 300 && (f.taille / Math.max(1, f.lignes.length)) > 200) ||
     ((f.locSignificatives ?? 0) > 300 && aSignatureDeBundleur(f.contenu));
 }
+
+/** Un fichier lu dont l'extension est celle d'un script : le seul qu'on dise minifié ou tiers. */
+const estFichierJs = (f) => !f.binaire && Boolean(f.contenu) && ['.js', '.mjs'].includes(f.ext);
 
 /**
  * La part de `estVendorise` que le chemin seul dit : un dossier de bibliothèques tierces ou un suffixe `.min.js`. Un fichier

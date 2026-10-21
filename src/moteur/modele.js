@@ -133,6 +133,10 @@ const LONGUEUR_LUE_EXTRAIT = 4096;
  *   présenter comme complet. Ne pas confondre avec un axe non exécuté
  *   (`axesNonExecutes` dans `noter()`) : ici l'axe a bien tourné, une seule
  *   vérification en son sein a échoué.
+ * @param {boolean} [c.plafonneLaNote] ce que le constat décrit se dérobe à la mesure des axes (du code que
+ *   personne ne peut relire) sans que la mesure soit empêchée : les axes gardent leur score, mais `noter()`
+ *   plafonne la note globale sous le seuil de « CONFORME » et le dit dans `motif`, pour que ce code ne
+ *   note jamais mieux que le même code lisible.
  * @param {string[]} [c.axesEmpeches] les axes que CE WIDGET empêche de mesurer
  *   (une boucle qui occupe le navigateur jusqu'au délai, un fichier de code
  *   qu'aucun lecteur ne lit) : `noter()` les note 0 et dit pourquoi. Ce n'est
@@ -164,6 +168,7 @@ export function constat(c) {
     confiance: c.confiance ?? 'probable',
     preuve: preuveMasquee(preuveBornee(c.preuve)), // bornée d'abord : les emplacements omis ne se parcourent pas
     mesurePartielle: Boolean(c.mesurePartielle),
+    plafonneLaNote: Boolean(c.plafonneLaNote),
     axesEmpeches,
   };
 }

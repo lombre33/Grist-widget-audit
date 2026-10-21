@@ -135,6 +135,19 @@ code probablement non relu. Ce constat est volontairement formulé comme une
 question à vérifier, pas comme une accusation : le guide autorise l'usage de
 l'IA, il interdit le dépôt de sortie brute non relue.
 
+Le code minifié ne se lit pas : les axes A et B ne le jugent pas, et il reste
+pleinement analysé en sécurité (axes C et D). Il est reconnu à sa forme (des
+lignes de plus de 200 caractères en moyenne, sur plus de 1 Kio), que la lecture
+du code confirme : des commentaires très longs, une image en base64 ou un
+tableau de nombres ne font pas un fichier minifié. Un fichier exécuté qui est
+minifié sans que son en-tête donne une version et une licence donne un seul
+constat pour le dépôt, B-MIN-01 (majeur), qui plafonne la note globale à
+79/100 : du code propre livré minifié ne note jamais mieux que le même code
+lisible, et le motif du verdict le dit. Une bibliothèque tierce dont l'en-tête
+donne version et licence est suivie par l'axe E (E-DEP-02, en information) et
+n'est pas plafonnée. Le test lit les fichiers `.js` et `.mjs`, non les scripts
+d'une page HTML.
+
 ## Axe C — Sécurité applicative (statique)
 
 Voir le modèle de menace ci-dessus. Points contrôlés : négociation du

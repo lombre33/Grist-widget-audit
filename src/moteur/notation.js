@@ -34,6 +34,9 @@ const SEUIL_LINEAIRE = 92;
 const PLANCHER_SOUPLE = 100 - SEUIL_LINEAIRE;
 const ECHELLE_QUEUE = 40;
 
+/** La note globale d'un widget dont un constat la plafonne (`plafonneLaNote`) : un point sous le seuil de « CONFORME » (80). */
+const PLAFOND_NOTE = 79;
+
 export function noterAxe(penalite) {
   if (penalite <= SEUIL_LINEAIRE) return Math.round(100 - penalite);
   return Math.round(PLANCHER_SOUPLE * Math.exp(-(penalite - SEUIL_LINEAIRE) / ECHELLE_QUEUE));
@@ -129,7 +132,11 @@ export function noter(constats, axesNonExecutes = new Set()) {
 
   const notes = Object.values(parAxe).filter((a) => a.score !== null);
   const poidsTotal = notes.reduce((s, a) => s + a.poids, 0) || 1;
-  const global = Math.round(notes.reduce((s, a) => s + a.score * a.poids, 0) / poidsTotal);
+  const globalMesure = Math.round(notes.reduce((s, a) => s + a.score * a.poids, 0) / poidsTotal);
+  // Du code que personne ne peut relire échappe aux axes A et B : sans plafond, il noterait mieux que le même code lisible.
+  const causesDuPlafond = constats.filter((c) => c.plafonneLaNote);
+  const plafonnee = causesDuPlafond.length > 0 && globalMesure > PLAFOND_NOTE;
+  const global = plafonnee ? PLAFOND_NOTE : globalMesure;
 
   const bloquants = constats.filter((c) => c.bloquant);
   const critiques = constats.filter((c) => c.severite === 'critique' && !c.bloquant);
@@ -149,6 +156,11 @@ export function noter(constats, axesNonExecutes = new Set()) {
   } else {
     verdict = 'CONFORME';
     motif = `Score global de ${global}/100, aucun point bloquant identifié.`;
+  }
+
+  if (plafonnee) {
+    const titres = [...new Set(causesDuPlafond.map((c) => c.titre))].join(' ; ');
+    motif = `Note plafonnée à ${PLAFOND_NOTE}/100 (${globalMesure}/100 avant le plafond) : ${titres}. ${motif}`;
   }
 
   // Un axe non exécuté est exclu du calcul (voir plus haut) : le score et le
@@ -204,6 +216,7 @@ export function noter(constats, axesNonExecutes = new Set()) {
     axesNonExecutes: [...axesNonExecutes],
     axesPartiels: [...axesPartiels.keys()],
     axesEmpeches: Object.keys(AXES).filter((code) => empeches.has(code)),
+    plafonne: plafonnee ? { plafond: PLAFOND_NOTE, globalMesure, causes: causesDuPlafond.map(causeDe) } : null,
   };
   // La roadmap se calcule sur la notation déjà figée : par où commencer,
   // jamais un nouveau calcul de score (voir src/moteur/priorisation.js).

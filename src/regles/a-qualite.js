@@ -14,7 +14,7 @@ import { numeroLigne } from '../moteur/lignes.js';
 import { mesurerFonction, mesurerProgramme, nomDeFonction, nomDuNiveauSuperieur, estAutoAppelee } from '../moteur/fonctions.js';
 import { mesurerLignes, NOTE_LIGNES_APPROCHEES } from '../moteur/lignes-de-code.js';
 import { creerRecherche } from '../moteur/clones.js';
-import { aSignatureDeBundleur } from '../contexte/inventaire.js';
+import { aSignatureDeBundleur, cheminVendorise } from '../contexte/inventaire.js';
 import { citerSiBesoin } from '../moteur/texte-du-widget.js';
 import { analyserEfficacite } from './a-efficacite.js';
 
@@ -298,7 +298,8 @@ const estGenere = (fichier, unite) => [fichier.contenu, unite.source].some((text
  * rien ne s'esquive en s'en disant l'auteur.
  */
 function raisonDeNePasComparer(fichier, unite) {
-  if (fichier.vendorise || fichier.dossierExclu) return 'tierce';
+  // Un fichier que sa seule forme fait vendoriser (`f.minifie`) est minifié : ni sa bibliothèque, ni un dossier ne le disent tiers.
+  if (fichier.dossierExclu || cheminVendorise(fichier.chemin) || (fichier.vendorise && !fichier.minifie)) return 'tierce';
   if (estMinifie(unite.source)) return 'minifiee';
   if (aSignatureDeBundleur(unite.source)) return 'empaquetee';
   if (!fichier.executee && estGenere(fichier, unite)) return 'generee';

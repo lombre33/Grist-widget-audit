@@ -5,6 +5,7 @@
  */
 import { reglesA } from '../regles/a-qualite.js';
 import { reglesB } from '../regles/b-lisibilite.js';
+import { analyserMinifie } from '../regles/b-minifie.js';
 import { reglesC } from '../regles/c-securite.js';
 import { reglesE } from '../regles/e-dependances.js';
 import { reglesF } from '../regles/f-conformite.js';
@@ -57,7 +58,7 @@ export async function analyseStatique(ctx, options = {}) {
   const constats = [];
   // C avant B : B-DOC-03/04 lisent ctx.usagesGrist et ctx.destinationsExternes,
   // que seul l'axe C renseigne (voir analyserAccesGrist / analyserSortiesReseau).
-  for (const regle of [...reglesA, ...reglesC, ...reglesB, ...reglesF]) {
+  for (const regle of [...reglesA, ...reglesC, ...reglesB, analyserMinifie, ...reglesF]) {
     constats.push(...regle(ctx));
   }
   // Ce que l'outil n'a pas pu lire se dit en dernier, avec les axes qu'il empêche de mesurer : le budget des arêtes de document

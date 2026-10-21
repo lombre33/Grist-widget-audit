@@ -23,6 +23,7 @@ export function genererJson({ ctx, notation, meta }) {
     axesNonExecutes: notation.axesNonExecutes,
     axesPartiels: notation.axesPartiels,
     axesEmpeches: notation.axesEmpeches,
+    plafonne: notation.plafonne,
     axes,
     // Par où commencer : liste déjà triée (bloquant, puis gain réel estimé sur
     // le score global, la sévérité départageant), une entrée par règle
