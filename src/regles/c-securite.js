@@ -24,6 +24,9 @@ import { lireFeuille, nouveauBudgetCss, LIMITES_CSS } from '../moteur/css.js';
 import { numeroLigne } from '../moteur/lignes.js';
 import { analyserSecrets } from './c-secrets.js';
 import { estGrist } from '../contexte/hotes-grist.js';
+import { analyserAccesGrist } from './c-grist.js';
+
+export { analyserAccesGrist };
 
 const REF_ANSSI = 'ANSSI — Recommandations pour la sécurisation des sites web';
 const REF_GUIDE = 'Guide de contribution Grist.Gouv — « Safe : no requests to undocumented external services »';
@@ -37,107 +40,6 @@ const estLocal = (h) => !h || h === 'widget.local' || h === 'localhost' || h ===
 function enregistrerDestination(ctx, h) {
   if (!h) return;
   (ctx.destinationsExternes ?? (ctx.destinationsExternes = new Set())).add(h);
-}
-
-// ---------------------------------------------------------------------------
-// C-GRIST — négociation du niveau d'accès
-// ---------------------------------------------------------------------------
-
-/** Relève le niveau d'accès demandé et l'usage réel de l'API document. */
-export function analyserAccesGrist(ctx) {
-  const constats = [];
-  const usages = { ready: [], acces: [], lecture: [], ecriture: [], ecritureSchema: [] };
-
-  pourChaqueUniteJs(ctx, {}, ({ ast, ligneDe, walk, unite }) => {
-    if (!ast) return;
-    walk.simple(ast, {
-      CallExpression(n) {
-        const nom = nomPointe(n.callee) || '';
-        const loc = { fichier: unite.chemin, ligne: ligneDe(n) };
-
-        if (/(^|\.)grist\.ready$/.test(nom)) {
-          usages.ready.push(loc);
-          const opts = n.arguments[0];
-          if (opts?.type === 'ObjectExpression') {
-            const prop = opts.properties.find((p) => (p.key?.name ?? p.key?.value) === 'requiredAccess');
-            const val = chaineLitterale(prop?.value);
-            if (val) usages.acces.push({ ...loc, niveau: val });
-          }
-        }
-        if (/docApi\.(fetchTable|listTables|getTable|fetchSelectedTable|fetchSelectedRecord|getAccessToken|getDocName)$/.test(nom)
-            || /^grist\.(selectedTable|getTable)/.test(nom)) usages.lecture.push({ ...loc, appel: nom });
-        if (/docApi\.applyUserActions$/.test(nom) || /selectedTable\.(create|update|destroy|upsert)$/.test(nom)) {
-          usages.ecriture.push({ ...loc, appel: nom });
-          // Une action de schéma (AddTable, ModifyColumn…) va au-delà de la
-          // simple écriture de données : elle modifie la structure du document.
-          const texte = JSON.stringify(n.arguments?.[0] ?? '');
-          if (/"(AddTable|RemoveTable|AddColumn|RemoveColumn|ModifyColumn|RenameTable|AddEmptyTable)"/.test(texte)) {
-            usages.ecritureSchema.push({ ...loc, appel: nom });
-          }
-        }
-      },
-    });
-  });
-
-  ctx.usagesGrist = usages;
-
-  if (!usages.ready.length) {
-    constats.push(constat({
-      regle: 'C-GRIST-01', axe: 'C', severite: 'majeur', confiance: 'certain',
-      titre: "Le widget n'appelle jamais grist.ready()",
-      constat: "Aucun appel à `grist.ready()` n'a été trouvé dans le code exécuté.",
-      impact: "Sans cet appel, le widget ne déclare ni son niveau d'accès ni ses colonnes attendues : Grist ne peut pas lui transmettre de données, et l'agent n'a aucun écran de consentement décrivant ce que le widget va lire.",
-      remediation: "Appeler `grist.ready({ requiredAccess: '<niveau>', columns: [...] })` au chargement.",
-      referentiels: ['Documentation Grist — Custom widgets / grist.ready()'],
-    }));
-  }
-
-  const niveaux = new Set(usages.acces.map((a) => a.niveau));
-  if (usages.ready.length && !usages.acces.length) {
-    constats.push(constat({
-      regle: 'C-GRIST-02', axe: 'C', severite: 'majeur', confiance: 'certain',
-      titre: "Le niveau d'accès demandé n'est pas déclaré explicitement",
-      fichier: usages.ready[0].fichier, ligne: usages.ready[0].ligne,
-      constat: "`grist.ready()` est appelé sans propriété `requiredAccess`.",
-      impact: "Le widget repose sur le niveau par défaut, qui peut changer selon la version de Grist et selon ce que l'agent a coché. Le comportement du widget devient dépendant de l'environnement.",
-      remediation: "Déclarer explicitement le niveau minimal nécessaire : `none`, `read table`, ou `full`.",
-    }));
-  }
-
-  if (niveaux.has('full')) {
-    const emplacement = usages.acces.find((a) => a.niveau === 'full');
-    const ecrit = usages.ecriture.length > 0;
-    constats.push(constat({
-      regle: 'C-GRIST-03', axe: 'C', severite: ecrit ? 'majeur' : 'critique', confiance: 'certain',
-      titre: ecrit
-        ? "Accès `full` demandé, avec écriture effective dans le document"
-        : "Accès `full` demandé alors qu'aucune écriture n'a été détectée",
-      fichier: emplacement.fichier, ligne: emplacement.ligne,
-      constat: ecrit
-        ? `Le widget demande \`requiredAccess: 'full'\` et réalise ${usages.ecriture.length} appel(s) d'écriture (\`applyUserActions\` / \`create\` / \`update\`).`
-        : `Le widget demande \`requiredAccess: 'full'\` mais aucune écriture n'a été trouvée : ${usages.lecture.length} appel(s) de lecture seulement.`,
-      impact: "`full` donne au widget la lecture ET l'écriture de toutes les tables du document, y compris celles sans rapport avec sa fonction, ainsi que l'accès aux métadonnées. En cas de faille dans le widget ou dans une de ses dépendances, c'est le document entier qui est exposé.",
-      remediation: ecrit
-        ? "Documenter dans le README pourquoi `full` est nécessaire, quelles tables sont écrites et dans quelles conditions. C'est la première question que posera l'équipe Grist.Gouv à la revue de sécurité."
-        : "Rétrograder en `read table` : le widget ne fait que lire. `full` est ici un privilège inutile, et donc une surface d'attaque gratuite.",
-      referentiels: ['Principe du moindre privilège', 'ANSSI — Guide d\'hygiène informatique, mesure 23'],
-    }));
-  }
-
-  if (usages.ecritureSchema.length) {
-    const p = usages.ecritureSchema[0];
-    constats.push(constat({
-      regle: 'C-GRIST-04', axe: 'C', severite: 'majeur', confiance: 'certain',
-      titre: 'Le widget modifie la structure du document, pas seulement les données',
-      fichier: p.fichier, ligne: p.ligne,
-      constat: `${usages.ecritureSchema.length} action(s) de schéma détectée(s) (création ou suppression de table ou de colonne).`,
-      impact: "Une erreur de logique peut détruire des colonnes de l'agent, sans que Grist ne puisse distinguer cette action d'une action volontaire de l'utilisateur.",
-      remediation: 'Confirmer explicitement auprès de l\'agent avant toute action de schéma, et documenter ces actions dans le README.',
-      preuve: { emplacements: usages.ecritureSchema },
-    }));
-  }
-
-  return constats;
 }
 
 // ---------------------------------------------------------------------------

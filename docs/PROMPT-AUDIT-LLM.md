@@ -405,10 +405,10 @@ C'est l'axe le plus dense du référentiel — largement devant les autres rien 
 **C-GRIST — négociation de l'accès**
 | Règle | Déclenchement | Sévérité |
 |---|---|---|
-| C-GRIST-01 | Aucun appel à `grist.ready()` | majeur |
-| C-GRIST-02 | `grist.ready()` appelé sans `requiredAccess` explicite | majeur |
-| C-GRIST-03 | `requiredAccess: 'full'` demandé : si une écriture est bien détectée (`applyUserActions`, `.create/.update/.destroy/.upsert`) → majeur (à documenter pourquoi `full` est nécessaire) ; si **aucune** écriture n'est détectée → **critique** (privilège excessif injustifié, à rétrograder en `read table`) |
-| C-GRIST-04 | Actions de modification de schéma détectées (`AddTable`, `RemoveTable`, `AddColumn`, `RemoveColumn`, `ModifyColumn`, `RenameTable`, `AddEmptyTable`) | majeur |
+| C-GRIST-01 | Aucun appel à `grist.ready()` (appelé par alias ou déstructuration, il est vu ; non signalé si l'objet `grist` est transmis ailleurs) | majeur |
+| C-GRIST-02 | `grist.ready()` appelé sans `requiredAccess` explicite ; ou avec un `requiredAccess` que le code ne donne pas en clair (valeur calculée), en confiance probable | majeur |
+| C-GRIST-03 | `requiredAccess: 'full'` demandé : si une écriture est bien détectée (`applyUserActions`, `.create/.update/.destroy/.upsert` sur une table obtenue par `getTable()` ou `selectedTable`, alias compris) → majeur (à documenter pourquoi `full` est nécessaire) ; si le widget lit au-delà de sa table liée (`docApi.fetchTable`, `listTables`, jeton d'accès, `getTable('<table>')`) ou transmet l'objet `grist` ailleurs que dans une variable → majeur, confiance probable ; si le widget ne fait **que** lire sa table liée → **critique** (privilège excessif injustifié, à rétrograder en `read table`) |
+| C-GRIST-04 | Actions de modification de schéma lues dans les actions passées à `applyUserActions` (`AddTable`, `RemoveTable`, `RenameTable`, `AddEmptyTable`, `DuplicateTable`, `AddColumn`, `AddVisibleColumn`, `AddHiddenColumn`, `RemoveColumn`, `RenameColumn`, `ModifyColumn`, ou écriture d'enregistrements dans une table `_grist_*`) ; une valeur de cellule qui porte ce nom n'en est pas une | majeur |
 
 **C-EXFIL — sortie de données**
 | Règle | Déclenchement | Sévérité |
