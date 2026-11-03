@@ -305,7 +305,7 @@ export async function analyserPaquetNpm(ctx, options = {}) {
             : "Dépendance de développement : le risque porte sur le poste du contributeur et la chaîne de construction, pas sur l'agent.",
           remediation: av.fixAvailable ? `Mettre à jour (\`npm audit fix\`${av.fixAvailable?.isSemVerMajor ? ', changement de version majeure requis' : ''}).` : 'Aucun correctif publié : évaluer le remplacement de la dépendance.',
           referentiels: ['GitHub Advisory Database', 'OWASP Top 10 A06:2021 — Composants vulnérables'],
-          preuve: { avis: { severity: av.severity, range: av.range } },
+          preuve: { nom, avis: { severity: av.severity, range: av.range } },
         }));
       }
       if (!Object.keys(r.avis ?? {}).length) {

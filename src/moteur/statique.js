@@ -8,6 +8,7 @@ import { reglesB } from '../regles/b-lisibilite.js';
 import { analyserMinifie } from '../regles/b-minifie.js';
 import { reglesC } from '../regles/c-securite.js';
 import { reglesE } from '../regles/e-dependances.js';
+import { bilanDependances } from '../regles/e-bilan.js';
 import { reglesF } from '../regles/f-conformite.js';
 import { analyserSurface } from '../regles/c-surface.js';
 import { analyserIllisibles } from '../regles/c-illisibles.js';
@@ -68,6 +69,8 @@ export async function analyseStatique(ctx, options = {}) {
     constats.push(...(r ?? []));
   }
   if (options.reseau === false) constats.push(...constatsSansReseau(ctx));
+  // Le bilan lit ce que l'axe E vient de dire (CDN, bibliothèques embarquées, `npm audit`) : il passe après lui, sans rien refaire.
+  constats.push(...bilanDependances(ctx, constats.filter((c) => c.axe === 'E')));
   constats.push(...analyserSurface(ctx));
   constats.push(...analyserIllisibles(ctx));
   ajouterMentions(ctx, constats);

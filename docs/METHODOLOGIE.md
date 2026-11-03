@@ -355,7 +355,12 @@ chargée à l'exécution depuis un CDN (le code livré au navigateur peut
 changer sans que le dépôt bouge), bibliothèque embarquée dans le dépôt sans
 version ni licence traçable, dépendances npm (verrouillage, versions
 figées, `npm audit` contre la base d'avis GitHub quand un accès réseau est
-disponible ; sans réseau, l'option `--sans-reseau` le dit par E-VULN-OPTION, axe mesuré en partie et verdict plafonné à SOUS RÉSERVE). Complété par la vérification de la licence du dépôt — condition
+disponible ; sans réseau, l'option `--sans-reseau` le dit par E-VULN-OPTION, axe mesuré en partie et verdict plafonné à SOUS RÉSERVE). Un bilan (E-DEP-07, en information, sans effet sur la note ni sur le verdict)
+répond, quand le widget a des dépendances, à « maintenues ? présumées sûres ? » en
+séparant ce qui est mesuré de ce qui ne l'est pas : hors ligne, seul le drapeau
+« déprécié » du verrou npm se lit ; la régularité des publications n'est pas
+mesurée (elle demande des dates, donc le registre), et la sûreté reprend
+l'état de `npm audit`. Complété par la vérification de la licence du dépôt — condition
 de fait pour qu'un fork par l'équipe Grist.Gouv soit juridiquement possible.
 
 ## Axe F — Conformité, souveraineté, accessibilité, sobriété
