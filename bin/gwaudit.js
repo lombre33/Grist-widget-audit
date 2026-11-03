@@ -8,7 +8,7 @@
  *
  * Options :
  *   --sans-dynamique     n'exécute que l'analyse statique (axes A, B, C, E, F)
- *   --sans-reseau        n'interroge pas npm audit (axe E) : fonctionne hors-ligne
+ *   --sans-reseau        n'interroge pas le registre npm (npm audit, dates de publication, axe E) : fonctionne hors-ligne
  *   --sortie <dossier>   dossier de sortie des rapports (défaut : ./rapport-<nom>)
  *   --json               écrit aussi rapport.json
  *   --sans-html          n'écrit pas rapport.html (écrit par défaut)

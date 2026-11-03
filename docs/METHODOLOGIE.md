@@ -357,10 +357,13 @@ version ni licence traçable, dépendances npm (verrouillage, versions
 figées, `npm audit` contre la base d'avis GitHub quand un accès réseau est
 disponible ; sans réseau, l'option `--sans-reseau` le dit par E-VULN-OPTION, axe mesuré en partie et verdict plafonné à SOUS RÉSERVE). Un bilan (E-DEP-07, en information, sans effet sur la note ni sur le verdict)
 répond, quand le widget a des dépendances, à « maintenues ? présumées sûres ? » en
-séparant ce qui est mesuré de ce qui ne l'est pas : hors ligne, seul le drapeau
-« déprécié » du verrou npm se lit ; la régularité des publications n'est pas
-mesurée (elle demande des dates, donc le registre), et la sûreté reprend
-l'état de `npm audit`. Complété par la vérification de la licence du dépôt — condition
+séparant ce qui est mesuré de ce qui ne l'est pas : le drapeau « déprécié » du
+verrou npm ; la date de dernière publication et le retard de version majeure
+des 25 premières dépendances directes de production, lus au registre npm (même
+coupure `--sans-reseau` que `npm audit`, « récente » jusqu'à 24 mois, un indice
+et non une preuve de maintenance) ; la sûreté reprend l'état de `npm audit`. Ce
+qui n'a pas pu être lu (option, registre injoignable, paquet hors registre
+public) est écrit « non mesuré ». Complété par la vérification de la licence du dépôt — condition
 de fait pour qu'un fork par l'équipe Grist.Gouv soit juridiquement possible.
 
 ## Axe F — Conformité, souveraineté, accessibilité, sobriété

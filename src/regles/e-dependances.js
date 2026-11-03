@@ -14,9 +14,6 @@
  *   3. de développement         — risque limité au poste du contributeur
  */
 import path from 'node:path';
-import os from 'node:os';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import fs from 'node:fs';
 import { constat } from '../moteur/modele.js';
 import { extraireImportMaps } from '../moteur/analyse-js.js';
@@ -24,19 +21,9 @@ import { versionEnTete, licenceEnTete } from '../moteur/minifie.js';
 import { minifieSansOrigine } from './b-minifie.js';
 import { importsDistants, raisonCarteTardiveBalise, raisonLienDePrechargement, raisonsEntreeNonProtegee } from '../contexte/imports-distants.js';
 import { lirePage, integriteProtege, urlDe, urlDeCarte, mentionDe } from '../moteur/page-html.js';
+import { creerNpmIsole, REGISTRE_NPM } from './npm-isole.js';
 
 const estLocalHote = (h) => !h || h === 'widget.local' || h === 'localhost' || h === '127.0.0.1';
-
-const execFileAsync = promisify(execFile);
-
-/**
- * `npm` est un script (`npm.cmd`), pas un binaire, sous Windows. `execFile`
- * refuse de le lancer sans passer par un shell depuis Node 18.20.2 / 20.12.2
- * (CVE-2024-27980) : sans ce contournement, l'appel échoue systématiquement
- * sur ce système d'exploitation. Résoudre le nom exact évite d'avoir à passer
- * `shell: true` (et donc la responsabilité d'échapper des arguments).
- */
-const NPM_BIN = process.platform === 'win32' ? 'npm.cmd' : 'npm';
 
 /** Comment le code charge un module, pour le dire dans le constat (les canaux de `visiteursDImports`). */
 const CANAL_DE_CODE = { 'import statique': 'un `import` statique', 'export … from': 'un `export … from`', 'import() distant': 'un `import()`' };
@@ -323,58 +310,41 @@ export async function analyserPaquetNpm(ctx, options = {}) {
 }
 
 /**
- * Lance `npm audit` dans un dossier neutre, isolé du dépôt audité — pas dans
- * `racine` directement. `npm` lit le `.npmrc` du dossier courant avant toute
- * option de ligne de commande : un dépôt hostile pourrait sinon y déclarer un
- * `registry` arbitraire et faire partir la requête (avec l'environnement du
- * process qui l'exécute, dont d'éventuels secrets) vers un hôte qu'il
- * contrôle plutôt que vers le registre npm réel (docs/ARCHITECTURE-V2.md,
- * constat 2). On ne copie que ce qu'il faut à l'audit — `package.json` et
- * `package-lock.json` — jamais le `.npmrc` du dépôt.
+ * Ce que dit la sortie JSON de `npm audit`. Un registre injoignable (hors ligne, certificat refusé) n'est pas une sortie vide : `npm` rend alors un
+ * objet `{ message, error }` sans liste `vulnerabilities`. Le lire comme « aucune vulnérabilité » ferait passer un audit raté pour un audit propre.
+ * @returns {{avis: object} | {erreur: string}}
+ */
+export function interpreterAudit(stdout) {
+  if (!stdout.trim()) return { erreur: 'sortie vide' };
+  const j = JSON.parse(stdout);
+  if (j.error || !j.vulnerabilities || typeof j.vulnerabilities !== 'object') return { erreur: String(j.message ?? 'réponse sans liste de vulnérabilités').slice(0, 200) };
+  return { avis: j.vulnerabilities };
+}
+
+/**
+ * Lance `npm audit` dans un dossier neutre, isolé du dépôt audité (voir `npm-isole.js`) — pas dans `racine` directement. On ne copie que ce qu'il
+ * faut à l'audit — `package.json` et `package-lock.json` — jamais le `.npmrc` du dépôt.
  */
 async function npmAudit(racine) {
   const verrou = path.join(racine, 'package-lock.json');
   if (!fs.existsSync(verrou)) return { erreur: 'aucun package-lock.json' };
 
-  const dossierIsole = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-npm-audit-'));
+  const npm = creerNpmIsole();
   try {
-    fs.copyFileSync(verrou, path.join(dossierIsole, 'package-lock.json'));
+    fs.copyFileSync(verrou, path.join(npm.dossier, 'package-lock.json'));
     const paquetSrc = path.join(racine, 'package.json');
     if (fs.existsSync(paquetSrc)) {
-      fs.copyFileSync(paquetSrc, path.join(dossierIsole, 'package.json'));
+      fs.copyFileSync(paquetSrc, path.join(npm.dossier, 'package.json'));
     } else {
-      fs.writeFileSync(path.join(dossierIsole, 'package.json'), JSON.stringify({ name: 'gwaudit-audit-isole', version: '0.0.0', private: true }));
+      fs.writeFileSync(path.join(npm.dossier, 'package.json'), JSON.stringify({ name: 'gwaudit-audit-isole', version: '0.0.0', private: true }));
     }
-    const npmrcVide = path.join(dossierIsole, '.npmrc-audit-gwaudit');
-    fs.writeFileSync(npmrcVide, '');
-
-    const envIsole = {
-      PATH: process.env.PATH,
-      HOME: dossierIsole,               // pas le HOME réel : pas de ~/.npmrc surprenant à hériter non plus
-      npm_config_userconfig: npmrcVide, // écarte tout ~/.npmrc réel malgré HOME
-      npm_config_registry: 'https://registry.npmjs.org/',
-      // `npm audit` a, lui, réellement besoin d'atteindre le registre npm —
-      // contrairement à l'axe D, dont tout le trafic est neutralisé par
-      // construction. On transmet donc le proxy éventuel de l'environnement
-      // (pas le reste : ni secrets, ni config surprenante), pour qu'un poste
-      // derrière un proxy d'entreprise continue de fonctionner.
-      ...Object.fromEntries(
-        ['HTTP_PROXY', 'HTTPS_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'no_proxy']
-          .filter((cle) => process.env[cle] !== undefined)
-          .map((cle) => [cle, process.env[cle]])
-      ),
-    };
-
-    const { stdout } = await execFileAsync(NPM_BIN, ['audit', '--json', '--audit-level=info', '--registry', 'https://registry.npmjs.org/'], {
-      cwd: dossierIsole, timeout: 120000, maxBuffer: 32 * 1024 * 1024, env: envIsole,
-    }).catch((e) => ({ stdout: e.stdout || '' }));   // npm audit sort en code ≠ 0 dès qu'il trouve quelque chose
-    if (!stdout.trim()) return { erreur: 'sortie vide' };
-    const j = JSON.parse(stdout);
-    return { avis: j.vulnerabilities ?? {} };
+    const { stdout } = await npm.lancer(['audit', '--json', '--audit-level=info', '--registry', REGISTRE_NPM])
+      .catch((e) => ({ stdout: e.stdout || '' }));   // npm audit sort en code ≠ 0 dès qu'il trouve quelque chose
+    return interpreterAudit(stdout);
   } catch (e) {
     return { erreur: String(e.message ?? e).slice(0, 200) };
   } finally {
-    fs.rmSync(dossierIsole, { recursive: true, force: true });
+    npm.nettoyer();
   }
 }
 

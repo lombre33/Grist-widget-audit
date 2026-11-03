@@ -132,7 +132,7 @@ Le rapport est écrit dans `./rapport-<nom-du-widget>/rapport.md`.
 
 Options :
 - `--sans-dynamique` : n'exécute que l'analyse statique (pas de navigateur).
-- `--sans-reseau` : ne consulte pas `npm audit` (fonctionne hors-ligne). Pour un dépôt qui verrouille ses dépendances, le rapport dit alors l'axe E mesuré en partie (E-VULN-OPTION) et le verdict ne peut pas être « CONFORME ».
+- `--sans-reseau` : n'interroge pas le registre npm, ni pour `npm audit` ni pour les dates de publication du bilan des dépendances (fonctionne hors-ligne). Pour un dépôt qui verrouille ses dépendances, le rapport dit alors l'axe E mesuré en partie (E-VULN-OPTION) et le verdict ne peut pas être « CONFORME » ; le bilan (E-DEP-07) écrit la régularité de publication « non mesurée ».
 - `--sortie <dossier>` : change le dossier de sortie.
 - `--json` : écrit aussi `rapport.json`, pour intégration outillée.
 - `--sarif` : écrit aussi `rapport.sarif` (SARIF 2.1.0), pour l'ingestion CI
@@ -280,11 +280,13 @@ sortir non plus — cela **ne dépend d'aucune configuration réseau** :
 l'axe D fonctionne à l'identique derrière un proxy d'entreprise ou sans
 accès Internet du tout.
 
-`npm audit` (axe E), en revanche, a réellement besoin d'atteindre
-`registry.npmjs.org` : il conserve les variables `HTTP(S)_PROXY`/`NO_PROXY`
+`npm audit` et le bilan des dépendances (axe E : avis publiés, dates de publication
+des 25 premières dépendances directes de production, lues par `npm view`),
+en revanche, ont réellement besoin d'atteindre
+`registry.npmjs.org` : ils conservent les variables `HTTP(S)_PROXY`/`NO_PROXY`
 de l'environnement pour fonctionner derrière un proxy d'entreprise, tout en
 ignorant le `.npmrc` et le reste de l'environnement du dépôt audité (voir
-`src/regles/e-dependances.js`, qui l'exécute dans un dossier isolé pour
+`src/regles/npm-isole.js`, qui les exécute dans un dossier isolé pour
 cette raison). Sans accès réseau du tout, utiliser `--sans-reseau` : l'axe E
 le dit explicitement dans le rapport plutôt que de laisser croire à une
 absence de vulnérabilité.
