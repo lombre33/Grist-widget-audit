@@ -11,6 +11,7 @@
  */
 import { SEVERITES, CONFIANCES } from '../moteur/modele.js';
 import { raisonsDeTroncature } from '../contexte/inventaire.js';
+import { libelleDeBibliotheque, regrouperParBibliotheque } from '../moteur/bibliotheque.js';
 
 const SEUIL_GROUPE = 4;
 
@@ -131,7 +132,7 @@ function blocBloquants(bloquants) {
     <h2 id="titre-bloquants">⛔ ${bloquants.length} point${bloquants.length > 1 ? 's' : ''} bloquant${bloquants.length > 1 ? 's' : ''}</h2>
     <p>Un hébergement sur instance officielle (DINUM, ANCT) est exclu tant que ces points ne sont pas corrigés — ils ne se compensent par aucun score par ailleurs élevé, à l'image d'un avis RSSI. Cela ne bloque rien d'autre : ce widget reste installable ailleurs, à charge pour l'agent de juger si ce risque convient à son usage.</p>
     <ul>
-      ${bloquants.map((c) => `<li><a href="#${c.uid}"><code>${echapper(c.regle)}</code> ${echapper(c.titre)}</a></li>`).join('\n      ')}
+      ${bloquants.map((c) => `<li><a href="#${c.uid}"><code>${echapper(c.regle)}</code> ${echapper(c.titre)}${etiquetteDeBibliotheque(c)}</a></li>`).join('\n      ')}
     </ul>
   </section>`;
 }
@@ -256,12 +257,33 @@ function carteGroupee(groupe) {
           ${tete.impact ? `<p><strong>Impact.</strong> ${echapper(tete.impact)}</p>` : ''}
           ${tete.remediation ? `<p><strong>Remédiation.</strong> ${echapper(tete.remediation)}</p>` : ''}
           <p class="constat-meta">Confiance : ${echapper(CONFIANCES[tete.confiance])}${tete.referentiels?.length ? ` · Référentiel(s) : ${echapper(tete.referentiels.join(' ; '))}` : ''}</p>
+          ${blocBibliotheques(groupe)}
           <p class="occurrences-titre">Chaque occurrence :</p>
           <ul class="occurrences">
-            ${groupe.map((g) => `<li id="${g.uid}"><code class="loc">${echapper(g.fichier ?? '')}${g.ligne ? ':' + g.ligne : ''}</code> — ${echapper(g.titre)}</li>`).join('\n            ')}
+            ${groupe.map((g) => `<li id="${g.uid}"><code class="loc">${echapper(g.fichier ?? '')}${g.ligne ? ':' + g.ligne : ''}</code> — ${echapper(g.titre)}${etiquetteDeBibliotheque(g)}</li>`).join('\n            ')}
           </ul>
         </div>
       </details>`;
+}
+
+/** ` — react-dom/client (18.3.1)` : la bibliothèque qu'un constat de chargement nomme, pour qu'une liste de chargements dise de quoi le widget dépend. */
+function etiquetteDeBibliotheque(c) {
+  const libelle = libelleDeBibliotheque(c.preuve);
+  return libelle ? ` — <code>${echapper(libelle)}</code>` : '';
+}
+
+/** Les bibliothèques d'un groupe de chargements, chacune une fois avec ses versions et ses modules : les sous-modules d'une même bibliothèque ne sont pas autant de dépendances. */
+function blocBibliotheques(groupe) {
+  const bibliotheques = regrouperParBibliotheque(groupe);
+  if (!bibliotheques.length) return '';
+  const item = (b) => {
+    const modules = b.modules.map((m) => `${echapper(m.module)}${m.chargements > 1 ? ` ×${m.chargements}` : ''}`).join(', ');
+    return `<li><strong>${echapper(b.nom)}</strong>${b.versions.length ? ` (${echapper(b.versions.join(', '))})` : ''} — ${b.chargements} chargement${b.chargements > 1 ? 's' : ''} : ${modules}</li>`;
+  };
+  return `<p class="occurrences-titre">Bibliothèques concernées (${bibliotheques.length}) :</p>
+          <ul class="occurrences">
+            ${bibliotheques.map(item).join('\n            ')}
+          </ul>`;
 }
 
 /** « 1 occurrence et 4 informations » : une information n'est pas une occurrence, comme dans la notation et la feuille de route. */

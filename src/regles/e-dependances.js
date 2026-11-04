@@ -22,6 +22,7 @@ import { minifieSansOrigine } from './b-minifie.js';
 import { importsDistants, raisonCarteTardiveBalise, raisonLienDePrechargement, raisonsEntreeNonProtegee } from '../contexte/imports-distants.js';
 import { lirePage, integriteProtege, urlDe, urlDeCarte, mentionDe } from '../moteur/page-html.js';
 import { creerNpmIsole, REGISTRE_NPM } from './npm-isole.js';
+import { preuveDeChargement } from '../moteur/bibliotheque.js';
 
 const estLocalHote = (h) => !h || h === 'widget.local' || h === 'localhost' || h === '127.0.0.1';
 
@@ -80,6 +81,7 @@ export function analyserDependancesDistantes(ctx) {
           fichier: f.chemin,
           ligne: s.ligne,
           url: c.valeur,
+          adresse: abs.href,
           hote: abs.hostname,
           sri: protection.sri,
           raisons: protection.raisons,
@@ -105,6 +107,7 @@ export function analyserDependancesDistantes(ctx) {
         fichier: f.chemin,
         ligne: lue.positionDe(e.index).ligne,                    // et non `contenu.slice(0, index).split('\n')` : recopié à chaque entrée, il rendait la règle quadratique (`scripts/chronometrer-pieges.mjs`, entrée « entrées d'import map distantes, une par ligne »)
         url: e.url,
+        adresse: abs.href,
         hote: abs.hostname,
         sri: e.sri,
         raisons: e.sri ? [] : e.carte === undefined ? [RAISON_SANS_INTEGRITE] : raisonsEntreeNonProtegee(e, lue),
@@ -128,6 +131,7 @@ export function analyserDependancesDistantes(ctx) {
       fichier: fichier.chemin,
       ligne,
       url: url.href,
+      adresse: url.href,
       hote: url.hostname,
       sri,
       raisons,
@@ -158,6 +162,7 @@ export function analyserDependancesDistantes(ctx) {
           ? "Embarquer le module dans le dépôt (`vendor/`), l'importer en relatif, et noter sa version et son origine dans le README : c'est le seul moyen de le protéger dans un worker, où l'empreinte d'une import map ne s'applique pas."
           : `Embarquer le module dans le dépôt (\`vendor/\`), l'importer en relatif, et noter sa version et son origine dans le README. Si l'import distant doit être conservé, figer la version dans l'URL et déclarer son adresse dans la clé \`integrity\` d'une import map de la page (\`{ "integrity": { "https://…": "sha384-…" } }\`)${d.obstacle === 'worker-non-resolu' ? " ; écrire aussi l'adresse du worker en littéral (`new Worker('./w.js')`), pour que l'audit établisse quel fichier il exécute" : ''}.`,
       referentiels: ['OWASP Top 10 A08:2021 — Software and Data Integrity Failures', 'ANSSI — Recommandations pour la sécurisation des sites web', 'Guide de contribution Grist.Gouv — « no unnecessary dependencies »'],
+      preuve: preuveDeChargement(d.adresse),
     }));
   }
   return constats;

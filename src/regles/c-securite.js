@@ -25,6 +25,7 @@ import { numeroLigne } from '../moteur/lignes.js';
 import { analyserSecrets } from './c-secrets.js';
 import { estGrist, documentGristVise } from '../contexte/hotes-grist.js';
 import { analyserAccesGrist } from './c-grist.js';
+import { preuveDeChargement } from '../moteur/bibliotheque.js';
 
 export { analyserAccesGrist };
 
@@ -132,6 +133,7 @@ export function analyserSortiesReseau(ctx) {
             : "Héberger le module dans le dépôt (vendoring) et l'importer en relatif. Si l'import distant est réellement nécessaire, le déclarer dans une import map avec `integrity`, et documenter le domaine dans le README."
           : `Supprimer l'appel, ou documenter dans le README ce qui est envoyé à \`${h}\`, pourquoi, et sur quelle base juridique (RGPD) si des données personnelles transitent. Un hébergement sur instance officielle suppose une validation explicite de ce flux.`,
       referentiels: [REF_GUIDE, 'RGPD art. 5 (minimisation)', 'OWASP Top 10 A10:2021 — SSRF / flux sortants'],
+      ...(chargeDuCode && !dynamique ? { preuve: preuveDeChargement(cible) } : {}),
     }));
   };
 
