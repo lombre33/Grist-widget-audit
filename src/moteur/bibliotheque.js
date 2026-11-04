@@ -80,7 +80,7 @@ export const libelleDeBibliotheque = (preuve) => (preuve?.bibliotheque ? `${preu
  * Les constats qui portent une bibliothèque, regroupés par bibliothèque : ses versions, ses modules (un module chargé plusieurs fois n'est cité qu'une fois, avec son
  * nombre de chargements) et son nombre de chargements. Les plus chargées d'abord.
  * @param {Array<{preuve: ?{bibliotheque?: string, version?: ?string, module?: string}}>} constats
- * @returns {Array<{nom: string, versions: string[], modules: Array<{module: string, chargements: number}>, chargements: number}>}
+ * @returns {Array<{nom: string, versions: string[], modules: Array<{module: string, chargements: number}>, chargements: number, constats: object[]}>}
  */
 export function regrouperParBibliotheque(constats) {
   const parNom = new Map();
@@ -88,12 +88,13 @@ export function regrouperParBibliotheque(constats) {
     const p = c.preuve;
     if (!p?.bibliotheque) continue;
     let b = parNom.get(p.bibliotheque);
-    if (!b) parNom.set(p.bibliotheque, b = { nom: p.bibliotheque, versions: new Set(), modules: new Map(), chargements: 0 });
+    if (!b) parNom.set(p.bibliotheque, b = { nom: p.bibliotheque, versions: new Set(), modules: new Map(), chargements: 0, constats: [] });
     if (p.version) b.versions.add(p.version);
     b.modules.set(p.module, (b.modules.get(p.module) ?? 0) + 1);
     b.chargements++;
+    b.constats.push(c);
   }
   return [...parNom.values()]
-    .map((b) => ({ nom: b.nom, versions: [...b.versions].sort(), modules: [...b.modules].map(([module, chargements]) => ({ module, chargements })).sort((x, y) => (x.module < y.module ? -1 : x.module > y.module ? 1 : 0)), chargements: b.chargements }))
+    .map((b) => ({ nom: b.nom, versions: [...b.versions].sort(), modules: [...b.modules].map(([module, chargements]) => ({ module, chargements })).sort((x, y) => (x.module < y.module ? -1 : x.module > y.module ? 1 : 0)), chargements: b.chargements, constats: b.constats }))
     .sort((x, y) => y.chargements - x.chargements || (x.nom < y.nom ? -1 : x.nom > y.nom ? 1 : 0));
 }

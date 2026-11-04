@@ -60,3 +60,28 @@ test('le rapport HTML nomme les bibliothèques d\'un groupe de chargements, et l
   assert.match(html, /<code>E-DEP-01<\/code> Bibliothèque tierce chargée à l&#39;exécution depuis esm\.sh — <code>react-dom\/client \(18\.3\.1\)<\/code>/);
   assert.doesNotMatch(html, /<img src=x/, 'le nom venu du widget est échappé');
 });
+
+test('la synthèse du bas de page liste les bibliothèques une fois chacune, et les appels externes avec risque et confiance', async () => {
+  const code = [
+    "import React from 'https://esm.sh/react@18.3.1';",
+    "import { jsx } from 'https://esm.sh/react@18.3.1/jsx-runtime';",
+    "import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';",
+    "fetch('https://api.exemple.org/x');",
+    'React; jsx; createRoot;',
+  ].join('\n');
+  const a = await auditer({ 'index.html': page(`<script type="module">\n${code}\n</script>`) });
+  const html = genererHtml({ ctx: { fichiers: [], surface: new Set() }, notation: noter(a.constats, new Set(['D'])), meta: { nomDepot: 'x', version: '0' } });
+  const synthese = html.match(/<section class="synthese-externe"[\s\S]*?<\/section>/)[0];
+  assert.match(synthese, /Bibliothèques chargées depuis l'extérieur \(2\)/);
+  assert.match(synthese, /<strong>react<\/strong><\/td><td>18\.3\.1<\/td><td>react, react\/jsx-runtime<\/td><td>esm\.sh<\/td><td>non<\/td><td>Critique · bloquant<\/td><td>Certain/);
+  assert.match(synthese, /<strong>react-dom<\/strong>/);
+  assert.match(synthese, /Appels et ressources externes \(1\)/);
+  assert.match(synthese, /api\.exemple\.org<\/td><td>1<\/td>.*Critique · bloquant<\/td><td>Certain/);
+  assert.doesNotMatch(synthese, /C-EXFIL-01<\/code> Requête réseau sortante vers un service externe : esm\.sh/, 'les chargements de bibliothèques ne sont pas répétés dans les appels');
+});
+
+test('la synthèse dit qu\'il n\'y a rien quand il n\'y a rien', () => {
+  const html = genererHtml({ ctx: { fichiers: [], surface: new Set() }, notation: noter([], new Set(['D'])), meta: { nomDepot: 'x', version: '0' } });
+  assert.match(html, /Aucune bibliothèque chargée depuis l'extérieur\./);
+  assert.match(html, /Aucun appel ni ressource externe relevé\./);
+});

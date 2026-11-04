@@ -78,6 +78,8 @@ ${css()}
     ${Object.values(notation.parAxe).map((axe) => sectionAxe(axe)).join('\n')}
   </main>
 
+  ${blocSyntheseExterne(notation)}
+
   <footer class="pied">
     <p>gwaudit v${echapper(meta.version)} — audit automatisé de widgets Grist. Six axes : qualité, lisibilité, sécurité statique, sécurité en condition réelle, dépendances, conformité. Un score élevé n'emporte aucune certification ; un point bloquant suffit à rendre le verdict NON CONFORME, quel que soit le reste — mais ni l'un ni l'autre n'empêche d'installer le widget. C'est un signal de risque, pas une autorisation.</p>
   </footer>
@@ -286,6 +288,55 @@ function blocBibliotheques(groupe) {
           </ul>`;
 }
 
+const hoteDe = (adresse) => { try { return new URL(adresse).hostname; } catch { return null; } };
+const pireSeverite = (constats) => constats.reduce((pire, c) => (SEVERITES[c.severite].rang > SEVERITES[pire].rang ? c.severite : pire), constats[0].severite);
+const risqueDe = (constats) => `${LIBELLES_SEVERITE[pireSeverite(constats)]}${constats.some((c) => c.bloquant) ? ' · bloquant' : ''}`;
+const confianceDe = (constats) => CONFIANCES[constats.reduce((pire, c) => (c.confiance === 'a_verifier' || (c.confiance === 'probable' && pire !== 'a_verifier') ? c.confiance : pire), constats[0].confiance)];
+const REGLES_APPELS_EXTERNES = new Set(['C-EXFIL-01', 'C-EXFIL-02', 'C-EXFIL-03', 'C-EXFIL-04', 'D-RESEAU-01', 'D-RESEAU-02', 'D-RESEAU-03']);
+
+/**
+ * La synthèse du bas de page : de quoi le widget dépend (les bibliothèques chargées depuis l'extérieur, par leur vrai nom, sous-modules regroupés) et ce qu'il appelle
+ * à l'extérieur (requêtes, ressources, observations de l'axe D), chacun avec son risque et son niveau de confiance. Rien de nouveau : ce sont les constats déjà posés,
+ * remis ensemble. Les hôtes Grist officiels, exemptés, n'y figurent pas.
+ */
+function blocSyntheseExterne(notation) {
+  const constats = Object.values(notation.parAxe).flatMap((a) => a.constats ?? []);
+  const bibliotheques = regrouperParBibliotheque(constats.filter((c) => c.regle === 'E-DEP-01'));
+  const sansNom = constats.filter((c) => c.regle === 'E-DEP-01' && !c.preuve?.bibliotheque);
+  const appels = new Map();
+  for (const c of constats) {
+    if (!REGLES_APPELS_EXTERNES.has(c.regle) || c.preuve?.bibliotheque) continue;
+    const cle = `${c.regle}\0${c.titre}`;
+    (appels.get(cle) ?? appels.set(cle, []).get(cle)).push(c);
+  }
+  const lieux = (liste) => {
+    const noms = [...new Set(liste.filter((c) => c.fichier).map((c) => `${c.fichier}${c.ligne ? ':' + c.ligne : ''}`))];
+    return `${noms.slice(0, 3).map((n) => `<code class="loc">${echapper(n)}</code>`).join(' ')}${noms.length > 3 ? ` et ${noms.length - 3} autre${noms.length > 4 ? 's' : ''}` : ''}`;
+  };
+  const lignesBibliotheques = [
+    ...bibliotheques.map((b) => {
+      const hotes = [...new Set(b.constats.map((c) => hoteDe(c.preuve.adresse)).filter(Boolean))];
+      const sansEmpreinte = b.constats.some((c) => c.bloquant);
+      return `<tr><td><strong>${echapper(b.nom)}</strong></td><td>${echapper(b.versions.join(', ') || 'non figée')}</td><td>${b.modules.map((m) => echapper(m.module) + (m.chargements > 1 ? ` ×${m.chargements}` : '')).join(', ')}</td><td>${echapper(hotes.join(', '))}</td><td>${sansEmpreinte ? 'non' : 'oui'}</td><td>${risqueDe(b.constats)}</td><td>${echapper(confianceDe(b.constats))}</td></tr>`;
+    }),
+    ...sansNom.map((c) => `<tr><td colspan="3"><code>${echapper(c.preuve?.adresse ?? c.extrait ?? c.titre)}</code></td><td>${echapper(hoteDe(c.preuve?.adresse) ?? '')}</td><td>${c.bloquant ? 'non' : 'oui'}</td><td>${risqueDe([c])}</td><td>${echapper(confianceDe([c]))}</td></tr>`),
+  ];
+  const lignesAppels = [...appels.values()].map((liste) => `<tr><td><code>${echapper(liste[0].regle)}</code> ${echapper(liste[0].titre)}</td><td>${liste.length}</td><td>${lieux(liste)}</td><td>${risqueDe(liste)}</td><td>${echapper(confianceDe(liste))}</td></tr>`);
+  return `
+  <section class="synthese-externe" aria-labelledby="titre-synthese">
+    <h2 id="titre-synthese">Dépendances et appels externes — synthèse</h2>
+    <p>Tout ce que ce widget va chercher ou appelle à l'extérieur, relevé par les constats ci-dessus. Les hôtes Grist officiels (getgrist.com, grist.numerique.gouv.fr), exemptés, n'y figurent pas.</p>
+    ${lignesBibliotheques.length ? `<h3>Bibliothèques chargées depuis l'extérieur (${bibliotheques.length + sansNom.length})</h3>
+    <div class="tableau-defilant"><table><thead><tr><th>Bibliothèque</th><th>Version</th><th>Modules chargés</th><th>Hébergeur</th><th>Empreinte (integrity)</th><th>Risque</th><th>Confiance</th></tr></thead><tbody>
+      ${lignesBibliotheques.join('\n      ')}
+    </tbody></table></div>` : '<p>Aucune bibliothèque chargée depuis l\'extérieur.</p>'}
+    ${lignesAppels.length ? `<h3>Appels et ressources externes (${lignesAppels.length})</h3>
+    <div class="tableau-defilant"><table><thead><tr><th>Appel ou ressource</th><th>Occurrences</th><th>Où</th><th>Risque</th><th>Confiance</th></tr></thead><tbody>
+      ${lignesAppels.join('\n      ')}
+    </tbody></table></div>` : '<p>Aucun appel ni ressource externe relevé.</p>'}
+  </section>`;
+}
+
 /** « 1 occurrence et 4 informations » : une information n'est pas une occurrence, comme dans la notation et la feuille de route. */
 function decompte(groupe) {
   const informations = groupe.filter((g) => SEVERITES[g.severite].penalite === 0).length;
@@ -475,6 +526,12 @@ a{color:inherit;}
 .occurrences-titre{font-weight:600; font-size:12.5px; margin-top:12px !important;}
 .occurrences{margin:6px 0 0; padding-left:18px; max-height:260px; overflow-y:auto;}
 .occurrences li{margin-bottom:4px; font-size:12.5px;}
+.synthese-externe{margin-top:32px;}
+.synthese-externe h3{font-size:15px; margin:20px 0 8px;}
+.tableau-defilant{overflow-x:auto;}
+.synthese-externe table{border-collapse:collapse; width:100%; font-size:12.5px;}
+.synthese-externe th,.synthese-externe td{border:1px solid var(--border); padding:6px 8px; text-align:left; vertical-align:top;}
+.synthese-externe th{background:var(--surface-2);}
 
 .pied{margin-top:56px; padding-top:18px; border-top:1px solid var(--border); font-size:12.5px; color:var(--text-muted); line-height:1.6;}
 
