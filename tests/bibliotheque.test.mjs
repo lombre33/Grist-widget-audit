@@ -57,6 +57,6 @@ test('le rapport HTML nomme les bibliothèques d\'un groupe de chargements, et l
   assert.match(html, /Bibliothèques concernées \(3\)/);
   assert.match(html, /<strong>react<\/strong> \(18\.3\.1\) — 3 chargements : react, react\/jsx-runtime ×2/);
   assert.match(html, /<strong>react-dom<\/strong> \(18\.3\.1\) — 1 chargement : react-dom\/client/);
-  assert.match(html, /<code>E-DEP-01<\/code> Bibliothèque tierce chargée à lchargée à l'exécution depuis esm\.sh — <code>react-dom#39;exécution depuis esm\.sh — <code>react-dom\/client \(18\.3\.1\)<\/code>/);
+  assert.match(html, /<code>E-DEP-01<\/code> Bibliothèque tierce chargée à l&#39;exécution depuis esm\.sh — <code>react-dom\/client \(18\.3\.1\)<\/code>/);
   assert.doesNotMatch(html, /<img src=x/, 'le nom venu du widget est échappé');
 });
