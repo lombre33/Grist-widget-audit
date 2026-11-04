@@ -27,10 +27,10 @@
  *  - `masse` : nombre minimal de nœuds d'arbre d'un exemplaire ; `logique` : dont nœuds de logique, au moins ;
  *  - `noeuds` : nombre de nœuds d'arbre gardés pour la comparaison, tous fichiers confondus (la mémoire) ;
  *  - `pas` : nombre de pas de chacune des deux phases de la recherche (celle des suites : un exemplaire examiné à chaque instruction ajoutée à une suite ; puis le choix des
- *    clones : un nœud lu pour un renommage), borne du temps, comptée et non chronométrée. Réglé sur deux mesures : très au-dessus de ce que demande un widget réel
+ *    clones : un nœud lu pour un renommage), borne du temps, comptée et non chronométrée. Relevé d'un facteur dix le 2026-11-04 à la demande d'Antoine (de gros modules à auditer, un plafond de 400 000 nœuds laissait de côté le code exécuté) : la mémoire suit, environ 0,4 Ko par nœud gardé (850 Mo de mémoire pour 2 millions de nœuds). Réglé d'abord sur deux mesures : très au-dessus de ce que demande un widget réel
  *    (`scripts/mesurer-pas-clones.mjs`), assez bas pour que l'entrée piégée la plus gourmande y rende ses clones en quelques secondes au plus (`scripts/chronometrer-pieges.mjs`).
  */
-export const SEUILS_CLONES = Object.freeze({ masse: 50, logique: 6, noeuds: 400_000, pas: 3_000_000 });
+export const SEUILS_CLONES = Object.freeze({ masse: 50, logique: 6, noeuds: 4_000_000, pas: 30_000_000 });
 
 /**
  * Les attributs d'un nœud qui comptent dans sa forme (l'opérateur, le genre de déclaration, `async`…), en plus de son type et de ses enfants : ce que deux nœuds de

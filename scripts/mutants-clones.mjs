@@ -62,10 +62,10 @@ const MUTANTS = [
   dansLigne(C, SEUILS, 'masse: 50', 'masse: 51', 'seuils : la masse minimale est 51'),
   dansLigne(C, SEUILS, 'logique: 6', 'logique: 5', 'seuils : la logique minimale est 5'),
   dansLigne(C, SEUILS, 'logique: 6', 'logique: 7', 'seuils : la logique minimale est 7'),
-  dansLigne(C, SEUILS, 'noeuds: 400_000', 'noeuds: 399_999', 'seuils : le plafond de nœuds est 399 999'),
-  dansLigne(C, SEUILS, 'noeuds: 400_000', 'noeuds: 400_001', 'seuils : le plafond de nœuds est 400 001'),
-  dansLigne(C, SEUILS, 'pas: 3_000_000', 'pas: 2_999_999', 'seuils : le plafond de pas est 2 999 999'),
-  dansLigne(C, SEUILS, 'pas: 3_000_000', 'pas: 3_000_001', 'seuils : le plafond de pas est 3 000 001'),
+  dansLigne(C, SEUILS, 'noeuds: 4_000_000', 'noeuds: 3_999_999', 'seuils : le plafond de nœuds est 3 999 999'),
+  dansLigne(C, SEUILS, 'noeuds: 4_000_000', 'noeuds: 4_000_001', 'seuils : le plafond de nœuds est 4 000 001'),
+  dansLigne(C, SEUILS, 'pas: 30_000_000', 'pas: 29_999_999', 'seuils : le plafond de pas est 29 999 999'),
+  dansLigne(C, SEUILS, 'pas: 30_000_000', 'pas: 30_000_001', 'seuils : le plafond de pas est 30 000 001'),
   dansLigne(C, SEUILS, 'Object.freeze(', 'Object.assign({}, ', 'seuils : les seuils par défaut se modifient'),
 
   // --- la lecture de l'arbre

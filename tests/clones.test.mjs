@@ -47,11 +47,11 @@ const mesure = (source) => {
   return { masse: ast.body[0].__m, logique: ast.body[0].__l };
 };
 
-test('les seuils par défaut : cinquante nœuds dont six de logique, 400 000 nœuds gardés, trois millions de pas', () => {
+test('les seuils par défaut : cinquante nœuds dont six de logique, 4 millions de nœuds gardés, trente millions de pas', () => {
   assert.equal(SEUILS_CLONES.masse, 50);
   assert.equal(SEUILS_CLONES.logique, 6);
-  assert.equal(SEUILS_CLONES.noeuds, 400_000);
-  assert.equal(SEUILS_CLONES.pas, 3_000_000);
+  assert.equal(SEUILS_CLONES.noeuds, 4_000_000);
+  assert.equal(SEUILS_CLONES.pas, 30_000_000);
   assert.deepEqual(Object.keys(SEUILS_CLONES), ['masse', 'logique', 'noeuds', 'pas']);
   assert.equal(Object.isFrozen(SEUILS_CLONES), true);
 });
