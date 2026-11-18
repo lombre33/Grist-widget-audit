@@ -316,3 +316,7 @@ code non maîtrisé — acceptable pour un usage local, à isoler fortement en
 service public), une file d'attente et des quotas, une conservation des
 rapports, et une authentification. Cette V1 n'a pas été conçue pour cet
 usage et ne doit pas être exposée telle quelle sur un service public.
+
+## Licence
+
+GPL 3.0 (`LICENSE`), comme les autres dépôts de la suite Grist Factory. Les copies obtenues avant ce changement de licence restent sous MIT.

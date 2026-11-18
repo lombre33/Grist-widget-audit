@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "description": "Audit automatisé de widgets personnalisés Grist — qualité, lisibilité, sécurité, dépendances, conformité Grist.Gouv / DINUM.",
   "type": "module",
-  "license": "MIT",
+  "license": "GPL-3.0-only",
   "bin": {
     "gwaudit": "bin/gwaudit.js"
   },
