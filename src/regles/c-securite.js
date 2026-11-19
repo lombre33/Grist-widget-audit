@@ -218,30 +218,14 @@ function ligneDe(f, ligne) {
   return f.lignesCache[ligne - 1] ?? '';
 }
 
-/** Un chargement externe déclaré dans une page ou une feuille : C-EXFIL-04 (API Grist hors instance) ou C-EXFIL-03. */
+/** Un chargement externe déclaré dans une page ou une feuille : C-EXFIL-03, sauf depuis un hôte Grist. */
 function signalerChargementExterne(ctx, f, e) {
   const constats = [];
   const cible = cibleReseau(urlDe(e.url, e.baseBrute, f.chemin));
   if (!cible) return constats;                                      // data:, blob:, about:, file: … : rien n'est chargé chez un tiers
   const h = cible.hostname;
   if (estLocal(h)) return constats;                                 // relatif (widget.local) : pas une ressource tierce
-  const gristPlugin = estGrist(h) && /grist-plugin-api\.js/.test(e.url);
-
-  if (gristPlugin) {
-    // Cas très fréquent et spécifique : charger l'API Grist depuis
-    // docs.getgrist.com plutôt que depuis l'instance qui héberge le widget.
-    constats.push(constat({
-      regle: 'C-EXFIL-04', axe: 'C', severite: 'majeur', confiance: 'certain',
-      titre: "L'API Grist est chargée depuis un domaine externe au lieu de l'instance hôte",
-      fichier: f.chemin, ligne: e.ligne, extrait: e.balise,
-      constat: precise(`\`grist-plugin-api.js\` est chargé depuis \`${h}\`.`, e.mention),
-      impact: "Le widget hébergé sur une instance souveraine (grist.numerique.gouv.fr) va chercher son script pivot sur un domaine tiers. Cela crée une dépendance de disponibilité et de confiance envers ce domaine, envoie l'adresse IP de chaque agent à un tiers, et casse le widget si l'instance applique une CSP stricte ou fonctionne en réseau fermé.",
-      remediation: "Charger l'API en relatif : `<script src=\"/grist-plugin-api.js\"></script>`. L'instance qui sert le widget sert aussi l'API ; c'est la forme attendue pour un hébergement sur instance officielle.",
-      referentiels: [REF_GUIDE, 'Souveraineté numérique — DINUM'],
-    }));
-    return constats;
-  }
-
+  // Le code que sert un hôte Grist (`grist-plugin-api.js` compris, chargé depuis `docs.getgrist.com` comme le documente Grist) n'est pas un tiers : aucun constat.
   if (estGrist(h)) return constats;
   enregistrerDestination(ctx, h);
 
@@ -1044,8 +1028,7 @@ function resoudreArgument(noeud, { walkAcorn, ancetres, estModule }) {
  * Cœur du modèle « littéral audité, pas puni » (revu avec la coordination le
  * 2026-09-28 : `Function("return this")`, l'idiome lodash bundlé par l'API
  * Grist officielle elle-même, ne justifiait aucune sanction — C-CSP-01
- * épargne déjà `'unsafe-eval'` pour cette API, et C-EXFIL-04 recommande
- * justement de l'embarquer). Si `texteBrut` se parse comme du JS valide, il
+ * épargne déjà `'unsafe-eval'` pour cette API). Si `texteBrut` se parse comme du JS valide, il
  * devient un fichier de PLUS dans la surface réellement auditée
  * (`ctx.fichiers`, pas une copie isolée) : chaque règle de l'axe C s'y
  * applique à sa propre sévérité (un eval() imbriqué y redevient critique),

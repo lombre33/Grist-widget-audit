@@ -48,7 +48,7 @@ for (const [libelle, changement] of [
   ['le titre', { titre: 'Ressource externe chargée depuis e.example (préchargement)' }],
   ['la ligne', { ligne: 5 }],
   ['le fichier', { fichier: 'autre.html' }],
-  ['la règle', { regle: 'C-EXFIL-04' }],
+  ['la règle', { regle: 'C-EXFIL-05' }],
 ]) {
   test(`${libelle} d'un constat est une différence (un retiré, un ajouté)`, () => {
     const r = comparerRapports(rapport({ C: [constat()] }), rapport({ C: [constat(changement)] }));

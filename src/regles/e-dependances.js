@@ -23,8 +23,15 @@ import { importsDistants, raisonCarteTardiveBalise, raisonLienDePrechargement, r
 import { lirePage, integriteProtege, urlDe, urlDeCarte, mentionDe } from '../moteur/page-html.js';
 import { creerNpmIsole, REGISTRE_NPM } from './npm-isole.js';
 import { preuveDeChargement } from '../moteur/bibliotheque.js';
+import { estGrist, documentGristVise } from '../contexte/hotes-grist.js';
 
 const estLocalHote = (h) => !h || h === 'widget.local' || h === 'localhost' || h === '127.0.0.1';
+/**
+ * Le code que sert un hôte Grist (`docs.getgrist.com`, une équipe `*.getgrist.com`, l'instance de l'État) est celui de Grist, pas une dépendance
+ * tierce : pas de constat. Sauf une adresse qui vise un document précis (`/api/docs/<id>/…`) : ce que ce document contient (une pièce jointe) est
+ * le code de son auteur, servi sous le nom de l'hôte de Grist, et reste signalé.
+ */
+const codeDeGrist = (url) => estGrist(url.hostname) && !documentGristVise(url.href);
 
 /** Comment le code charge un module, pour le dire dans le constat (les canaux de `visiteursDImports`). */
 const CANAL_DE_CODE = { 'import statique': 'un `import` statique', 'export … from': 'un `export … from`', 'import() distant': 'un `import()`' };
@@ -74,7 +81,7 @@ export function analyserDependancesDistantes(ctx) {
       for (const c of s.chargements) {
         if (!c.execute) continue;
         const abs = urlDe(c.valeur, s.baseBrute, f.chemin);
-        if (!abs || !/^https?:$/.test(abs.protocol) || estLocalHote(abs.hostname)) continue;
+        if (!abs || !/^https?:$/.test(abs.protocol) || estLocalHote(abs.hostname) || codeDeGrist(abs)) continue;
         if (/grist-plugin-api\.js/.test(c.valeur)) continue;     // traité par l'axe C
         const protection = protectionDeLaBalise({ page: f, lue, s, c, url: abs, carteQuiProtege, lienQuiBrise });
         distantes.push({
@@ -101,7 +108,7 @@ export function analyserDependancesDistantes(ctx) {
     // l'import map, pas un attribut de balise.
     for (const e of extraireImportMaps(f.contenu, f.chemin)) {
       const abs = urlDeCarte(e.url, e.baseBrute, f.chemin);
-      if (!abs || !/^https?:$/.test(abs.protocol) || estLocalHote(abs.hostname) || /grist-plugin-api\.js/.test(e.url)) continue;
+      if (!abs || !/^https?:$/.test(abs.protocol) || estLocalHote(abs.hostname) || codeDeGrist(abs) || /grist-plugin-api\.js/.test(e.url)) continue;
       // Une empreinte portée par une carte lue après l'entrée, ou brisée par un lien `modulepreload` de l'adresse, ne protège pas : le constat le dit.
       distantes.push({
         fichier: f.chemin,
@@ -125,6 +132,7 @@ export function analyserDependancesDistantes(ctx) {
   // Ce qui protège chaque chargement (et pourquoi certains ne le sont jamais : un worker, l'ordre de la carte et du script) se décide dans
   // `contexte/imports-distants.js`, que C-EXFIL-01 lit aussi.
   for (const { noeud, canal, valeur, url, unite, fichier, ligne, protection } of importsDistants(ctx).imports) {
+    if (codeDeGrist(url)) continue;                           // le code de Grist n'est pas une dépendance tierce
     if (estLocalHote(url.hostname) || /grist-plugin-api\.js/.test(valeur)) continue;     // traité par l'axe C
     const { sri, raisons, obstacle } = protection();
     distantes.push({

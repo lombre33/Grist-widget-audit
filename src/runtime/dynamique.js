@@ -627,10 +627,12 @@ export async function auditDynamique(ctx, options = {}) {
       if (/\/grist-plugin-api\.js(\?|$)/i.test(url) && !local) {
         // Substitution intentionnelle : le widget croit charger l'API depuis
         // le domaine externe déclaré dans son HTML (déjà signalé par
-        // C-EXFIL-04 en analyse statique) ; on lui sert la vraie API pour que
+        // C-EXFIL-03 en analyse statique) ; on lui sert la vraie API pour que
         // le reste du scénario s'exécute normalement. Ce n'est pas une fuite
-        // de données à faire remonter une deuxième fois côté axe D.
-        brut.substitutionApiGrist.push({ url, methode: req.method() });
+        // de données à faire remonter une deuxième fois côté axe D. Depuis un
+        // hôte Grist (`docs.getgrist.com`), c'est le chargement documenté par
+        // Grist : servi de même, mais rien à signaler.
+        if (!estGrist(h)) brut.substitutionApiGrist.push({ url, methode: req.method() });
         return route.fulfill({ path: path.join(harnaisRacine, 'grist-plugin-api.js'), contentType: 'text/javascript' });
       }
       if (local) { brut.requetesLocales.push({ url, methode: req.method() }); return route.continue(); }
@@ -850,8 +852,8 @@ function constatsReseau(toutesRequetes, substitutionApiGrist = [], { scenarioCom
       regle: 'D-RESEAU-02', axe: 'D', severite: 'info', confiance: 'prouve',
       titre: 'Chargement de grist-plugin-api.js depuis un domaine externe confirmé à l\'exécution',
       constat: `${substitutionApiGrist.length} requête(s) vers \`${new URL(substitutionApiGrist[0].url).hostname}\` observée(s) pendant le chargement, servie(s) par le harnais pour permettre au scénario de continuer.`,
-      impact: "Confirme à l'exécution le constat statique C-EXFIL-04 : ce chargement est réel, pas seulement présent dans le code mort ou un chemin conditionnel jamais atteint.",
-      remediation: 'Voir C-EXFIL-04.',
+      impact: "Confirme à l'exécution le constat statique C-EXFIL-03 : ce chargement est réel, pas seulement présent dans le code mort ou un chemin conditionnel jamais atteint.",
+      remediation: 'Voir C-EXFIL-03.',
     }));
   }
   if (!requetes.length) {

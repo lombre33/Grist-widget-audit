@@ -292,7 +292,7 @@ const hoteDe = (adresse) => { try { return new URL(adresse).hostname; } catch { 
 const pireSeverite = (constats) => constats.reduce((pire, c) => (SEVERITES[c.severite].rang > SEVERITES[pire].rang ? c.severite : pire), constats[0].severite);
 const risqueDe = (constats) => `${LIBELLES_SEVERITE[pireSeverite(constats)]}${constats.some((c) => c.bloquant) ? ' · bloquant' : ''}`;
 const confianceDe = (constats) => CONFIANCES[constats.reduce((pire, c) => (c.confiance === 'a_verifier' || (c.confiance === 'probable' && pire !== 'a_verifier') ? c.confiance : pire), constats[0].confiance)];
-const REGLES_APPELS_EXTERNES = new Set(['C-EXFIL-01', 'C-EXFIL-02', 'C-EXFIL-03', 'C-EXFIL-04', 'D-RESEAU-01', 'D-RESEAU-02', 'D-RESEAU-03']);
+const REGLES_APPELS_EXTERNES = new Set(['C-EXFIL-01', 'C-EXFIL-02', 'C-EXFIL-03', 'D-RESEAU-01', 'D-RESEAU-02', 'D-RESEAU-03']);
 
 /**
  * La synthèse du bas de page : de quoi le widget dépend (les bibliothèques chargées depuis l'extérieur, par leur vrai nom, sous-modules regroupés) et ce qu'il appelle
