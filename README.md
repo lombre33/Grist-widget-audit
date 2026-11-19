@@ -132,6 +132,7 @@ Le rapport est écrit dans `./rapport-<nom-du-widget>/rapport.md`.
 
 Options :
 - `--sans-dynamique` : n'exécute que l'analyse statique (pas de navigateur).
+- `--grist-reel` : joue en plus le widget contre un vrai Grist (Grist Desktop, installé et lancé tout seul dans un profil jetable), voir [Essais contre un Grist réel](#essais-contre-un-grist-réel).
 - `--sans-reseau` : n'interroge pas le registre npm, ni pour `npm audit` ni pour les dates de publication du bilan des dépendances (fonctionne hors-ligne). Pour un dépôt qui verrouille ses dépendances, le rapport dit alors l'axe E mesuré en partie (E-VULN-OPTION) et le verdict ne peut pas être « CONFORME » ; le bilan (E-DEP-07) écrit la régularité de publication « non mesurée ».
 - `--sortie <dossier>` : change le dossier de sortie.
 - `--json` : écrit aussi `rapport.json`, pour intégration outillée.
@@ -261,7 +262,20 @@ En bref :
 | E — Dépendances | intégrité des ressources distantes, `npm audit`, licence | statique + `npm audit` |
 | F — Conformité | souveraineté des flux, RGAA (partiel), écoconception, conventions du guide | statique + résultats de l'axe D |
 
-## Environnement de test Grist réel
+## Essais contre un Grist réel
+
+`gwaudit <widget> --grist-reel` ajoute à l'audit des essais joués par un vrai Grist, au lieu du faux hôte de test de l'axe D. Rien à préparer : au premier lancement, l'outil télécharge Grist Desktop (version épinglée dans `src/runtime/grist-reel/grist-desktop.json`, environ 300 Mo, empreinte SHA-256 vérifiée), le range dans un dossier de cache (`%LOCALAPPDATA%\gwaudit\cache` sous Windows, `~/.cache/gwaudit` sous Linux, ou `GWAUDIT_CACHE`) et le réutilise ensuite. Il n'utilise jamais ton propre Grist Desktop, tes documents ni ton profil : chaque audit lance une instance neuve dans un dossier temporaire, y crée un document de test (valeurs « canaris », table appât, section Custom qui charge le widget), joue le widget, puis arrête l'instance et supprime le dossier.
+
+Ce qui est joué (numéros du catalogue de l'étude) : le widget chargé au niveau d'accès « none » puis à celui qu'il demande ; 1 XSS par valeur de cellule, avec lecture d'une autre table par l'API Grist au niveau réellement accordé, puis sortie ; 7 aucune donnée transmise à « none » ; 13 exfiltration mesurée (un canari du document retrouvé dans une requête sortante) ; 15 navigation de la page Grist ; 16 fenêtres, boîtes de dialogue, téléchargements. Les requêtes vers l'extérieur sont interceptées, jamais envoyées. Le rapport gagne une section « Essais contre un Grist réel » et des constats `D-REEL-NN`, notés comme les autres ; un essai qui n'a pas pu se jouer est dit « non testé » avec sa raison, jamais « rien trouvé ».
+
+À savoir :
+- Windows : une fenêtre de Grist Desktop peut apparaître quelques secondes pendant l'audit. Aucun droit d'administrateur, aucune installation système.
+- Derrière un proxy d'entreprise, le téléchargement peut échouer : le message donne l'adresse du fichier et le dossier où le déposer à la main (il est vérifié comme un fichier téléchargé). `GWAUDIT_GRIST_DESKTOP=<exécutable>` impose un Grist Desktop déjà installé (seule voie sur macOS, où rien n'est épinglé).
+- Linux sans écran : `xvfb` est nécessaire (`apt install xvfb`).
+- Le résultat vaut pour la version de Grist Desktop testée, pas pour l'instance où le widget sera installé si elle diffère.
+- Test de bout en bout : `GWAUDIT_GRIST_REEL_E2E=1 node --test tests/grist-reel.test.mjs`.
+
+## Environnement de test Grist réel (image Docker)
 
 `gwaudit --dynamique` (activé par défaut) simule un hôte Grist minimal, pas
 une vraie instance : voir la méthodologie pour pourquoi ce choix. Pour

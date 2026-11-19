@@ -89,7 +89,7 @@ const DELAI_GLOBAL_AXE_D_MS = Number(process.env.GWAUDIT_DELAI_AXE_D_MS) || 45_0
 const DELAI_CHARGEMENT_MS = Math.max(1_000, DELAI_GLOBAL_AXE_D_MS - 15_000);
 
 /** Course entre une promesse et un délai : rejette avec un message reconnaissable si le délai gagne. */
-function avecDelai(promesse, ms, libelle) {
+export function avecDelai(promesse, ms, libelle) {
   let minuteur;
   const depasse = new Promise((_, reject) => {
     minuteur = setTimeout(() => reject(new Error(`DELAI_DEPASSE:${libelle}`)), ms);
@@ -115,7 +115,7 @@ function avecDelai(promesse, ms, libelle) {
  *    testant : `www.google.com` continuait de sortir via le proxy de cet
  *    environnement cloud, alors que le nom n'aurait pas dû être résolu).
  */
-function construireArgsChromium() {
+export function construireArgsChromium() {
   const argsReseau = [
     '--host-resolver-rules=MAP * 0.0.0.0,EXCLUDE 127.0.0.1,EXCLUDE localhost',
     '--proxy-server=direct://',
@@ -150,7 +150,7 @@ function construireArgsChromium() {
  * nom de la demande, reste accepté et ne change rien. Dans l'image V2
  * (docker/execution/entrypoint.sh) la dérogation est refusée.
  */
-function bacASableChromium() {
+export function bacASableChromium() {
   return process.env.GWAUDIT_CHROMIUM_SANS_SANDBOX !== '1';
 }
 
@@ -223,7 +223,7 @@ export function constatAxeDIgnoreParOption() {
 }
 
 /** Marqueur d'information (jamais dans le verdict) : l'axe D a tourné, mais dans un Chromium sans bac à sable, par dérogation explicite. */
-function constatSansBacASable() {
+export function constatSansBacASable() {
   return constat({
     regle: 'D-INDISPONIBLE-BAC-A-SABLE', axe: 'D', severite: 'info', confiance: 'certain',
     titre: 'Axe D lancé sans le bac à sable de Chromium (dérogation explicite)',
@@ -236,7 +236,7 @@ function constatSansBacASable() {
 /** Variables d'environnement à ne PAS transmettre au process Chromium — voir `construireArgsChromium()`. */
 const VARS_PROXY = ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'NO_PROXY', 'http_proxy', 'https_proxy', 'all_proxy', 'no_proxy'];
 
-function envChromiumSansProxy() {
+export function envChromiumSansProxy() {
   const env = { ...process.env };
   for (const cle of VARS_PROXY) delete env[cle];
   return env;
@@ -258,7 +258,7 @@ function envChromiumSansProxy() {
  * Testing 153 attendu par la version de Playwright fixée dans
  * `package-lock.json`), sans que rien ne le signale.
  */
-function cheminChromium(chromium) {
+export function cheminChromium(chromium) {
   const impose = process.env.GWAUDIT_CHROMIUM_PATH;
   if (impose) {
     if (!fs.existsSync(impose)) {

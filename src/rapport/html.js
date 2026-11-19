@@ -12,6 +12,7 @@
 import { SEVERITES, CONFIANCES } from '../moteur/modele.js';
 import { raisonsDeTroncature } from '../contexte/inventaire.js';
 import { libelleDeBibliotheque, regrouperParBibliotheque } from '../moteur/bibliotheque.js';
+import { htmlGristReel } from './grist-reel.js';
 
 const SEUIL_GROUPE = 4;
 
@@ -77,6 +78,8 @@ ${css()}
   <main class="axes">
     ${Object.values(notation.parAxe).map((axe) => sectionAxe(axe)).join('\n')}
   </main>
+
+  ${htmlGristReel(meta.gristReel)}
 
   ${blocSyntheseExterne(notation)}
 

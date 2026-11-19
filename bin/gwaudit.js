@@ -8,6 +8,9 @@
  *
  * Options :
  *   --sans-dynamique     n'exécute que l'analyse statique (axes A, B, C, E, F)
+ *   --grist-reel         joue en plus le widget contre un vrai Grist (Grist Desktop, installé et lancé tout seul
+ *                        dans un profil jetable) : XSS avec le niveau d'accès réel, sorties de données mesurées par
+ *                        canaris, navigation et fenêtres (voir README § Essais contre un Grist réel)
  *   --sans-reseau        n'interroge pas le registre npm (npm audit, dates de publication, axe E) : fonctionne hors-ligne
  *   --sortie <dossier>   dossier de sortie des rapports (défaut : ./rapport-<nom>)
  *   --json               écrit aussi rapport.json
@@ -38,6 +41,7 @@ import { fileURLToPath } from 'node:url';
 import { construireContexte, raisonsDeTroncature } from '../src/contexte/inventaire.js';
 import { analyseStatique } from '../src/moteur/statique.js';
 import { auditDynamique, constatAxeDIgnoreParOption } from '../src/runtime/dynamique.js';
+import { auditGristReel } from '../src/runtime/grist-reel/index.js';
 import { noter } from '../src/moteur/notation.js';
 import { genererMarkdown } from '../src/rapport/markdown.js';
 import { genererJson } from '../src/rapport/json.js';
@@ -72,7 +76,7 @@ async function main() {
   }
 
   if (!cible || flag('aide') || flag('help')) {
-    console.log(`Usage : gwaudit <chemin-ou-url-du-widget> [--sans-dynamique] [--sans-reseau] [--sans-html] [--sarif] [--sortie <dossier>] [--json]`);
+    console.log(`Usage : gwaudit <chemin-ou-url-du-widget> [--sans-dynamique] [--grist-reel] [--sans-reseau] [--sans-html] [--sarif] [--sortie <dossier>] [--json]`);
     console.log(`        gwaudit --diff <ancien-rapport.json> <nouveau-rapport.json> [--sortie <fichier.md>]`);
     console.log(`        gwaudit --interface [--port <n>]`);
     console.log(`        gwaudit --version`);
@@ -98,12 +102,24 @@ async function main() {
     const constats = await analyseStatique(ctx, { reseau: !flag('sans-reseau') });
 
     const axesNonExecutes = new Set();
+    let gristReel = null;
+    if (flag('grist-reel') && flag('sans-dynamique')) {
+      console.error('--grist-reel et --sans-dynamique se contredisent : le mode « Grist réel » est un essai dynamique.');
+      process.exit(1);
+    }
     if (!flag('sans-dynamique')) {
       const scenario = chargerScenario(valeur('scenario', null));
       console.error("→ Analyse dynamique en condition réelle (axe D)… (navigateur Chromium, hôte Grist de test)");
       const { constats: constatsD, nonExecute } = await auditDynamique(ctx, { scenario });
       constats.push(...constatsD);
       if (nonExecute) axesNonExecutes.add('D');
+      if (flag('grist-reel')) {
+        console.error('→ Essais contre un Grist réel (--grist-reel) : Grist Desktop jetable + Chromium. Périmètre : cette machine, cette instance, ce widget.');
+        const reel = await auditGristReel(ctx, { scenario, journal: (l) => console.error(l) });
+        constats.push(...reel.constats);
+        gristReel = reel.resume;
+        console.error(reel.nonExecute ? `  ⚠ Non exécuté : ${reel.resume.cause}` : `  ${reel.resume.essais.length} essai(s) joué(s).`);
+      }
     } else {
       axesNonExecutes.add('D');
       constats.push(constatAxeDIgnoreParOption());
@@ -114,7 +130,7 @@ async function main() {
     console.error(`→ Verdict : ${notation.verdict} (score global ${notation.global}/100, ${notation.bloquants.length} bloquant(s))`);
 
     const commit = commitDepot(racine);
-    const meta = { version: VERSION, nomDepot, commit, cible: temporaire ? cible : null, tronque: ctx.tronque };
+    const meta = { version: VERSION, nomDepot, commit, cible: temporaire ? cible : null, tronque: ctx.tronque, gristReel };
     const md = genererMarkdown({ ctx, notation, meta });
     fs.writeFileSync(path.join(dossierSortie, 'rapport.md'), md, 'utf8');
     console.error(`→ Rapport écrit : ${path.join(dossierSortie, 'rapport.md')}`);

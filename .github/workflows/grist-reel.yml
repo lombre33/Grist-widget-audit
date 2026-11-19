@@ -1,0 +1,53 @@
+# Éprouve le mode --grist-reel de bout en bout sur les deux systèmes où il doit marcher :
+# téléchargement épinglé de Grist Desktop (empreinte SHA-256 vérifiée), extraction, lancement d'une instance
+# jetable, widget défaillant puis widget sain joués dans un vrai Chromium, profil jetable supprimé.
+#
+#   - « Run workflow » (workflow_dispatch) : joue le test sur la branche choisie ;
+#   - push sur dev/grist-reel : idem, pour voir le résultat avant la fusion.
+#
+# Aucun droit d'écriture : ce job exécute le code de widgets de test (hostiles compris).
+name: Grist réel
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'dev/grist-reel'
+
+concurrency:
+  group: grist-reel-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  e2e:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 40
+    steps:
+      # v6.1.0 ; épinglée par SHA, comme toute action tierce ici.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Environnement
+        run: |
+          node --version
+          npm --version
+
+      - name: Dépendances, comme un utilisateur (npm ci)
+        run: npm ci
+
+      - name: Chromium de Playwright
+        run: npx playwright install chromium
+
+      # Premier passage : télécharge Grist Desktop (environ 300 Mo) et le lance pour de vrai.
+      - name: Essais contre un Grist réel (téléchargement, lancement, widgets de test)
+        env:
+          GWAUDIT_GRIST_REEL_E2E: '1'
+        run: node --test tests/grist-reel.test.mjs

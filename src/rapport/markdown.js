@@ -9,6 +9,7 @@
  */
 import { AXES, SEVERITES, CONFIANCES, trierConstats } from '../moteur/modele.js';
 import { raisonsDeTroncature } from '../contexte/inventaire.js';
+import { markdownGristReel } from './grist-reel.js';
 
 const ICONES = { critique: '🔴', majeur: '🟠', mineur: '🟡', info: 'ℹ️' };
 
@@ -119,6 +120,8 @@ export function genererMarkdown({ ctx, notation, meta }) {
       l.push('');
     }
   }
+
+  l.push(...markdownGristReel(meta.gristReel));
 
   return l.join('\n');
 }

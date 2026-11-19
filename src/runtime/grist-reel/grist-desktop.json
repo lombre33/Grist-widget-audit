@@ -1,0 +1,20 @@
+{
+  "version": "0.3.17",
+  "depot": "https://github.com/gristlabs/grist-desktop/releases/download/v0.3.17/",
+  "assets": {
+    "win32-x64": {
+      "fichier": "grist-desktop-0.3.17-win-x64.zip",
+      "sha256": "51b1266bd9211bffe9a7cae92d119efdd7aa6c78c54ab5721e0fece6bf5a0b3b",
+      "taille": 320122880,
+      "format": "zip",
+      "executable": "Grist Desktop.exe"
+    },
+    "linux-x64": {
+      "fichier": "grist-desktop-0.3.17-linux-x86_64.AppImage",
+      "sha256": "869d4b583a1e8c19895665e5deb70975364abda454169241cd064ff4d85de755",
+      "taille": 316898391,
+      "format": "appimage",
+      "executable": "squashfs-root/grist-desktop"
+    }
+  }
+}

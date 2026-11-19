@@ -30,5 +30,7 @@ export function genererJson({ ctx, notation, meta }) {
     // déclenchée. Calculée dans le moteur (src/moteur/priorisation.js),
     // reprise telle quelle : aucune mise en forme ni troncature ici.
     roadmap: notation.roadmap,
+    // Mode --grist-reel : ce que chaque essai contre un vrai Grist a donné (null si le mode n'a pas été demandé).
+    gristReel: meta.gristReel ?? null,
   }, null, 2);
 }
