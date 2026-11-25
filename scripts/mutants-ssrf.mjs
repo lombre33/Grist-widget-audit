@@ -12,16 +12,17 @@
 import { lireArguments, rejouerMutants, DOSSIERS_COPIES } from './lib/rejouer-mutants.mjs';
 
 const B = 'bin/gwaudit.js';
+const A = 'src/contexte/adresses-internes.js';   // estAdresseInterne y vit depuis que le téléchargement des bibliothèques du widget la partage
 const TESTS = ['tests/ssrf.test.mjs'];
 
 // [fichier, chaîne d'origine (une seule occurrence), chaîne mutée, libellé]
 const MUTANTS = [
   // --- littéral IPv6
   [B, ".hostname.replace(/^\\[(.*)\\]$/, '$1');", '.hostname;', 'IPv6 : les crochets cachent le littéral'],
-  [B, 'if (inscrit) {', 'if (false) {', 'IPv6 : IPv4 inscrit (::ffff:a.b.c.d) non décodé'],
-  [B, '/^fe[89ab][0-9a-f]:/.test(a)', "a.startsWith('fe80:')", 'IPv6 : lien-local réduit à fe80::'],
-  [B, "a === '::' || ", '', "IPv6 : l'adresse non spécifiée « :: » passe"],
-  [B, '/^f[cd][0-9a-f]{2}:/.test(a)', "a.startsWith('fd')", 'IPv6 : adresses locales uniques fc00::/7 réduites à fd'],
+  [A, 'if (inscrit) {', 'if (false) {', 'IPv6 : IPv4 inscrit (::ffff:a.b.c.d) non décodé'],
+  [A, '/^fe[89ab][0-9a-f]:/.test(a)', "a.startsWith('fe80:')", 'IPv6 : lien-local réduit à fe80::'],
+  [A, "a === '::' || ", '', "IPv6 : l'adresse non spécifiée « :: » passe"],
+  [A, '/^f[cd][0-9a-f]{2}:/.test(a)', "a.startsWith('fd')", 'IPv6 : adresses locales uniques fc00::/7 réduites à fd'],
 
   // --- un refus n'est pas une panne
   [B, 'process.exitCode = 4; return; }', 'process.exitCode = 3; return; }', 'refus : code 3 au lieu de 4'],
