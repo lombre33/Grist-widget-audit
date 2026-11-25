@@ -15,6 +15,7 @@
 import { constat } from '../moteur/modele.js';
 import { estDuRegistre, interrogerRegistre, resumerPublications, MAX_INTERROGEES, SEUIL_ANCIENNETE_MOIS } from './e-registre.js';
 import { constatsPaquetsSuspects, estVersionExacte } from './e-paquets.js';
+import { constatsNomsVoisins } from './e-noms-voisins.js';
 import { paquetNpmDeAdresse } from '../moteur/bibliotheque.js';
 import { interrogerOsv, constatsOsv, cleDe, MAX_PAQUETS as MAX_OSV } from './e-osv.js';
 import { REGISTRE_NPM } from './npm-isole.js';
@@ -177,6 +178,11 @@ export async function bilanDependances(ctx, constatsE, options = {}, lire = inte
   let registreFiable = trouves.some((r) => r.time);
   if (!registreFiable && trouves.some((r) => r.erreur === 'introuvable')) registreFiable = Boolean((await lire([CANARI])).get(CANARI)?.time);
   const suspects = lus.size ? constatsPaquetsSuspects({ candidats, lus, registreFiable }) : [];
+  // Noms qui ressemblent à un paquet très connu : une comparaison de noms, qui se fait aussi hors ligne ; le registre ne sert qu'à dire un paquet récent.
+  const voisins = constatsNomsVoisins({
+    noms: [...production, ...developpement].map((nom) => ({ nom, origine: 'package.json', fichier: 'package.json' })).concat(distants.map((d) => ({ nom: d.nom, origine: `chargé depuis ${d.hote}`, fichier: d.fichier, ligne: d.ligne }))),
+    lus,
+  });
 
   // OSV.dev : les bibliothèques chargées de loin dont le nom ET la version exacte se lisent dans l'adresse (une version mal identifiée donnerait un faux avis),
   // et les paquets verrouillés du registre (pour les paquets malveillants ; leurs avis ordinaires restent à `npm audit`).
@@ -219,5 +225,5 @@ export async function bilanDependances(ctx, constatsE, options = {}, lire = inte
       depreciees: depreciees?.slice(0, MAX_DEPRECIEES) ?? null, deprecieesTotal: depreciees?.length ?? null,
       dependances: dependances.slice(0, MAX_DEPENDANCES), dependancesTotal: dependances.length,
     },
-  }), ...suspects, ...constatsDeOsv];
+  }), ...suspects, ...voisins, ...constatsDeOsv];
 }

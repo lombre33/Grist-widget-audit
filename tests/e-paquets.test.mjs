@@ -76,9 +76,9 @@ test("E-DEP-09 et E-DEP-10 : un paquet créé il y a moins de 90 jours, une vers
 });
 
 test("les bibliothèques chargées de loin sous un nom npm (esm.sh, unpkg) sont lues au registre ; cdnjs, gh/ et jsr/ ne le sont pas", async () => {
-  const lire = registre({ 'react-domm': INTROUVABLE, frais: existe(900, { '2.0.0': 1 }), react: existe(5000, { '18.3.1': 700 }), lodash: existe(5000) });
+  const lire = registre({ 'bibli-inventee': INTROUVABLE, frais: existe(900, { '2.0.0': 1 }), react: existe(5000, { '18.3.1': 700 }), lodash: existe(5000) });
   const constatsE = [
-    chargement('https://esm.sh/react-domm@18.3.1/client'),
+    chargement('https://esm.sh/bibli-inventee@18.3.1/client'),
     chargement('https://unpkg.com/frais@2.0.0/dist/frais.js'),
     chargement('https://esm.sh/react@18.3.1'),
     chargement('https://cdnjs.cloudflare.com/ajax/libs/jquery/3.7.1/jquery.min.js'),
@@ -87,15 +87,15 @@ test("les bibliothèques chargées de loin sous un nom npm (esm.sh, unpkg) sont 
     chargement('https://exemple.org/lib.js'),
   ];
   const r = await bilanDependances(contexte({}), constatsE, { reseau: true }, lire);
-  assert.deepEqual(lire.appels[0].sort(), ['frais', 'react', 'react-domm']);
+  assert.deepEqual(lire.appels[0].sort(), ['bibli-inventee', 'frais', 'react']);
   assert.deepEqual(regles(r), ['E-DEP-07', 'E-DEP-08', 'E-DEP-10']);
-  assert.match(r[1].constat, /react-domm \(chargé depuis esm\.sh\)/);
+  assert.match(r[1].constat, /bibli-inventee \(chargé depuis esm\.sh\)/);
   assert.equal(r[1].fichier, 'index.html');
   assert.match(r[2].titre, /frais@2\.0\.0/);
 });
 
 test("--sans-reseau : le registre n'est pas lu et aucun de ces constats n'est produit", async () => {
   const ctx = contexte({ 'package.json': paquet({ 'paquet-invente': '1.0.0' }) });
-  const r = await bilanDependances(ctx, [chargement('https://esm.sh/react-domm@18.3.1')], { reseau: false }, async () => { throw new Error('le registre ne doit pas être lu'); });
+  const r = await bilanDependances(ctx, [chargement('https://esm.sh/bibli-inventee@18.3.1')], { reseau: false }, async () => { throw new Error('le registre ne doit pas être lu'); });
   assert.deepEqual(regles(r), ['E-DEP-07']);
 });

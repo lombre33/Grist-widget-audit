@@ -478,7 +478,10 @@ et les paquets signalés malveillants, est interrogé pour ce que `npm audit` ne
 chargées de loin dont le nom et la version exacte se lisent dans l'adresse (E-VULN-03, de la gravité
 publiée ; critique et bloquant pour critical et high, comme `npm audit`) et, parmi les paquets verrouillés,
 ceux que la base signale malveillants (E-VULN-04, critique bloquant) ; les avis ordinaires des paquets
-verrouillés restent à `npm audit`. Les bibliothèques embarquées ne sont pas interrogées : leur nom, lu
+verrouillés restent à `npm audit`. Les noms qui ressemblent à ceux de paquets très téléchargés (E-DEP-11 : `react-domm`, `lodahs`, `reactdom`) sont dits en
+information à partir d'une courte liste tenue à la main, hors ligne ; une ressemblance n'est pas une accusation (un paquet
+légitime peut avoir un nom voisin), et le registre ne sert qu'à monter le constat en mineur quand un de ces paquets a
+moins d'un an. Les bibliothèques embarquées ne sont pas interrogées : leur nom, lu
 dans un en-tête, n'est pas certain, et une version mal identifiée donnerait un faux avis. OSV qui ne répond
 pas est écrit « non mesuré » dans E-DEP-07, jamais « aucun avis ».
 Ce qui a été audité, et ce que l'adresse sert aujourd'hui (E-FIGE-01). Grist charge un widget par son adresse : un dépôt
