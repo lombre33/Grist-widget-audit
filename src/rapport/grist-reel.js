@@ -13,8 +13,8 @@ const md = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ');
 
 const LIBELLE = { reussi: 'Effet observé (constat)', bloque: 'Bloqué', rien_observe: 'Rien observé', non_teste: 'Non testé' };
 
-/** Nombre d'essais du catalogue de l'étude (joués ou non), plus l'essai 21 d'altération d'une bibliothèque, ajouté ensuite. */
-const ESSAIS_DU_CATALOGUE = 21;
+/** Nombre d'essais du catalogue de l'étude (joués ou non), plus les essais 21 (altération d'une bibliothèque) et 22 (voies de sortie), ajoutés ensuite. */
+const ESSAIS_DU_CATALOGUE = 22;
 
 /** Ce que chaque essai tente, en une phrase. */
 const QUOI = {
@@ -24,6 +24,7 @@ const QUOI = {
   9: "On joue ce que ferait ce code étranger pour obtenir un jeton d'accès, appeler directement l'API du document avec ce jeton, et l'essayer sur un autre document.",
   12: "On joue ce que ferait ce code étranger pour créer un webhook, une sortie permanente de données qui survivrait au retrait du widget.",
   21: "On sert à la même adresse chacune des bibliothèques du widget avec une ligne de plus, qui ne fait rien d'autre que se signaler, et on regarde si le navigateur l'exécute ou la refuse.",
+  22: "On joue ce que ferait du code étranger dans le widget pour envoyer ce qu'il a lu vers l'extérieur : fetch, image, sendBeacon, WebSocket, balises, formulaire. Chaque tentative est interceptée ; on regarde lesquelles la politique de sécurité du widget laisse passer.",
   13: "On remplit le document de valeurs repérables (des « canaris ») et on regarde si l'une d'elles sort du widget vers un site extérieur.",
   15: "On regarde si le widget peut rediriger la page Grist qui l'héberge (de quoi afficher une fausse page de connexion).",
   16: "On regarde si le widget ouvre des fenêtres, des boîtes de dialogue ou des téléchargements sans qu'on le lui demande.",
@@ -69,6 +70,9 @@ function enClair(e) {
       return e.severite === 'critique'
         ? "Le widget a exécuté une bibliothèque modifiée alors qu'il déclare une empreinte pour la protéger : l'empreinte ne protège pas. Un CDN compromis pourrait faire exécuter son code dans le widget."
         : "Le widget a exécuté la bibliothèque modifiée : rien ne vérifie ce que le CDN sert. Un CDN compromis pourrait faire exécuter son code dans le widget (voir les essais 8 et 9 pour ce que ce code obtiendrait). Déjà signalé par la règle E-DEP-01 : sans effet de plus sur la note.";
+    case 22:
+      if (t === 'bloque') return "La politique de sécurité (CSP) du widget a arrêté toutes les voies d'envoi usuelles : du code piégé ne pourrait pas envoyer ce qu'il a lu par ces voies." + (e.navigation ? " Il lui resterait la navigation du cadre vers une adresse extérieure, qu'aucune CSP ne ferme." : '');
+      return `Si une bibliothèque du widget était piégée, elle pourrait envoyer ce qu'elle a lu vers l'extérieur par ${e.ouverts} voie(s) sur ${e.total}. Seule une politique de sécurité (CSP) stricte dans la page du widget les ferme. Mesure donnée à titre d'information, sans effet sur la note (l'absence de CSP est déjà signalée par C-CSP-01 et C-CSP-02).`;
     case 13:
       if (t === 'reussi') return "Des données du document sortent du widget vers un site extérieur : c'est une fuite.";
       return e.sorties > 0

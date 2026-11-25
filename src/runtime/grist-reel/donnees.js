@@ -17,6 +17,8 @@ import { documentDeTest } from '../dynamique.js';
 
 /** Hôte factice de la sortie : jamais joignable, intercepté par la route du navigateur avant toute sortie. */
 export const HOTE_PUITS = 'puits.gwaudit.invalid';
+/** Hôte factice des essais de canaux de sortie (essai 22) : distinct du puits, pour que ces requêtes ne se mêlent jamais à celles de l'essai 1 ou 13. */
+export const HOTE_CANAUX = 'canaux.gwaudit.invalid';
 
 /** Un identifiant Grist valide à partir d'un nom de colonne ou de table (Grist retire le `_` initial et les caractères hors [A-Za-z0-9_]). */
 function idGrist(nom, parDefaut) {

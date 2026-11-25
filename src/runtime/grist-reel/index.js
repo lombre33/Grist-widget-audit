@@ -18,7 +18,7 @@ import { resoudreBibliotheques, alterer } from './bibliotheques.js';
 import { assurerGristDesktop, EPINGLE, InstallationImpossible } from './installateur.js';
 import { lancerInstance, InstanceImpossible } from './instance.js';
 import { creerClient } from './client.js';
-import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, HOTE_PUITS } from './donnees.js';
+import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 import { lancerChromium, jouerPhase } from './navigateur.js';
 import { evaluerEssais, constatIndisponible, ESSAIS_JOUES, ESSAIS_PAS_ENCORE } from './essais.js';
 import { bacASableChromium, resumerCauseErreur } from '../dynamique.js';
@@ -104,6 +104,13 @@ export async function auditGristReel(ctx, options = {}) {
         const { servies: alterees, marqueurs } = alterer(bibliotheques.servies);
         phases.alteration = { niveau, marqueurs, fichiers, obs: await jouerPhase({ ...commun, kit: undefined, servies: alterees, lireMarqueurs: true }) };
       } else phases.alteration = { indisponible: "aucune des bibliothèques déclarées par le widget n'a pu être téléchargée (voir la liste des bibliothèques du rapport)" };
+    }
+
+    // Essai 22 : par quelles voies du navigateur du code étranger dans le widget pourrait envoyer ce qu'il a lu ? Passe à part, au niveau que le widget demande.
+    if (obsNone.charge) {
+      const niveau = phases.demande?.niveau ?? 'none';
+      journal(`  Phase ${phases.alteration ? 4 : 3} : les voies de sortie ouvertes à du code piégé dans le widget, au niveau « ${niveau} »…`);
+      phases.canaux = { niveau, obs: await jouerPhase({ ...commun, kit: undefined, canaux: { hote: HOTE_CANAUX, prefixe: jeu.prefixe } }) };
     }
 
     const { essais, constats } = evaluerEssais(phases, jeu);

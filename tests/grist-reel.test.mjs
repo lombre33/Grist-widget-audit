@@ -179,7 +179,7 @@ test('bout en bout : widget défaillant (constats) et widget sain (aucun constat
 
   const sain = await auditGristReel(construireContexte(path.join(RACINE, 'tests/fixtures/widget-grist-reel-sain')), {});
   assert.equal(sain.nonExecute, undefined, sain.resume.cause);
-  assert.deepEqual(sain.constats.map((c) => c.regle), []);
+  assert.deepEqual(sain.constats.map((c) => c.regle), ['D-REEL-22'], "aucun constat qui pèse ; seule l'information sur les voies de sortie ouvertes (le widget de test n'a pas de CSP)");
   assert.equal(sain.resume.essais.find((e) => e.id === 1).resultat, 'rien_observe');
 
   const apres = fs.readdirSync(os.tmpdir()).filter((n) => n.startsWith('gwaudit-grist-'));

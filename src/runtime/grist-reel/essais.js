@@ -17,16 +17,22 @@
  * L'essai 21 (hors du catalogue de l'étude) répond à : si le CDN, ou quelqu'un qui en a pris le contrôle, sert un fichier modifié à la même
  * adresse, le widget l'exécute-t-il, ou une empreinte `integrity` l'arrête-t-elle ? Le fichier n'est modifié que par un marqueur inoffensif.
  *
+ * L'essai 22 (hors du catalogue de l'étude) mesure les voies de sortie du navigateur que la politique de sécurité (CSP) du widget laisse ouvertes
+ * à du code étranger : fetch, image, sendBeacon, WebSocket, balises, formulaire… Passe à part, vers un hôte factice distinct du puits.
+ *
  * Les essais 8, 9 et 12 sont ceux de la « dépendance piégée » : du code étranger joué DANS le cadre du widget (voir kit.js) montre ce
  * qu'une bibliothèque compromise obtiendrait avec le niveau d'accès réellement accordé. Ils mesurent un rayon d'action, pas un défaut
  * prouvé du widget : leurs constats sont d'information (sans effet sur la note ; le niveau demandé est déjà pesé par C-GRIST-03),
  * sauf une persistance obtenue (webhook créé), qui est un constat majeur.
  */
 import { constat } from '../../moteur/modele.js';
-import { HOTE_PUITS } from './donnees.js';
+import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 7, 8, 9, 12, 13, 15, 16, 21];
+export const ESSAIS_JOUES = [1, 7, 8, 9, 12, 13, 15, 16, 21, 22];
 export const ESSAIS_PAS_ENCORE = '2 à 6, 10, 11, 14, 17 à 20';
+
+/** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
+const CANAUX = [['fetch', 'fetch'], ['xhr', 'XMLHttpRequest'], ['image', 'image (balise img)'], ['beacon', 'sendBeacon'], ['websocket', 'WebSocket'], ['script', 'balise script'], ['iframe', 'cadre iframe'], ['feuille', 'feuille de style'], ['cssurl', 'image de fond CSS'], ['prefetch', 'préchargement (link prefetch)'], ['formulaire', 'formulaire envoyé']];
 
 const resume = (texte, n = 300) => String(texte ?? '').replace(/\s+/g, ' ').slice(0, n);
 const phasesChargees = (phases) => [phases.none, phases.demande?.obs].filter((o) => o?.charge);
@@ -338,6 +344,49 @@ export function evaluerEssais(phases, jeu) {
           essais.push(essai(21, titre, 'bloque', `${liste(refuseesPourLaModification)} : le navigateur a refusé le fichier modifié (l'empreinte ne correspond plus)`, { niveau, barriere: "empreinte d'intégrité (integrity) vérifiée par le navigateur" }));
         } else {
           essais.push(essai(21, titre, 'non_teste', `aucun des ${fichiers.size} fichier(s) modifié(s) n'a été exécuté et aucun refus d'empreinte n'a été vu : la bibliothèque n'a pas été demandée par le widget, ou elle a échoué pour une autre raison${dejaRefusees.size ? " (une empreinte refuse déjà le fichier non modifié : elle ne correspond pas à ce que le serveur sert)" : ''}`, { niveau }));
+        }
+      }
+    }
+  }
+
+  // --- 22. Voies de sortie ouvertes à du code piégé dans le widget (passe à part, vers un hôte factice distinct du puits) ---
+  {
+    const c = phases.canaux;
+    const titre = 'Dépendance piégée : voies de sortie des données';
+    if (c) {
+      const niveau = c.niveau;
+      const o = c.obs;
+      const k = o?.canaux ?? null;
+      if (!o?.charge) essais.push(essai(22, titre, 'non_teste', `le widget n'a pas été chargé pour cet essai (${resume(o?.erreur)})`, { niveau }));
+      else if (!k || k.erreur) essais.push(essai(22, titre, 'non_teste', `le code d'essai n'a pas pu être joué dans le cadre du widget${k?.erreur ? ` (${resume(k.erreur, 150)})` : ''}`, { niveau }));
+      else {
+        const nomDe = (adresse) => (String(adresse).match(new RegExp(`//([a-z]+)\\.${HOTE_CANAUX.replace(/\./g, '\\.')}`)) ?? [])[1];
+        const vus = new Set(o.requetesExternes.filter((r) => String(r.hote).endsWith(`.${HOTE_CANAUX}`)).map((r) => nomDe(r.url)).filter(Boolean));
+        // La WebSocket n'est pas interceptée : tentée sans que la CSP l'arrête = la connexion a été essayée (elle échoue faute de DNS).
+        if (k.reseau?.websocket && !(k.violations ?? []).some((v) => nomDe(v.bloque) === 'websocket')) vus.add('websocket');
+        const arretes = new Map((k.violations ?? []).map((v) => [nomDe(v.bloque), v.directive]).filter(([nom]) => nom));
+        const etat = (nom) => (vus.has(nom) ? 'ouvert' : arretes.has(nom) ? 'ferme' : 'inconnu');
+        const etapes = CANAUX.map(([nom, libelle]) => ({ etape: `envoi par ${libelle}`, ok: etat(nom) === 'ouvert', ...(etat(nom) === 'ferme' ? { barriere: `politique de sécurité (CSP) : ${resume(arretes.get(nom), 60)}` } : etat(nom) === 'inconnu' ? { barriere: 'aucune requête vue, aucun blocage signalé' } : {}) }));
+        const ouverts = CANAUX.filter(([nom]) => etat(nom) === 'ouvert').map(([, l]) => l);
+        const fermes = CANAUX.filter(([nom]) => etat(nom) === 'ferme').map(([, l]) => l);
+        const inconnus = CANAUX.filter(([nom]) => etat(nom) === 'inconnu').map(([, l]) => l);
+        const navigation = etat('navigation') === 'ouvert';
+        const note = navigation ? " Reste ouverte dans tous les cas : la navigation du cadre vers une adresse extérieure, qu'aucune politique de sécurité ne peut fermer." : '';
+        if (ouverts.length) {
+          essais.push(essai(22, titre, 'reussi', `avec le niveau « ${niveau} », le code d'essai a pu envoyer vers l'extérieur par ${ouverts.length} voie(s) sur ${CANAUX.length} : ${ouverts.join(', ')}${fermes.length ? ` ; arrêtées par la CSP : ${fermes.join(', ')}` : ''}${inconnus.length ? ` ; sans observation : ${inconnus.join(', ')}` : ''}.${note}`, { niveau, regle: 'D-REEL-22', severite: 'info', nature: 'rayon', etapes, ouverts: ouverts.length, total: CANAUX.length, navigation }));
+          constats.push(constat({
+            regle: 'D-REEL-22', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            titre: `Si une dépendance du widget était piégée, ${ouverts.length} voie(s) de sortie sur ${CANAUX.length} lui seraient ouvertes`,
+            constat: `Du code exécuté dans le cadre du widget, comme le ferait une bibliothèque piégée, chargé par un vrai Grist au niveau d'accès « ${niveau} », a tenté d'envoyer un marqueur vers un hôte extérieur factice (intercepté par l'audit, rien n'est sorti de la machine). Voies ouvertes : ${ouverts.join(', ')}.${fermes.length ? ` Voies arrêtées par la politique de sécurité (CSP) du widget : ${fermes.join(', ')}.` : ' Aucune voie arrêtée : le widget ne déclare pas de politique de sécurité qui les ferme.'}${note}`,
+            impact: "La politique de sécurité (CSP) du widget est la seule barrière qui empêcherait du code compromis d'envoyer ce qu'il a lu (voir les essais 8 et 9 pour ce qu'il peut lire). Mesure d'un rayon d'action : elle ne prouve pas qu'une dépendance soit piégée. L'absence de CSP est déjà pesée par C-CSP-01 et C-CSP-02 : cette mesure n'ajoute pas de pénalité.",
+            remediation: "Déclarer une CSP restrictive par `<meta http-equiv=\"Content-Security-Policy\">` : par exemple `default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; frame-src 'none'; form-action 'none'; base-uri 'none'`, à ajuster à ce dont le widget a besoin ; embarquer les bibliothèques dans le dépôt pour que `script-src 'self'` suffise.",
+            referentiels: ['OWASP Top 10 A05:2021 — Security Misconfiguration', 'CWE-1021'],
+            preuve: { niveau, ouvertes: ouverts, arretees: fermes, sansObservation: inconnus, navigation },
+          }));
+        } else if (!inconnus.length) {
+          essais.push(essai(22, titre, 'bloque', `la politique de sécurité (CSP) du widget a arrêté les ${CANAUX.length} voies d'envoi essayées (${[...new Set(arretes.values())].slice(0, 4).join(', ')}).${note}`, { niveau, barriere: 'politique de sécurité (CSP) du widget', etapes, navigation }));
+        } else {
+          essais.push(essai(22, titre, 'non_teste', `aucune voie n'a abouti et ${inconnus.length} sur ${CANAUX.length} n'ont donné ni requête vue ni blocage signalé (${inconnus.slice(0, 3).join(', ')}) : la mesure n'est pas fiable`, { niveau, etapes }));
         }
       }
     }

