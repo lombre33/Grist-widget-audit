@@ -57,6 +57,7 @@ import { validerScenario } from '../src/runtime/scenario.js';
 import { demarrerInterface } from '../src/interface/serveur.js';
 import { empreinteDuDepot, constatEmpreinte, comparerEmpreintes } from '../src/regles/e-empreinte.js';
 import { neutraliser } from '../src/moteur/texte-du-widget.js';
+import { chainesDAttaque } from '../src/moteur/chaines.js';
 
 const RACINE_OUTIL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION = JSON.parse(fs.readFileSync(path.join(RACINE_OUTIL, 'package.json'), 'utf8')).version;
@@ -140,6 +141,9 @@ async function main() {
       constats.push(constatAxeDIgnoreParOption());
       console.error('→ Analyse dynamique ignorée (--sans-dynamique).');
     }
+
+    // Les constats de tous les axes sont là : on relie ceux qui se combinent en un scénario (information, jamais une pénalité).
+    constats.push(...chainesDAttaque(constats, ctx));
 
     const notation = noter(constats, axesNonExecutes);
     console.error(`→ Verdict : ${notation.verdict} (score global ${notation.global}/100, ${notation.bloquants.length} bloquant(s))`);

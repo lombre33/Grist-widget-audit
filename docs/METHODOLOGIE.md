@@ -357,6 +357,18 @@ drapeau de l'Écosse, du pays de Galles ou de l'Angleterre, la marque d'ordre de
 octets du premier signe. Dans le code d'un JavaScript, un caractère de sens
 d'écriture est une erreur de syntaxe : le fichier est illisible (C-SURFACE-03).
 
+### Chaînes d'attaque (C-CHAINE-01 à 04)
+
+Un défaut seul se lit mal : un `innerHTML` dynamique est un majeur parmi d'autres, le même `innerHTML` dans un widget
+qui lit la table et qui appelle l'extérieur est un chemin complet de la donnée à la sortie. Une dernière passe relie donc
+les constats que l'audit a déjà faits (statiques, dynamiques, et le niveau d'accès demandé) en quatre scénarios : une
+injection, un accès aux données et un appel sortant (01) ; un message sans contrôle d'origine puis une injection (02) ; du
+code tiers chargé sans empreinte puis un accès aux données (03) ; une injection puis l'écriture permise par l'accès
+« full » (04). C'est une hypothèse, écrite en information et sans pénalité : l'enchaînement n'est pas exécuté, seules les
+étapes que l'axe D a observées sont dites observées, et chaque étape pèse déjà par son propre constat. Elle dit par où
+commencer : corriger une seule étape casse le scénario. Le texte ne reprend rien du widget (ni titre, ni extrait) :
+l'étape est nommée par sa règle, son fichier et sa ligne.
+
 ## Axe D — Sécurité en condition réelle
 
 ### Ce qui est exécuté, et ce qui ne l'est pas
