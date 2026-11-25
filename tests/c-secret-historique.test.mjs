@@ -12,6 +12,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
+import { pathToFileURL } from 'node:url';
 import { construireContexte } from '../src/contexte/inventaire.js';
 import { analyseStatique } from '../src/moteur/statique.js';
 import { valeursDansLeDiff } from '../src/regles/c-historique.js';
@@ -104,7 +105,7 @@ test('un dépôt peu profond dit qu\'il n\'a pas été lu en entier ; un dossier
     { 'app.js': `const a = 1;\n` },
   ], async (racine, parent) => {
     const clone = path.join(parent, 'clone');
-    execFileSync('git', ['clone', '-q', '--depth', '1', `file://${racine.split(path.sep).join('/')}`, clone], { stdio: 'ignore' });
+    execFileSync('git', ['clone', '-q', '--depth', '1', pathToFileURL(racine).href, clone], { stdio: 'ignore' });
     const [info, ...autres] = C_SECRET_02(await auditerLeDepot(clone));
     assert.equal(autres.length, 0);
     assert.equal(`${info.severite} ${info.bloquant}`, 'info false');
