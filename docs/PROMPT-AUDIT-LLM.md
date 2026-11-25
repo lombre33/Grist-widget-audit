@@ -455,8 +455,9 @@ C'est l'axe le plus dense du référentiel — largement devant les autres rien 
 |---|---|---|
 | C-DOM-01 | `<a target="_blank">` sans `rel="noopener"` | mineur |
 | C-DOM-02 | `<iframe>` sans attribut `sandbox` | majeur |
-| C-CSP-01 | Aucune CSP déclarée (`<meta http-equiv="Content-Security-Policy">`) sur le point d'entrée | mineur |
-| C-CSP-02 | CSP présente mais permissive : joker `*` en `script-src`/`default-src` → mineur ; `'unsafe-inline'` en `script-src`/`default-src` → mineur (deux constats distincts possibles). `'unsafe-eval'` n'est **jamais** sanctionné (nécessaire à l'intégration RPC officielle `grist-plugin-api.js`) |
+| C-CSP-01 | Aucune CSP déclarée (`<meta http-equiv="Content-Security-Policy">`) sur le point d'entrée | **majeur** si le widget demande `requiredAccess` `read table` ou `full`, sinon mineur (jamais bloquant) |
+| C-CSP-02 | CSP présente mais permissive : joker `*` en `script-src`/`default-src` ; `'unsafe-inline'` en `script-src`/`default-src` (deux constats distincts possibles) → même gravité que C-CSP-01 (majeur si `read table`/`full`, sinon mineur). `'unsafe-eval'` n'est **jamais** sanctionné (nécessaire à l'intégration RPC officielle `grist-plugin-api.js`) |
+| C-CSP-03 | CSP présente (balise appliquée par Chromium) qui ne limite pas les destinations des requêtes sortantes : `connect-src` (à défaut `default-src`) absente, ou avec `*` ou un schéma entier (`https:`, `wss:`…), dans chaque balise s'il y en a plusieurs. Un `default-src *` n'est dit que par C-CSP-02 | même gravité que C-CSP-01 |
 
 **C-PM — postMessage**
 | Règle | Déclenchement | Sévérité |

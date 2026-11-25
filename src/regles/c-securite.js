@@ -1692,6 +1692,40 @@ function raisonMetaCspInerte(b) {
   return b.attributs.has('content') ? "son attribut `content` ne déclare aucune directive" : "elle n'a pas d'attribut `content`";
 }
 
+/**
+ * Les directives d'une CSP (`directive source source…; …`) : `{ 'script-src': ['\'self\''], … }`, noms en minuscules. Une directive répétée garde la première, comme le navigateur.
+ */
+function directivesDeCsp(contenu) {
+  const directives = {};
+  for (const part of String(contenu ?? '').split(';')) {
+    const tokens = part.trim().split(/\s+/).filter(Boolean);
+    if (!tokens.length) continue;
+    const nom = tokens[0].toLowerCase();
+    if (!(nom in directives)) directives[nom] = tokens.slice(1);
+  }
+  return directives;
+}
+
+/** Une source qui ouvre toute l'Internet : le joker, ou un schéma entier (`https:`) sans hôte. */
+const SOURCES_OUVERTES = new Set(['*', 'http:', 'https:', 'ws:', 'wss:']);
+/** La CSP ne limite pas les destinations des requêtes sortantes : `connect-src`, à défaut `default-src`, est absente ou ouvre toute l'Internet. */
+function connexionsOuvertes(directives) {
+  const sources = directives['connect-src'] ?? directives['default-src'];
+  return sources === undefined || sources.some((s) => SOURCES_OUVERTES.has(s.toLowerCase()));
+}
+
+/**
+ * Le niveau d'accès aux données du document que le widget demande (`grist.ready({ requiredAccess })`), quand il en demande un qui lit le document : `read table` ou `full`, ou `null`.
+ * Sans niveau lisible dans le code (aucun appel, valeur calculée, `none`), `null` : la gravité d'une CSP qui manque ne monte pas sur une supposition.
+ */
+function accesSensibleDemande(ctx) {
+  const niveaux = (ctx.usagesGrist?.acces ?? []).map((a) => String(a.niveau).trim().toLowerCase());
+  return niveaux.includes('full') ? 'full' : niveaux.includes('read table') ? 'read table' : null;
+}
+/** Une CSP qui manque ou qui ne protège pas pèse plus quand le widget a des données du document à protéger : majeur (non bloquant), sinon mineur. */
+const gravite = (acces) => (acces ? 'majeur' : 'mineur');
+const phraseDAcces = (acces) => (acces ? ` Le widget demande l'accès « ${acces} » aux données du document : c'est le cas où un script injecté a le plus à lire et à emporter.` : '');
+
 /** Gestionnaires d'événements inline et attributs dangereux dans le HTML. */
 export function analyserHtmlDangereux(ctx) {
   const constats = [];
@@ -1732,13 +1766,14 @@ export function analyserHtmlDangereux(ctx) {
       const metas = balises.filter(estMetaCsp);
       if (metas.some((m) => m.dansTete && aUneDirective(m))) continue;   // une CSP que Chromium applique (`dansTete` exclut déjà un `<template>`)
       const inerte = metas[0];
+      const acces = accesSensibleDemande(ctx);
       constats.push(constat({
-        regle: 'C-CSP-01', axe: 'C', severite: 'mineur', confiance: 'certain',
+        regle: 'C-CSP-01', axe: 'C', severite: gravite(acces), confiance: 'certain',
         titre: 'Aucune politique de sécurité de contenu (CSP) déclarée',
         fichier: f.chemin,
         constat: precise("Le point d'entrée ne déclare pas de balise `<meta http-equiv=\"Content-Security-Policy\">`.",
           inerte && `une telle balise existe ligne ${inerte.ligne}, mais Chromium ne l'applique pas : ${raisonMetaCspInerte(inerte)}`),
-        impact: "Sans CSP, rien n'empêche l'exécution d'un script injecté ni une requête sortante imprévue. La CSP est le filet de sécurité qui limite les dégâts quand une autre défense cède.",
+        impact: `Sans CSP, rien n'empêche l'exécution d'un script injecté ni une requête sortante imprévue. La CSP est le filet de sécurité qui limite les dégâts quand une autre défense cède.${phraseDAcces(acces)}`,
         remediation: "Ajouter une CSP restrictive, par exemple : `default-src 'self'; connect-src 'self'; img-src 'self' data:; frame-ancestors *` (le widget devant rester encadrable par Grist). La déclarer côté serveur est préférable, la balise `<meta>` est un repli acceptable pour un widget statique.",
         referentiels: [REF_ANSSI, 'OWASP — Content Security Policy Cheat Sheet'],
       }));
@@ -1764,41 +1799,55 @@ export function analyserHtmlDangereux(ctx) {
  */
 export function analyserCspPermissive(ctx) {
   const constats = [];
+  const acces = accesSensibleDemande(ctx);
   for (const f of ctx.fichiers) {
     if (!f.executee || f.binaire || !ctx.entrees.includes(f.chemin)) continue;
-    const meta = lirePage(f.contenu).balises.find((b) => estMetaCsp(b) && b.dansTete && aUneDirective(b));
+    // Toutes les CSP que Chromium applique : un chargement doit être permis par chacune, la politique effective est leur intersection.
+    const metas = lirePage(f.contenu).balises.filter((b) => estMetaCsp(b) && b.dansTete && aUneDirective(b));
+    const meta = metas[0];
     if (!meta) continue; // absence (ou balise que Chromium n'applique pas) déjà couverte par C-CSP-01
-    const contenuAttr = [null, null, meta.attributs.get('content')];
-    if (contenuAttr[2] == null) continue;
+    const politiques = metas.map((m) => directivesDeCsp(m.attributs.get('content')));
+    const directives = politiques[0];
+    if (meta.attributs.get('content') == null) continue;
 
-    const directives = {};
-    for (const part of contenuAttr[2].split(';')) {
-      const tokens = part.trim().split(/\s+/).filter(Boolean);
-      if (tokens.length) directives[tokens[0].toLowerCase()] = tokens.slice(1);
+    const ligne = meta.ligne;
+    // Le filet qui retient les données : une CSP qui ne limite pas où le widget peut envoyer (`connect-src`, à défaut `default-src`) laisse un script injecté tout emporter.
+    // Un `default-src *` ouvre les scripts comme les connexions : il est dit une fois, par C-CSP-02, non deux.
+    const jokerDeDefaut = directives['connect-src'] === undefined && directives['default-src']?.includes('*');
+    if (politiques.every(connexionsOuvertes) && !jokerDeDefaut) {
+      constats.push(constat({
+        regle: 'C-CSP-03', axe: 'C', severite: gravite(acces), confiance: 'certain',
+        titre: 'La CSP déclarée ne limite pas les destinations des requêtes sortantes',
+        fichier: f.chemin, ligne, extrait: meta.balise,
+        constat: "Ni `connect-src` ni `default-src` ne restreint les adresses que le widget peut appeler (directive absente, joker `*` ou schéma entier `https:`) : fetch, XHR, WebSocket et balises de suivi peuvent viser n'importe quel hôte.",
+        impact: `Un script qui s'exécuterait dans le widget (une faille d'injection, une dépendance piégée) peut envoyer les données qu'il lit vers l'hôte de son choix : la CSP ne le retient pas. C'est le rôle de \`connect-src\`.${phraseDAcces(acces)}`,
+        remediation: "Ajouter `connect-src 'self'` suivi de la liste explicite des services que le widget appelle (l'instance Grist, les API documentées dans le README), ou `default-src 'self'`.",
+        referentiels: [REF_ANSSI, 'OWASP — Content Security Policy Cheat Sheet'],
+      }));
     }
+
     const directiveEffective = directives['script-src'] ? 'script-src' : 'default-src';
     const valeurs = directives[directiveEffective];
     if (!valeurs) continue;
 
-    const ligne = meta.ligne;
     if (valeurs.includes('*')) {
       constats.push(constat({
-        regle: 'C-CSP-02', axe: 'C', severite: 'mineur', confiance: 'certain',
+        regle: 'C-CSP-02', axe: 'C', severite: gravite(acces), confiance: 'certain',
         titre: 'La CSP déclarée autorise un joker non qualifié',
         fichier: f.chemin, ligne, extrait: meta.balise,
         constat: `La directive \`${directiveEffective}\` contient \`*\`, qui autorise le chargement de script depuis n'importe quel domaine.`,
-        impact: "Une CSP qui accepte tout domaine ne filtre rien : elle donne l'apparence d'une protection sans en apporter la moindre. Un lecteur pressé (ou un contrôle automatisé binaire) la compte comme un point acquis alors qu'elle ne bloque aucune des attaques que la CSP est censée limiter.",
+        impact: `Une CSP qui accepte tout domaine ne filtre rien : elle donne l'apparence d'une protection sans en apporter la moindre. Un lecteur pressé (ou un contrôle automatisé binaire) la compte comme un point acquis alors qu'elle ne bloque aucune des attaques que la CSP est censée limiter.${phraseDAcces(acces)}`,
         remediation: "Remplacer le joker par la liste explicite des domaines réellement nécessaires : l'instance Grist elle-même, et les CDN documentés dans le README.",
         referentiels: [REF_ANSSI, 'OWASP — Content Security Policy Cheat Sheet'],
       }));
     }
     if (valeurs.includes("'unsafe-inline'")) {
       constats.push(constat({
-        regle: 'C-CSP-02', axe: 'C', severite: 'mineur', confiance: 'certain',
+        regle: 'C-CSP-02', axe: 'C', severite: gravite(acces), confiance: 'certain',
         titre: "La CSP déclarée autorise le script inline ('unsafe-inline')",
         fichier: f.chemin, ligne, extrait: meta.balise,
         constat: `La directive \`${directiveEffective}\` contient \`'unsafe-inline'\`.`,
-        impact: "`'unsafe-inline'` neutralise la protection anti-XSS de la CSP : un script injecté (voir les règles C-XSS-*) s'exécute normalement, exactement comme en l'absence de CSP.",
+        impact: `\`'unsafe-inline'\` neutralise la protection anti-XSS de la CSP : un script injecté (voir les règles C-XSS-*) s'exécute normalement, exactement comme en l'absence de CSP.${phraseDAcces(acces)}`,
         remediation: "Retirer `'unsafe-inline'` et déplacer le JavaScript inline vers des fichiers externes, ou utiliser un nonce/hash par script si l'inline est indispensable.",
         referentiels: [REF_ANSSI, 'OWASP — Content Security Policy Cheat Sheet'],
       }));

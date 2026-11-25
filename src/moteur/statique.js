@@ -16,7 +16,7 @@ import { mentionsParLigne } from './analyse-js.js';
 import { constat } from './modele.js';
 
 // Règles dont l'emplacement est une balise de la page et non du code : elles disent elles-mêmes ce que la page a de particulier (gabarit, standard seul).
-const REGLES_DE_PAGE = new Set(['C-EXFIL-03', 'C-DOM-01', 'C-DOM-02', 'C-CSP-01', 'C-CSP-02']);
+const REGLES_DE_PAGE = new Set(['C-EXFIL-03', 'C-DOM-01', 'C-DOM-02', 'C-CSP-01', 'C-CSP-02', 'C-CSP-03']);
 
 /**
  * Un constat sur du code que le navigateur n'exécute pas tel quel (script d'un
