@@ -77,3 +77,19 @@ test("bout en bout : un widget qui fusionne naïvement ses cellules JSON est pol
   assert.equal(sain.resume.essais.find((x) => x.id === 3).resultat, 'rien_observe', sain.resume.essais.find((x) => x.id === 3).detail);
   assert.equal(sain.constats.filter((c) => c.regle === 'D-REEL-03').length, 0);
 });
+
+test("bout en bout : un widget qui ne lit que la ligne sélectionnée reçoit les lignes piégées (le curseur de Grist y est conduit) : pollué ou non, jamais « non testé »", { skip: process.env.GWAUDIT_GRIST_REEL_E2E !== '1' && 'GWAUDIT_GRIST_REEL_E2E=1 pour jouer ce test (lance un vrai Grist Desktop)', timeout: 600_000 }, async () => {
+  const { construireContexte } = await import('../src/contexte/inventaire.js');
+  const { auditGristReel } = await import('../src/runtime/grist-reel/index.js');
+  const pollue = await auditGristReel(construireContexte(path.join(RACINE, 'tests/fixtures/widget-grist-reel-pollue-ligne')), {});
+  assert.equal(pollue.nonExecute, undefined, pollue.resume.cause);
+  const e = pollue.resume.essais.find((x) => x.id === 3);
+  assert.equal(e.resultat, 'reussi', e.detail);
+  assert.ok(pollue.constats.some((c) => c.regle === 'D-REEL-03' && c.severite === 'majeur' && !c.bloquant));
+
+  const sain = await auditGristReel(construireContexte(path.join(RACINE, 'tests/fixtures/widget-grist-reel-sain-ligne')), {});
+  assert.equal(sain.nonExecute, undefined, sain.resume.cause);
+  const es = sain.resume.essais.find((x) => x.id === 3);
+  assert.equal(es.resultat, 'rien_observe', es.detail);
+  assert.equal(sain.constats.filter((c) => c.regle === 'D-REEL-03').length, 0);
+});

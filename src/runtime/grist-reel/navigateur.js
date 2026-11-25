@@ -130,6 +130,17 @@ export async function jouerPieceJointe({ navigateur, base, cookies, docId, piece
   return sortie;
 }
 
+/**
+ * Un widget qui ne lit que la ligne sélectionnée (`grist.onRecord`) ne reçoit une ligne que si le curseur de Grist s'y pose : le curseur est conduit sur
+ * chaque ligne par un lien d'ancre de Grist (`#a1.s<section>.r<ligne>.c<colonne>`), sans recharger la page.
+ */
+async function parcourirLignes(page, { section, colonne, lignes }) {
+  for (const id of lignes) {
+    await page.evaluate((h) => { location.hash = h; }, `#a1.s${section}.r${id}.c${colonne}`).catch(() => {});
+    await page.waitForTimeout(700);
+  }
+}
+
 const hoteDe = (url) => { try { return new URL(url).hostname; } catch { return null; } };
 const origineDe = (url) => { try { return new URL(url).origin; } catch { return null; } };
 const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; return u.href; } catch { return url; } };
@@ -148,7 +159,7 @@ const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; retur
  * @param {{docId: string, table: string}} [p.apiInstance]  joue l'essai 20 (voir kitApiInstance) : l'API de l'instance appelée avec la session, depuis le cadre du widget puis, comme témoin, depuis la page Grist
  * @param {object} [p.messages]  `{hote, marqueur}` : joue l'essai 4 (voir kitMessagesForges), des messages forgés envoyés au widget par un cadre voisin
  * @param {boolean} [p.stockage]  lit dans le cadre ce que le widget a gardé dans le navigateur, et ses cookies (voir kitStockage), avant les autres kits
- * @param {object} [p.pollution]  clés cherchées dans `Object.prototype` (voir kitPollution) : si fourni, joué dans le cadre du widget ; les lignes hostiles doivent être déjà dans la table (voir `ajouterDonneesHostiles`)
+ * @param {{cles: string[], navigation?: {section: number, colonne: number, lignes: number[]}}} [p.pollution]  clés cherchées dans `Object.prototype` (voir kitPollution) : si fourni, joué dans le cadre du widget ; les lignes hostiles doivent être déjà dans la table (voir `ajouterDonneesHostiles`) ; `navigation` conduit le curseur de Grist sur chacune, pour un widget qui ne lit que la ligne sélectionnée
  * @param {boolean} [p.droits]    joue le kit des droits du navigateur donnés au cadre (voir kitDroits), avec un vrai clic de l'audit dans le widget ; l'écriture du presse-papier est accordée à la page Grist, comme le fait un Chrome ordinaire pour l'onglet actif
  * @param {object} [p.ecritures]  identifiants des tables sacrifiées (voir kitEcritures) : si fourni, le kit des écritures est joué dans le cadre du widget, en tout dernier
  * @param {{rafale: () => Promise<void>}} [p.robustesse]  joue les essais 2 et 6 : après le chargement (les lignes limites sont déjà dans la table), mesure les erreurs non rattrapées du widget et sa réponse ; lance la rafale de changements, mesure de nouveau
@@ -284,7 +295,12 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
       if (lireMarqueurs && cadre) obs.alteration = { executees: await cadre.evaluate(() => (Array.isArray(globalThis.__gw_altere) ? globalThis.__gw_altere.slice(0, 300).map(String) : [])).catch(() => []) };
       if (stockage && cadre) obs.stockage = await jouerStockage(contexte, cadre, origineWidget, jeu).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       if (droits && cadre) obs.droits = await jouerDroits(page, cadre, jeu.prefixe).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
-      if (pollution && cadre) obs.pollution = await cadre.evaluate(kitPollution, pollution).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
+      if (pollution?.navigation && cadre && pollution.navigation.colonne) {
+        await parcourirLignes(page, pollution.navigation);
+        // Les lignes piégées arrivent après la première lecture du cadre : la sonde est relue.
+        obs.hostileRecu = await cadre.evaluate(() => !!window.__gw?.hostileRecu).catch(() => obs.hostileRecu);
+      }
+      if (pollution && cadre) obs.pollution = await cadre.evaluate(kitPollution, { cles: pollution.cles }).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       if (apiInstance && cadre) {
         const parametres = { base, docId: apiInstance.docId, table: apiInstance.table, prefixe: jeu.prefixe };
         const temoin = await page.evaluate(kitApiInstance, parametres).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));

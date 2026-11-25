@@ -266,8 +266,16 @@ export function lignesHostiles(jeu) {
   return valeurs.map((v) => Object.fromEntries(colonnes.map((c) => [c.id, v])));
 }
 
+/** Ajoute les lignes hostiles ; rend leur nombre et leurs identifiants (un widget qui ne lit que la ligne sélectionnée ne les reçoit que si le curseur de Grist s'y pose). */
 export async function ajouterDonneesHostiles(client, doc, jeu) {
   const lignes = lignesHostiles(jeu);
-  if (lignes.length) await client.ajouterLignes(doc.docId, jeu.table.id, lignes);
-  return lignes.length;
+  if (!lignes.length) return { n: 0, ids: [] };
+  const r = await client.ajouterLignes(doc.docId, jeu.table.id, lignes);
+  return { n: lignes.length, ids: (r?.records ?? []).map((x) => x.id).filter(Number.isInteger) };
+}
+
+/** La colonne de texte où sont posées les valeurs hostiles, où le curseur de Grist se pose : sa référence dans le document. */
+export function colonneDeCurseur(doc, jeu) {
+  const id = jeu.table.colonnes.find((c) => c.type === 'Text' && c.id !== 'GwauditCanari')?.id;
+  return id ? doc.colonnesRef?.[id] ?? null : null;
 }

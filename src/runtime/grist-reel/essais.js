@@ -1,12 +1,13 @@
 /**
  * Ce que les observations d'un vrai Grist veulent dire : les essais et leurs constats.
  *
- * Quatre résultats par essai, jamais davantage :
+ * Cinq résultats par essai, jamais davantage :
  *  - `reussi`       : l'effet a été observé ; un constat noté en découle (sauf l'essai 7, voir plus bas) ;
  *  - `bloque`       : Grist ou le navigateur a arrêté l'essai, avec le nom de la barrière (un bon signe, sans pénalité) ;
  *  - `rien_observe` : l'essai a pu se jouer et n'a rien produit (« rien observé » ne dit pas « aucune tentative » : une
  *                     tentative que Chromium abandonne sans rien consigner n'est pas vue) ;
  *  - `non_teste`    : l'essai n'a pas pu se jouer, avec la raison. Jamais présenté comme « rien trouvé ».
+ *  - `sans_objet`   : l'essai ne s'applique pas à ce widget (l'essai 5, par exemple, quand le widget demande déjà le niveau maximum) ; ni une réussite, ni un échec, ni un essai raté.
  *
  * Règle de prudence du projet : un faux constat est pire qu'un oubli. Un essai ne conclut donc rien tant que la
  * page n'a pas été chargée ET que Grist n'a pas transmis de données au widget (sinon `non_teste`).
@@ -348,7 +349,7 @@ export function evaluerEssais(phases, jeu) {
             preuve: { niveau, fichiers: protegeesExecutees.slice(0, 5) },
           }));
         } else if (executees.length) {
-          essais.push(essai(21, titre, 'reussi', `${liste(executees)} : le fichier modifié a été exécuté, rien n'a vérifié son contenu (aucune empreinte déclarée)`, { niveau, regle: 'D-REEL-21', severite: 'info', nature: 'confirmation', fichiers: executees.length }));
+          essais.push(essai(21, titre, 'reussi', `${liste(executees)} : le fichier modifié a été exécuté, rien n'a vérifié son contenu (aucune empreinte déclarée)`, { niveau, regle: 'D-REEL-21', severite: 'info', nature: 'confirmation', dejaCompte: 'E-DEP-01', fichiers: executees.length }));
           constats.push(constat({
             regle: 'D-REEL-21', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: "Une bibliothèque modifiée à la source serait exécutée par le widget (aucune empreinte)",
@@ -391,7 +392,7 @@ export function evaluerEssais(phases, jeu) {
         const navigation = etat('navigation') === 'ouvert';
         const note = navigation ? " Reste ouverte dans tous les cas : la navigation du cadre vers une adresse extérieure, qu'aucune politique de sécurité ne peut fermer." : '';
         if (ouverts.length) {
-          essais.push(essai(22, titre, 'reussi', `avec le niveau « ${niveau} », le code d'essai a pu envoyer vers l'extérieur par ${ouverts.length} voie(s) sur ${CANAUX.length} : ${ouverts.join(', ')}${fermes.length ? ` ; arrêtées par la CSP : ${fermes.join(', ')}` : ''}${inconnus.length ? ` ; sans observation : ${inconnus.join(', ')}` : ''}.${note}`, { niveau, regle: 'D-REEL-22', severite: 'info', nature: 'rayon', etapes, ouverts: ouverts.length, total: CANAUX.length, navigation }));
+          essais.push(essai(22, titre, 'reussi', `avec le niveau « ${niveau} », le code d'essai a pu envoyer vers l'extérieur par ${ouverts.length} voie(s) sur ${CANAUX.length} : ${ouverts.join(', ')}${fermes.length ? ` ; arrêtées par la CSP : ${fermes.join(', ')}` : ''}${inconnus.length ? ` ; sans observation : ${inconnus.join(', ')}` : ''}.${note}`, { niveau, regle: 'D-REEL-22', severite: 'info', nature: 'confirmation', dejaCompte: 'C-CSP-01, C-CSP-02 ou C-CSP-03', etapes, ouverts: ouverts.length, total: CANAUX.length, navigation }));
           constats.push(constat({
             regle: 'D-REEL-22', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: `Si une dépendance du widget était piégée, ${ouverts.length} voie(s) de sortie sur ${CANAUX.length} lui seraient ouvertes`,
@@ -731,7 +732,7 @@ export function evaluerEssais(phases, jeu) {
       const refs = (f.reference ?? []).filter((r) => r?.charge && r.appelsRpc?.length);
       const nom = (a) => `${a.interface ?? '?'}.${a.methode}`;
       const ecrit = (a) => a.methode === 'applyUserActions' && /GristDocAPI/.test(a.interface ?? '');
-      if (f.sansObjet) essais.push(essai(5, titre, 'non_teste', `au niveau « ${niveau} », une adresse qui affirme « access=full » dit la même chose que Grist : il n'y a rien à comparer`, { niveau }));
+      if (f.sansObjet) essais.push(essai(5, titre, 'sans_objet', `le widget demande déjà le niveau d'accès « ${niveau} », le plus élevé : une adresse qui affirme « access=full » dit la même chose que Grist, il n'y a rien à comparer`, { niveau }));
       else if (!o?.charge) essais.push(essai(5, titre, 'non_teste', `le widget n'a pas été chargé avec l'adresse forgée (${resume(o?.erreur)})`, { niveau }));
       else if (!refs.length) essais.push(essai(5, titre, 'non_teste', "la passe normale n'a rien échangé avec Grist : il n'y a rien à comparer", { niveau }));
       else if (!o.appelsRpc?.length) essais.push(essai(5, titre, 'non_teste', "le widget n'a rien échangé avec Grist quand son adresse est forgée : la comparaison n'a pas pu se faire", { niveau }));
@@ -748,7 +749,7 @@ export function evaluerEssais(phases, jeu) {
           ...(ecritNouveau ? [`il tente d'écrire dans le document (${ecritures.length} appel(s) applyUserActions${acceptees ? `, ${acceptees} accepté(s) par Grist` : ', refusés par Grist'})`] : []),
         ];
         if (faits.length) {
-          essais.push(essai(5, titre, 'reussi', `quand son adresse affirme « access=full&readonly=false » alors que Grist lui accorde « ${niveau} », ${faits.join(' ; ')}, ce qu'il ne fait pas avec l'adresse normale`, { niveau, regle: 'D-REEL-05', severite: 'info', nature: 'comportement', faits, nouveaux }));
+          essais.push(essai(5, titre, 'reussi', `quand son adresse affirme « access=full&readonly=false » alors que Grist lui accorde « ${niveau} », ${faits.join(' ; ')}, ce qu'il ne fait pas avec l'adresse normale`, { niveau, regle: 'D-REEL-05', severite: 'info', nature: 'faiblesse', faits, nouveaux }));
           constats.push(constat({
             regle: 'D-REEL-05', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: "Le widget règle sa conduite sur son adresse plutôt que sur le niveau d'accès que Grist lui accorde",

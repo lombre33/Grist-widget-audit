@@ -47,7 +47,9 @@ test("essai 21 : exécuté sans empreinte = information (confirme E-DEP-01) ; ex
   assert.equal(e21(sans).severite, 'info');
   const c = sans.constats.find((x) => x.regle === 'D-REEL-21');
   assert.equal(c.severite, 'info'); assert.equal(c.bloquant, false);
-  assert.match(verdictEssai(e21(sans)).precision, /confirme E-DEP-01/);
+  // Une faute du widget (rien ne vérifie ce que le CDN sert), déjà comptée par E-DEP-01 : « Pas bien », jamais une simple information.
+  assert.equal(verdictEssai(e21(sans)).cle, 'pas_bien');
+  assert.match(verdictEssai(e21(sans)).precision, /déjà compté par E-DEP-01, sans pénalité de plus/);
 
   const faux = jouer(alteration(obs({ alteration: { executees: ['aaaa1111'] } }), true));
   assert.equal(e21(faux).severite, 'critique');

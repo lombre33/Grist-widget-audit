@@ -1,0 +1,16 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Widget de test (sain, ne lit que la ligne sélectionnée)</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+</head>
+<body>
+<h1>Ligne</h1>
+<pre id="ligne"></pre>
+<script>
+  grist.ready({ requiredAccess: 'full' });
+  grist.onRecord(function (r) { document.getElementById('ligne').textContent = String(r.Nom); }, { includeColumns: 'normal' });
+</script>
+</body>
+</html>

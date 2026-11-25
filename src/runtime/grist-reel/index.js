@@ -18,7 +18,7 @@ import { resoudreBibliotheques, alterer } from './bibliotheques.js';
 import { assurerGristDesktop, EPINGLE, InstallationImpossible } from './installateur.js';
 import { lancerInstance, InstanceImpossible } from './instance.js';
 import { creerClient } from './client.js';
-import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, verifierEcritures, ajouterDonneesHostiles, ajouterDonneesLimites, retirerDonneesLimites, rafaleDeChangements, HOTE_PUITS, HOTE_CANAUX, HOTE_MESSAGES, CLES_POLLUTION, TABLES_SACRIFIEES } from './donnees.js';
+import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, verifierEcritures, ajouterDonneesHostiles, colonneDeCurseur, ajouterDonneesLimites, retirerDonneesLimites, rafaleDeChangements, HOTE_PUITS, HOTE_CANAUX, HOTE_MESSAGES, CLES_POLLUTION, TABLES_SACRIFIEES } from './donnees.js';
 import { lancerChromium, jouerPhase, jouerPieceJointe, PAGE_PIEGE_PIECE_JOINTE } from './navigateur.js';
 import { evaluerEssais, constatIndisponible, ESSAIS_JOUES, ESSAIS_PAS_ENCORE } from './essais.js';
 import { bacASableChromium, resumerCauseErreur } from '../dynamique.js';
@@ -153,9 +153,9 @@ export async function auditGristReel(ctx, options = {}) {
       const niveau = phases.demande?.niveau ?? 'none';
       journal(`  Phase ${++numero} : ce que du code piégé dans le widget pourrait envoyer et modifier, au niveau « ${niveau} »…`);
       // Essai 3 : les lignes hostiles sont ajoutées à la table avant que le widget ne se charge, pour qu'il les reçoive comme toute autre donnée.
-      let hostiles = 0;
+      let hostiles = { n: 0, ids: [] };
       try { hostiles = await ajouterDonneesHostiles(client, doc, jeu); } catch (e) { journal(`  Lignes hostiles non ajoutées (${resumerCauseErreur(e)}) : l'essai 3 ne sera pas joué.`); }
-      const obsFinale = await jouerPhase({ ...commun, kit: undefined, canaux: { hote: HOTE_CANAUX, prefixe: jeu.prefixe }, droits: true, apiInstance: { docId: doc.docId, table: jeu.table.id }, messages: { hote: HOTE_MESSAGES, marqueur: `gwaudit_msg_${jeu.graine}` }, ...(hostiles ? { pollution: { cles: CLES_POLLUTION } } : {}), ecritures: TABLES_SACRIFIEES });
+      const obsFinale = await jouerPhase({ ...commun, kit: undefined, canaux: { hote: HOTE_CANAUX, prefixe: jeu.prefixe }, droits: true, apiInstance: { docId: doc.docId, table: jeu.table.id }, messages: { hote: HOTE_MESSAGES, marqueur: `gwaudit_msg_${jeu.graine}` }, ...(hostiles.n ? { pollution: { cles: CLES_POLLUTION, navigation: { section: section.sectionRef, colonne: colonneDeCurseur(doc, jeu), lignes: hostiles.ids } } } : {}), ecritures: TABLES_SACRIFIEES });
       phases.canaux = { niveau, obs: obsFinale };
       let serveur;
       try { await new Promise((r) => setTimeout(r, 2500)); serveur = await verifierEcritures(client, doc); }

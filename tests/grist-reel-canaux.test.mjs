@@ -27,7 +27,9 @@ test("essai 22 : sans politique de sécurité toutes les voies sont ouvertes = i
   assert.equal(e22(r).navigation, true);
   const c = r.constats.find((x) => x.regle === 'D-REEL-22');
   assert.equal(c.severite, 'info'); assert.equal(c.bloquant, false);
-  assert.match(verdictEssai(e22(r)).precision, /dépendance piégée/);
+  // La page du widget sans CSP est une faute du widget, déjà comptée par C-CSP-01/02/03 : « Pas bien », sans pénalité de plus.
+  assert.equal(verdictEssai(e22(r)).cle, 'pas_bien');
+  assert.match(verdictEssai(e22(r)).precision, /déjà compté par C-CSP-01, C-CSP-02 ou C-CSP-03/);
 });
 
 test("essai 22 : une CSP stricte qui arrête toutes les voies = « bloqué » ; une WebSocket n'est ouverte que si aucune CSP ne l'arrête (jamais déduite de l'interception de Playwright)", () => {

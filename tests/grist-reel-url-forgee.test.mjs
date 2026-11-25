@@ -23,12 +23,12 @@ test("essai 5 : une écriture tentée seulement avec l'adresse forgée = informa
   const r = jouer(obs([lecture, ecriture()]));
   assert.equal(e5(r).resultat, 'reussi');
   assert.equal(e5(r).severite, 'info');
-  assert.equal(e5(r).nature, 'comportement');
+  assert.equal(e5(r).nature, 'faiblesse');
   assert.match(e5(r).detail, /tente d'écrire dans le document \(1 appel\(s\) applyUserActions, refusés par Grist\)/);
   const c = r.constats.find((x) => x.regle === 'D-REEL-05');
   assert.equal(c.severite, 'info'); assert.equal(c.bloquant, false);
-  assert.equal(verdictEssai(e5(r)).cle, 'a_savoir');
-  assert.match(verdictEssai(e5(r)).precision, /comportement du widget/);
+  assert.equal(verdictEssai(e5(r)).cle, 'pas_bien', 'le widget se fie à son adresse : une faiblesse du widget, pas une simple information');
+  assert.match(verdictEssai(e5(r)).precision, /faiblesse du widget, sans pénalité/);
 });
 
 test("essai 5 : un accès demandé différent avec l'adresse forgée = constat ; le même accès = rien", () => {
@@ -59,13 +59,15 @@ test("essai 5 : une écriture présente dans l'une des passes normales (deux ré
   assert.equal(e5(r).resultat, 'rien_observe');
 });
 
-test("essai 5 : jamais « rien observé » à tort : rien à comparer, page non chargée, niveau full, passe absente", () => {
+test("essai 5 : jamais « rien observé » à tort : rien à comparer, page non chargée, niveau full (sans objet), passe absente", () => {
   assert.equal(e5(jouer(obs([]))).resultat, 'non_teste');
   assert.equal(e5(jouer(obs([lecture], 'read table', { charge: false, erreur: 'pas de cadre' }))).resultat, 'non_teste');
   assert.equal(e5(jouer(obs([lecture]), [obs([])])).resultat, 'non_teste');
   const full = evaluerEssais({ none: obs([lecture], 'none', { canariRecu: false }), demande: { niveau: 'full', obs: obs([lecture], 'full') }, forgee: { niveau: 'full', sansObjet: true } }, jeu);
-  assert.equal(e5(full).resultat, 'non_teste');
+  assert.equal(e5(full).resultat, 'sans_objet', "le widget demande déjà « full » : l'essai ne s'applique pas, ce n'est pas un essai raté");
   assert.match(e5(full).detail, /la même chose que Grist/);
+  assert.equal(verdictEssai(e5(full)).mot, 'Sans objet');
+  assert.equal(verdictEssai(e5(full)).cle, 'sans_objet');
   assert.equal(e5(evaluerEssais({ none: obs([lecture], 'none', { canariRecu: false }), demande: { niveau: 'read table', obs: obs([lecture]) } }, jeu)), undefined);
 });
 

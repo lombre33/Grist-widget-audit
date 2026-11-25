@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Widget de test (fusion récursive naïve de la ligne sélectionnée)</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+</head>
+<body>
+<h1>Réglages de la ligne</h1>
+<pre id="reglages"></pre>
+<script>
+  // Défaut volontaire, pour l'essai 3 : une fusion récursive naïve du JSON de la cellule de la ligne sélectionnée. Ce widget ne lit que cette ligne
+  // (`grist.onRecord`) : il ne reçoit les lignes piégées que si le curseur de Grist s'y pose.
+  function fusionner(cible, source) {
+    for (var cle in source) {
+      if (source[cle] && typeof source[cle] === 'object') { cible[cle] = cible[cle] || {}; fusionner(cible[cle], source[cle]); }
+      else cible[cle] = source[cle];
+    }
+    return cible;
+  }
+  var reglages = {};
+  grist.ready({ requiredAccess: 'full' });
+  grist.onRecord(function (r) {
+    try { fusionner(reglages, JSON.parse(r.Nom)); } catch (e) { /* cellule qui n'est pas du JSON */ }
+    document.getElementById('reglages').textContent = JSON.stringify(reglages);
+  }, { includeColumns: 'normal' });
+</script>
+</body>
+</html>

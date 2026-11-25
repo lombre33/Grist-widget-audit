@@ -5,13 +5,16 @@
  * (essai bloqué par Grist ou par le navigateur, rien observé, non testé), pour que « rien trouvé » ne se lise
  * jamais à la place de « pas testé ».
  *
- * Chaque essai porte un verdict lisible d'un coup d'œil (Bien / Pas bien / À savoir / Pas testé : une couleur ET un mot)
- * et une phrase « En clair » ; le détail concret (ce qui a été observé, la barrière, les étapes, la règle) reste dessous, tel quel.
+ * Chaque essai porte un verdict lisible d'un coup d'œil (Bien / Pas bien / Exposé ou Côté Grist ou À vérifier, sans pénalité / Sans objet / Pas testé : une couleur ET un mot),
+ * une phrase « En clair », une réponse franche à « le widget a-t-il fait quelque chose de mal ? » et les actions à mener (« Que faire ») ; le détail concret (ce qui a été observé, la barrière, les étapes, la règle) reste dessous, tel quel.
  */
+import { conseilEssai, classeEssai } from './grist-reel-conseils.js';
+
 const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+const enCode = (s) => esc(s).replace(/`([^`]+)`/g, '<code>$1</code>');
 const md = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ');
 
-const LIBELLE = { reussi: 'Effet observé (constat)', bloque: 'Bloqué', rien_observe: 'Rien observé', non_teste: 'Non testé' };
+const LIBELLE = { reussi: 'Effet observé (constat)', bloque: 'Bloqué', rien_observe: 'Rien observé', non_teste: 'Non testé', sans_objet: 'Sans objet' };
 
 /** Nombre d'essais du catalogue de l'étude (joués ou non), plus les essais 21 (altération d'une bibliothèque) 22 (voies de sortie), 23 (stockage dans le navigateur) et 24 (écritures spontanées), ajoutés ensuite. */
 const ESSAIS_DU_CATALOGUE = 24;
@@ -48,6 +51,7 @@ const NON_CONCLUANT = "Impossible de conclure : l'essai n'a pas pu être joué (
 /** Ce que le résultat veut dire, sans jargon. */
 function enClair(e) {
   const t = e.resultat;
+  if (t === 'sans_objet') return "Cet essai ne s'applique pas à ce widget (raison dans le détail) : ce n'est ni une réussite, ni un échec, ni un essai raté.";
   if (t === 'non_teste') {
     if (e.bibliothequesManquantes) return "Impossible de conclure : des bibliothèques du widget n'ont pas pu être chargées, son code n'a pas été joué en entier (raison dans le détail). Ce n'est pas la même chose que « tout va bien ».";
     if (e.id === 1) return "Impossible de conclure : le piège n'a pas pu être présenté au widget (raison dans le détail). Ce n'est pas la même chose que « tout va bien ».";
@@ -79,7 +83,7 @@ function enClair(e) {
         : "Le widget a reçu des messages forgés (texte brut, objet, JSON) sans rien en faire : pas d'exécution de code, pas d'appel réseau. Cela ne couvre que ces formes de message et les noms de champs usuels.";
     case 5:
       return t === 'reussi'
-        ? `Le widget a changé de conduite quand son adresse affirmait un accès « full » : ${(e.faits ?? []).join(' ; ')}. Il n'obtient pas pour autant plus d'accès (Grist fixe le niveau réel), mais il se règle sur son adresse plutôt que sur ce que Grist lui accorde. Information sans effet sur la note.`
+        ? `Le widget a changé de conduite quand son adresse affirmait un accès « full » : ${(e.faits ?? []).join(' ; ')}. Il n'obtient pas pour autant plus d'accès (Grist fixe le niveau réel), mais il se règle sur son adresse plutôt que sur ce que Grist lui accorde : c'est une faiblesse du widget, sans pénalité sur la note.`
         : "Le widget fait les mêmes appels à Grist quand son adresse affirme un accès « full » : il ne se règle pas sur son adresse. Seuls ses appels à Grist sont comparés, pas l'apparence de sa page.";
     case 7:
       return t === 'bloque'
@@ -130,10 +134,10 @@ function enClair(e) {
       if (t === 'bloque') return "Le navigateur a refusé le fichier modifié : l'empreinte (integrity) déclarée par le widget fait son travail. Si le CDN servait un jour un fichier altéré, il ne s'exécuterait pas.";
       return e.severite === 'critique'
         ? "Le widget a exécuté une bibliothèque modifiée alors qu'il déclare une empreinte pour la protéger : l'empreinte ne protège pas. Un CDN compromis pourrait faire exécuter son code dans le widget."
-        : "Le widget a exécuté la bibliothèque modifiée : rien ne vérifie ce que le CDN sert. Un CDN compromis pourrait faire exécuter son code dans le widget (voir les essais 8 et 9 pour ce que ce code obtiendrait). Déjà signalé par la règle E-DEP-01 : sans effet de plus sur la note.";
+        : "Le widget a exécuté la bibliothèque modifiée : rien ne vérifie ce que le CDN sert. Un CDN compromis pourrait faire exécuter son code dans le widget (voir les essais 8 et 9 pour ce que ce code obtiendrait). C'est un défaut du widget, déjà compté par la règle E-DEP-01 : sans pénalité de plus.";
     case 22:
       if (t === 'bloque') return "La politique de sécurité (CSP) du widget a arrêté toutes les voies d'envoi usuelles : du code piégé ne pourrait pas envoyer ce qu'il a lu par ces voies." + (e.navigation ? " Il lui resterait la navigation du cadre vers une adresse extérieure, qu'aucune CSP ne ferme." : '');
-      return `Si une bibliothèque du widget était piégée, elle pourrait envoyer ce qu'elle a lu vers l'extérieur par ${e.ouverts} voie(s) sur ${e.total}. Seule une politique de sécurité (CSP) stricte dans la page du widget les ferme. Mesure donnée à titre d'information, sans effet sur la note (l'absence de CSP est déjà signalée par C-CSP-01 et C-CSP-02).`;
+      return `Si une bibliothèque du widget était piégée, elle pourrait envoyer ce qu'elle a lu vers l'extérieur par ${e.ouverts} voie(s) sur ${e.total}. Seule une politique de sécurité (CSP) stricte dans la page du widget les ferme. Défaut du widget déjà compté par les règles C-CSP-01, C-CSP-02 et C-CSP-03 : sans pénalité de plus.`;
     case 13:
       if (t === 'reussi') return "Des données du document sortent du widget vers un site extérieur : c'est une fuite.";
       return e.sorties > 0
@@ -158,23 +162,34 @@ function enClair(e) {
 
 /** Le verdict d'un essai : une couleur de la palette du rapport (bande), un symbole et un mot. */
 export function verdictEssai(e) {
-  if (e.resultat === 'non_teste') return { cle: 'non_teste', bande: 'neutre', symbole: '?', mot: 'Pas testé', precision: 'aucune conclusion' };
-  if (e.resultat === 'reussi') {
-    if (e.severite === 'info') return { cle: 'a_savoir', bande: 'neutre', symbole: 'i', mot: 'À savoir', precision: e.nature === 'rayon' ? "ce qu'obtiendrait une dépendance piégée, sans effet sur la note" : (e.nature === 'confirmation' ? "confirme E-DEP-01, sans effet de plus sur la note" : (e.nature === 'comportement' ? "comportement du widget, sans effet sur la note" : "défaut de Grist, pas du widget")) };
+  const classe = classeEssai(e);
+  if (classe === 'non_teste') return { cle: 'non_teste', bande: 'neutre', symbole: '?', mot: 'Pas testé', precision: 'aucune conclusion' };
+  if (classe === 'sans_objet') return { cle: 'sans_objet', bande: 'neutre', symbole: '–', mot: 'Sans objet', precision: "cet essai ne s'applique pas à ce widget" };
+  if (classe === 'faille') {
     if (e.severite === 'critique') return { cle: 'pas_bien', bande: 'critique', symbole: '✘', mot: 'Pas bien', precision: 'critique' };
+    if (e.severite === 'info') {
+      // Une faute du widget que l'audit ne compte pas deux fois (une autre règle la compte déjà) ou qui ne coûte aucun point : elle reste une faute, dite comme telle.
+      return { cle: 'pas_bien', bande: 'serieuse', symbole: '✘', mot: 'Pas bien', precision: e.nature === 'confirmation' ? `déjà compté par ${e.dejaCompte ?? 'une autre règle'}, sans pénalité de plus` : 'faiblesse du widget, sans pénalité sur la note' };
+    }
     return { cle: 'pas_bien', bande: 'serieuse', symbole: '✘', mot: 'Pas bien', precision: e.severite ?? 'majeur' };
   }
+  // Sans faute du widget : une exposition due au niveau d'accès, un comportement de Grist, ou un comportement à vérifier. Libellé neutre, jamais « Pas bien ».
+  // (La clé `a_savoir` est celle du libellé neutre ; le mot affiché dit de quoi il s'agit.)
+  if (classe === 'rayon') return { cle: 'a_savoir', bande: 'neutre', symbole: 'i', mot: 'Exposé, sans pénalité', precision: "ce qu'obtiendrait une dépendance piégée ; le widget n'a rien fait de mal" };
+  if (classe === 'a_verifier') return { cle: 'a_savoir', bande: 'neutre', symbole: 'i', mot: 'À vérifier, sans pénalité', precision: 'comportement du widget, sans effet sur la note' };
+  if (classe === 'grist') return { cle: 'a_savoir', bande: 'neutre', symbole: 'i', mot: 'Côté Grist, sans pénalité', precision: 'défaut de Grist, pas du widget' };
   return { cle: 'bien', bande: 'bonne', symbole: '✔', mot: 'Bien', precision: e.resultat === 'bloque' ? `arrêté par ${e.barriere ?? 'une barrière'}` : "rien d'anormal observé" };
 }
 
 /** La synthèse en une phrase : combien d'essais sont bien, pas bien, pas testés. */
 export function syntheseEssais(essais) {
-  const n = { bien: 0, pas_bien: 0, a_savoir: 0, non_teste: 0 };
+  const n = { bien: 0, pas_bien: 0, a_savoir: 0, non_teste: 0, sans_objet: 0 };
   for (const e of essais) n[verdictEssai(e).cle] += 1;
   const morceaux = [];
   if (n.pas_bien) morceaux.push(`${n.pas_bien} pas bien`);
   if (n.bien) morceaux.push(`${n.bien} bien (rien d'anormal, ou arrêté par une barrière)`);
-  if (n.a_savoir) morceaux.push(`${n.a_savoir} à savoir (information sans effet sur la note)`);
+  if (n.a_savoir) morceaux.push(`${n.a_savoir} exposition${n.a_savoir > 1 ? 's' : ''} ou comportement${n.a_savoir > 1 ? 's' : ''} de Grist, sans faute du widget et sans pénalité`);
+  if (n.sans_objet) morceaux.push(`${n.sans_objet} sans objet (ne s'applique pas à ce widget)`);
   if (n.non_teste) morceaux.push(`${n.non_teste} pas testé${n.non_teste > 1 ? 's' : ''} (aucune conclusion possible sur ces points)`);
   const bande = n.pas_bien ? 'critique' : (n.non_teste ? 'attention' : 'bonne');
   const titre = n.pas_bien ? `${n.pas_bien} problème${n.pas_bien > 1 ? 's' : ''} trouvé${n.pas_bien > 1 ? 's' : ''}`
@@ -194,7 +209,7 @@ function bandeau(r) {
 // Le nombre d'essais développés vient de la liste des essais jouables (`essaisJoues`), pas de ceux joués : l'essai 21, par exemple, n'existe que si le widget déclare des bibliothèques.
 const nonJoues = (r) => `Ce rapport ne couvre pas tout : ${ESSAIS_DU_CATALOGUE - (r.essaisJoues?.length ?? r.essais.length)} essais du catalogue restent à développer (n° ${r.essaisPasEncore}).`;
 
-const COMMENT_LIRE = "Comment lire : « Bien » veut dire que l'essai n'a rien révélé d'anormal, ou que Grist ou le navigateur l'a arrêté (aucune pénalité). « Pas bien » veut dire qu'un effet a été observé : il devient un constat noté (règle D-REEL-NN). « Pas testé » veut dire que l'essai n'a pas pu être joué : aucune conclusion, ni dans un sens ni dans l'autre. Un « Bien » ne prouve pas que le widget est sûr : il dit seulement que cet essai-là n'a rien trouvé.";
+const COMMENT_LIRE = "Comment lire : « Bien » veut dire que l'essai n'a rien révélé d'anormal, ou que Grist ou le navigateur l'a arrêté (aucune pénalité). « Pas bien » veut dire que le widget a une faute : elle est comptée par un constat (règle D-REEL-NN) ou, quand une autre règle la compte déjà ou qu'elle ne coûte rien, la précision à côté le dit (« déjà compté par E-DEP-01 »). « Exposé », « Côté Grist » et « À vérifier », toujours « sans pénalité », ne sont ni un échec ni une faute du widget : une exposition due au niveau d'accès, un comportement de Grist, un comportement à confirmer ; la ligne « Le widget a-t-il fait quelque chose de mal ? » le dit franchement. « Sans objet » veut dire que l'essai ne s'applique pas à ce widget. « Pas testé » veut dire que l'essai n'a pas pu être joué : aucune conclusion, ni dans un sens ni dans l'autre. Un « Bien » ne prouve pas que le widget est sûr : il dit seulement que cet essai-là n'a rien trouvé.";
 
 const BIBLIOTHEQUES_AFFICHEES = 40;
 const INTRO_BIBLIOTHEQUES = "L'audit a téléchargé lui-même ces fichiers (le navigateur reste coupé d'Internet) et les a servis au widget pour qu'il s'affiche pour de vrai. L'empreinte SHA-256 permet de vérifier plus tard que c'est le même code.";
@@ -232,12 +247,15 @@ export function htmlGristReel(r) {
   const synthese = syntheseEssais(r.essais);
   const cartes = r.essais.map((e) => {
     const v = verdictEssai(e);
+    const c = conseilEssai(e);
     const etapes = e.etapes?.length ? `<details><summary>Étapes</summary><ol>${e.etapes.map((s) => `<li>${s.ok ? 'Franchie' : 'Arrêtée'} : ${esc(s.etape)}${s.barriere ? ` — ${esc(s.barriere)}` : ''}</li>`).join('')}</ol></details>` : '';
     return `<li class="reel-essai" data-bande="${v.bande}">
         <div class="reel-entete"><span class="reel-verdict" data-bande="${v.bande}"><span aria-hidden="true">${v.symbole}</span> ${esc(v.mot)}</span><span class="reel-precision">${esc(v.precision)}</span><span class="reel-num">Essai ${e.id} · niveau ${esc(e.niveau ?? 'tous')}</span></div>
         <p class="reel-titre">${esc(e.titre)}</p>
         <p class="reel-quoi">${esc(QUOI[e.id] ?? '')}</p>
         <p class="reel-clair"><strong>En clair.</strong> ${esc(enClair(e))}</p>
+        <p class="reel-mal" data-classe="${c.classe}"><strong>Le widget a-t-il fait quelque chose de mal ?</strong> ${enCode(c.mal)}</p>
+        <div class="reel-faire"><strong>Que faire.</strong> <ul>${c.faire.map((a) => `<li>${enCode(a)}</li>`).join('')}</ul></div>
         <p class="reel-detail"><strong>Observé.</strong> ${esc(e.detail)}${e.barriere ? ` <em>(barrière : ${esc(e.barriere)})</em>` : ''} <span class="reel-brut">· Résultat : ${esc(LIBELLE[e.resultat])}</span>${e.regle ? ` <code>${esc(e.regle)}</code>` : ''}</p>
         ${etapes}
       </li>`;
@@ -277,6 +295,9 @@ export const cssGristReel = `
 .reel-num{margin-left:auto; color:var(--text-muted); font-size:12px;}
 .reel-titre{font-weight:600;}
 .reel-quoi{color:var(--text-2);}
+.reel-mal strong{font-weight:600;}
+.reel-faire ul{margin:4px 0 6px; padding-left:22px;}
+.reel-faire li{margin:2px 0;}
 .reel-detail{color:var(--text-2); font-size:12.5px;}
 .reel-brut{color:var(--text-muted);}
 .reel-contexte{color:var(--text-2); font-size:12.5px;}
@@ -293,11 +314,12 @@ export function markdownGristReel(r) {
   }
   const synthese = syntheseEssais(r.essais);
   l.push(`**${synthese.titre}.** ${synthese.detail}`, '');
-  l.push('| Verdict | Essai | En clair | Observé (détail concret) |', '|---|---|---|---|');
+  l.push('| Verdict | Essai | En clair | Le widget a-t-il fait quelque chose de mal ? | Que faire | Observé (détail concret) |', '|---|---|---|---|---|---|');
   for (const e of r.essais) {
     const v = verdictEssai(e);
     const suite = e.etapes?.length ? ` Étapes : ${e.etapes.map((s) => `${s.ok ? 'franchie' : 'arrêtée'} (${s.etape}${s.barriere ? ` — ${s.barriere}` : ''})`).join(' ; ')}.` : '';
-    l.push(`| ${v.symbole} **${v.mot}** — ${md(v.precision)} | ${e.id}. ${md(e.titre)} — niveau ${md(e.niveau ?? 'tous')} | ${md(enClair(e))} | ${md(e.detail + (e.barriere ? ` (barrière : ${e.barriere})` : '') + (e.regle ? ` [${e.regle}]` : '') + suite)} (résultat : ${LIBELLE[e.resultat]}) |`);
+    const c = conseilEssai(e);
+    l.push(`| ${v.symbole} **${v.mot}** — ${md(v.precision)} | ${e.id}. ${md(e.titre)} — niveau ${md(e.niveau ?? 'tous')} | ${md(enClair(e))} | ${md(c.mal)} | ${c.faire.map((a, i) => `${i + 1}. ${md(a)}`).join('<br>')} | ${md(e.detail + (e.barriere ? ` (barrière : ${e.barriere})` : '') + (e.regle ? ` [${e.regle}]` : '') + suite)} (résultat : ${LIBELLE[e.resultat]}) |`);
   }
   l.push('', ...markdownBibliotheques(r.bibliotheques), bandeau(r), '', `${COMMENT_LIRE} ${nonJoues(r)}`, '');
   return l;
