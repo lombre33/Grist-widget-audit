@@ -135,7 +135,7 @@ Le rapport est écrit dans `./rapport-<nom-du-widget>/rapport.md`.
 Options :
 - `--sans-dynamique` : n'exécute que l'analyse statique (pas de navigateur).
 - `--grist-reel` : joue en plus le widget contre un vrai Grist (Grist Desktop, installé et lancé tout seul dans un profil jetable), voir [Essais contre un Grist réel](#essais-contre-un-grist-réel).
-- `--sans-reseau` : n'interroge ni le registre npm (`npm audit`, dates de publication, paquets introuvables ou tout neufs) ni OSV.dev (avis connus des bibliothèques chargées de loin, paquets malveillants) (fonctionne hors-ligne). Pour un dépôt qui verrouille ses dépendances, le rapport dit alors l'axe E mesuré en partie (E-VULN-OPTION) et le verdict ne peut pas être « CONFORME » ; le bilan (E-DEP-07) écrit la régularité de publication « non mesurée ».
+- `--sans-reseau` : n'interroge ni le registre npm (`npm audit`, dates de publication, paquets introuvables ou tout neufs) ni OSV.dev (avis connus des bibliothèques chargées de loin ou reconnues identiques à un paquet publié, paquets malveillants), et ne télécharge aucun paquet pour reconnaître une bibliothèque embarquée (fonctionne hors-ligne). Pour un dépôt qui verrouille ses dépendances, le rapport dit alors l'axe E mesuré en partie (E-VULN-OPTION) et le verdict ne peut pas être « CONFORME » ; le bilan (E-DEP-07) écrit la régularité de publication « non mesurée ».
 - `--sortie <dossier>` : change le dossier de sortie.
 - `--json` : écrit aussi `rapport.json`, pour intégration outillée.
 - `--sarif` : écrit aussi `rapport.sarif` (SARIF 2.1.0), pour l'ingestion CI

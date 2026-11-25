@@ -3,8 +3,8 @@
  * Elle comble ce que `npm audit` ne voit pas : une bibliothèque chargée de loin (esm.sh, unpkg…) dont l'adresse dit le nom et la version, et les
  * paquets malveillants connus parmi les paquets verrouillés.
  *
- *  - E-VULN-03 : une bibliothèque chargée de loin, dont le nom et la version exacte se lisent dans l'adresse, a un avis publié. Une version mal
- *    identifiée donnerait un faux avis : on n'interroge que si le nom ET la version sont certains. Les avis ordinaires des paquets verrouillés restent
+ *  - E-VULN-03 : une bibliothèque chargée de loin, dont le nom et la version exacte se lisent dans l'adresse, ou une bibliothèque embarquée reconnue identique
+ *    au paquet publié (E-DEP-12), a un avis publié. Une version mal identifiée donnerait un faux avis : on n'interroge que si le nom ET la version sont certains. Les avis ordinaires des paquets verrouillés restent
  *    à `npm audit` (E-VULN-01), pour ne pas les compter deux fois.
  *  - E-VULN-04 : le paquet (verrouillé ou chargé de loin), à cette version exacte, est signalé malveillant (avis `MAL-…`).
  *
@@ -84,7 +84,7 @@ const RANG = { critique: 3, majeur: 2, mineur: 1 };
 
 /**
  * Les constats E-VULN-03 et E-VULN-04 de ce qu'OSV a rendu.
- * @param {Array<{nom: string, version: string, origine: 'verrou'|'distante', fichier?: string, ligne?: number, hote?: string}>} paquets ce qui a été interrogé, avec d'où vient le nom
+ * @param {Array<{nom: string, version: string, origine: 'verrou'|'distante'|'embarquee', fichier?: string, ligne?: number, hote?: string}>} paquets ce qui a été interrogé, avec d'où vient le nom
  * @param {Map} lus le résultat d'`interrogerOsv`
  */
 export function constatsOsv(paquets, lus) {
@@ -93,7 +93,7 @@ export function constatsOsv(paquets, lus) {
     const avis = lus.get(cleDe(p.nom, p.version));
     if (!avis) continue;
     const libelle = `${court(p.nom)}@${court(p.version)}`;
-    const ou = p.origine === 'distante' ? `chargé depuis ${court(p.hote)}` : 'verrouillé dans package-lock.json';
+    const ou = p.origine === 'distante' ? `chargé depuis ${court(p.hote)}` : p.origine === 'embarquee' ? `embarqué dans le dépôt, ${court(p.fichier)}` : 'verrouillé dans package-lock.json';
     const preuve = (liste) => ({ source: 'osv.dev', nom: court(p.nom), version: court(p.version), origine: p.origine, avis: liste.slice(0, 10).map((a) => ({ id: a.id, gravite: a.gravite, resume: a.resume, lien: lienOsv(a.id) })), total: liste.length });
 
     const malveillants = avis.filter((a) => a.malveillant);
@@ -111,15 +111,17 @@ export function constatsOsv(paquets, lus) {
     }
     // Les avis ordinaires des paquets verrouillés restent à `npm audit` (E-VULN-01) : pas de double compte.
     const ordinaires = avis.filter((a) => !a.malveillant);
-    if (p.origine === 'distante' && ordinaires.length) {
+    if (p.origine !== 'verrou' && ordinaires.length) {
       const niveau = ordinaires.reduce((n, a) => (RANG[NIVEAU[a.gravite]] > RANG[n] ? NIVEAU[a.gravite] : n), 'mineur');
       constats.push(constat({
         regle: 'E-VULN-03', axe: 'E', severite: niveau, bloquant: niveau === 'critique', confiance: 'certain',
         titre: `Vulnérabilité connue (OSV) : ${libelle}, ${ou}`,
         fichier: p.fichier, ligne: p.ligne,
-        constat: `OSV.dev publie ${ordinaires.length > 1 ? `${ordinaires.length} avis` : 'un avis'} sur ${libelle} (${ou}) : ${ordinaires.slice(0, 3).map((a) => `${a.id}${a.gravite === 'inconnue' ? '' : ` (${a.gravite})`}${a.resume ? ` — ${a.resume}` : ''}`).join(' ; ')}. Le nom et la version sont exacts : lus dans l'adresse de chargement.`,
+        constat: `OSV.dev publie ${ordinaires.length > 1 ? `${ordinaires.length} avis` : 'un avis'} sur ${libelle} (${ou}) : ${ordinaires.slice(0, 3).map((a) => `${a.id}${a.gravite === 'inconnue' ? '' : ` (${a.gravite})`}${a.resume ? ` — ${a.resume}` : ''}`).join(' ; ')}. Le nom et la version sont exacts : ${p.origine === 'embarquee' ? 'le fichier est identique à celui du paquet publié (E-DEP-12)' : "lus dans l'adresse de chargement"}.`,
         impact: "La bibliothèque est livrée au navigateur de chaque agent avec cette version : la faille s'applique au widget en fonctionnement, pour autant que le code qui la porte soit atteint. La gravité est celle que la base publie, non une mesure sur ce widget.",
-        remediation: `Charger une version corrigée (voir les avis sur osv.dev : ${ordinaires.slice(0, 3).map((a) => lienOsv(a.id)).join(' ')}), de préférence embarquée dans le dépôt (\`vendor/\`) avec sa version et son origine notées.`,
+        remediation: p.origine === 'embarquee'
+          ? `Remplacer la copie embarquée par une version corrigée (voir les avis sur osv.dev : ${ordinaires.slice(0, 3).map((a) => lienOsv(a.id)).join(' ')}), et noter sa version et son origine dans \`vendor/SOURCES.md\`.`
+          : `Charger une version corrigée (voir les avis sur osv.dev : ${ordinaires.slice(0, 3).map((a) => lienOsv(a.id)).join(' ')}), de préférence embarquée dans le dépôt (\`vendor/\`) avec sa version et son origine notées.`,
         referentiels: REFERENTIELS,
         preuve: preuve(ordinaires),
       }));

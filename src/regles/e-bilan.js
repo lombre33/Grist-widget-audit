@@ -19,6 +19,7 @@ import { constatsNomsVoisins } from './e-noms-voisins.js';
 import { paquetNpmDeAdresse } from '../moteur/bibliotheque.js';
 import { interrogerOsv, constatsOsv, cleDe, MAX_PAQUETS as MAX_OSV } from './e-osv.js';
 import { REGISTRE_NPM } from './npm-isole.js';
+import { identifierLesEmbarquees, constatsIdentiques } from './e-identique.js';
 
 /** Bornes d'un rapport lisible et d'un verrou hostile : un nom ou une version est coupé, les listes sont bornées (le total exact est gardé). */
 const LONGUEUR_MAX = 100;
@@ -81,9 +82,10 @@ const enumerer = (noms) => noms.slice(0, MAX_NOMMEES).join(', ') + (noms.length 
  * @param {{reseau?: boolean}} [options] `reseau: false` (`--sans-reseau`) : le registre npm n'est pas interrogé
  * @param {(noms: string[]) => Promise<Map>} [lire] la lecture du registre ; les essais en fournissent une sans réseau
  * @param {typeof interrogerOsv} [osv] la lecture d'OSV.dev (`e-osv.js`) ; les essais en fournissent une sans réseau
- * @returns {Promise<Array>} le constat E-DEP-07 puis, selon ce que le registre dit des noms réclamés, E-DEP-08, E-DEP-09 et E-DEP-10 (`e-paquets.js`) ; rien quand le widget n'a aucune dépendance
+ * @param {typeof identifierLesEmbarquees} [identifier] la reconnaissance des bibliothèques embarquées au registre (`e-identique.js`) ; les essais en fournissent une sans réseau
+ * @returns {Promise<Array>} le constat E-DEP-07 puis, selon ce que le registre dit des noms réclamés, E-DEP-08, E-DEP-09 et E-DEP-10 (`e-paquets.js`), E-DEP-11 (`e-noms-voisins.js`), E-DEP-12 (`e-identique.js`) et les avis d'OSV.dev (`e-osv.js`) ; rien quand le widget n'a aucune dépendance
  */
-export async function bilanDependances(ctx, constatsE, options = {}, lire = interrogerRegistre, osv = interrogerOsv) {
+export async function bilanDependances(ctx, constatsE, options = {}, lire = interrogerRegistre, osv = interrogerOsv, identifier = identifierLesEmbarquees) {
   const paquet = objetDe(ctx.paquet);
   const specifications = { ...objetDe(paquet.optionalDependencies), ...objetDe(paquet.dependencies) };
   const production = Object.keys(specifications);
@@ -106,6 +108,12 @@ export async function bilanDependances(ctx, constatsE, options = {}, lire = inte
   const nomsDistants = [...new Set(distants.map((d) => d.nom))].filter((nom) => !aInterroger.includes(nom)).slice(0, MAX_DISTANTES);
   const aLire = [...aInterroger, ...nomsDistants];
   const lus = options.reseau !== false && aLire.length ? await lire(aLire) : new Map();
+
+  // Les bibliothèques embarquées identiques à un paquet publié (E-DEP-12) ont un nom et une version certains : elles rejoignent les questions posées à OSV.dev.
+  const aReconnaitre = options.reseau === false ? [] : embarquees.map((c) => ctx.fichiers.find((f) => f.chemin === c.fichier)).filter((f) => f && typeof f.contenu === 'string');
+  const reconnues = aReconnaitre.length ? await identifier(aReconnaitre, ctx.racine) : [];
+  const identiques = constatsIdentiques(reconnues);
+  const reconnueEn = new Map(reconnues.map((r) => [r.fichier, court(`${r.nom}@${r.version}`)]));
 
   const verrou = lireVerrou(ctx);
   const audit = etatDeLAudit(constatsE);
@@ -131,7 +139,7 @@ export async function bilanDependances(ctx, constatsE, options = {}, lire = inte
     maintenance: { depreciee: depreciees ? nomsDepreciees.has(court(nom)) : null, regularite },
     surete: surete(nom),
   });
-  const entreeHorsNpm = (nom, c, anneau) => ({ nom: court(nom), anneau, regle: c.regle, maintenance: { depreciee: null, regularite: nonMesuree('hors-npm') }, surete: { etat: 'non-mesuree', raison: 'hors-npm-audit' } });
+  const entreeHorsNpm = (nom, c, anneau) => ({ nom: court(nom), anneau, regle: c.regle, ...(anneau === 'embarquee' && reconnueEn.get(c.fichier) ? { reconnue: reconnueEn.get(c.fichier) } : {}), maintenance: { depreciee: null, regularite: nonMesuree('hors-npm') }, surete: { etat: 'non-mesuree', raison: 'hors-npm-audit' } });
   const entreesProduction = production.map((n) => entreeNpm(n, 'npm-production', regulariteDe(n)));
   const dependances = [
     ...entreesProduction,
@@ -195,22 +203,26 @@ export async function bilanDependances(ctx, constatsE, options = {}, lire = inte
     if (!estDuRegistre(nom, p.version ?? '*') || !estVersionExacte(p.version) || pourOsv.size >= MAX_OSV) continue;
     if (!pourOsv.has(cleDe(nom, p.version))) pourOsv.set(cleDe(nom, p.version), { nom, version: p.version, origine: 'verrou' });
   }
-  const etatOsv = !pourOsv.size ? 'sans-objet' : options.reseau === false ? 'option' : null;
-  const reponseOsv = etatOsv ? { erreur: null, lus: new Map() } : await osv([...pourOsv.values()].map(({ nom, version }) => ({ nom, version })));
+  const embarqueesOsv = reconnues.filter((r) => estVersionExacte(r.version)).map((r) => ({ nom: r.nom, version: r.version, origine: 'embarquee', fichier: r.fichier }));
+  const questions = [...pourOsv.values(), ...embarqueesOsv];
+  const paires = [...new Map(questions.map(({ nom, version }) => [cleDe(nom, version), { nom, version }])).values()];
+  const etatOsv = !questions.length ? 'sans-objet' : options.reseau === false ? 'option' : null;
+  const reponseOsv = etatOsv ? { erreur: null, lus: new Map() } : await osv(paires);
   const osvEtat = etatOsv ?? reponseOsv.erreur ?? 'interroge';
-  const constatsDeOsv = osvEtat === 'interroge' ? constatsOsv([...pourOsv.values()], reponseOsv.lus) : [];
-  const osvDistantes = osvEtat === 'interroge' ? [...pourOsv.values()].filter((q) => q.origine === 'distante') : [];
+  const constatsDeOsv = osvEtat === 'interroge' ? constatsOsv(questions, reponseOsv.lus) : [];
+  const osvDistantes = osvEtat === 'interroge' ? questions.filter((q) => q.origine === 'distante') : [];
+  const osvEmbarquees = osvEtat === 'interroge' ? embarqueesOsv : [];
 
   const sureteNpm = !directes ? null
     : audit === 'aucun-avis' ? "`npm audit` ne remonte aucun avis publié sur les paquets verrouillés à la date de l'audit (E-VULN-02) : présumés sûrs au sens des avis connus, non relus."
     : audit === 'avis' ? `\`npm audit\` remonte des avis sur ${enumerer([...avis.keys()].map(court))} (E-VULN-01) ; aucun autre paquet verrouillé n'en porte.`
     : `non établie, ${RAISON_SURETE[audit]}.`;
-  const nonVues = horsNpm - osvDistantes.length;
+  const nonVues = horsNpm - osvDistantes.length - osvEmbarquees.length;
   const sureteHorsNpm = nonVues > 0 ? `${nombre(nonVues, 'bibliothèque embarquée ou distante', 'bibliothèques embarquées ou distantes')} ${nonVues > 1 ? 'ne sont vues' : "n'est vue"} par aucune base d'avis : sûreté non vérifiée.` : null;
-  const nbVerrou = [...pourOsv.values()].filter((q) => q.origine === 'verrou').length;
+  const nbVerrou = questions.filter((q) => q.origine === 'verrou').length;
   const sureteOsv = osvEtat === 'sans-objet' ? null
     : osvEtat === 'option' ? "OSV.dev n'a pas été interrogé : audit lancé avec --sans-reseau."
-    : osvEtat === 'interroge' ? `OSV.dev interrogé sur ${nombre(osvDistantes.length, 'bibliothèque chargée de loin', 'bibliothèques chargées de loin')} et ${nombre(nbVerrou, 'paquet verrouillé', 'paquets verrouillés')} : ${nombre(constatsDeOsv.filter((c) => c.regle === 'E-VULN-03').length, 'avis', 'avis')}, ${nombre(constatsDeOsv.filter((c) => c.regle === 'E-VULN-04').length, 'paquet malveillant', 'paquets malveillants')} (E-VULN-03, E-VULN-04).`
+    : osvEtat === 'interroge' ? `OSV.dev interrogé sur ${nombre(osvDistantes.length, 'bibliothèque chargée de loin', 'bibliothèques chargées de loin')}${osvEmbarquees.length ? `, ${nombre(osvEmbarquees.length, 'bibliothèque embarquée reconnue identique au paquet publié', 'bibliothèques embarquées reconnues identiques au paquet publié')} (E-DEP-12)` : ''} et ${nombre(nbVerrou, 'paquet verrouillé', 'paquets verrouillés')} : ${nombre(constatsDeOsv.filter((c) => c.regle === 'E-VULN-03').length, 'avis', 'avis')}, ${nombre(constatsDeOsv.filter((c) => c.regle === 'E-VULN-04').length, 'paquet malveillant', 'paquets malveillants')} (E-VULN-03, E-VULN-04).`
     : `OSV.dev n'a pas répondu (${osvEtat}) : sûreté non mesurée pour les bibliothèques chargées de loin et pour les paquets malveillants.`;
 
   return [constat({
@@ -221,9 +233,9 @@ export async function bilanDependances(ctx, constatsE, options = {}, lire = inte
     remediation: "Pour la maintenance et la sûreté mesurées, relancer sans --sans-reseau depuis un poste qui atteint registry.npmjs.org. Pour une dépendance non interrogée (développement, transitive, embarquée, distante), relever à la main la date de sa dernière version (`npm view <paquet> time`) et tenir une liste de version et d'origine pour les bibliothèques embarquées.",
     referentiels: ['OWASP Top 10 A06:2021 — Composants vulnérables et obsolètes', 'ANSSI — Maîtrise du code tiers'],
     preuve: {
-      verrou: verrou.etat, audit, registre, osv: { etat: osvEtat, interroges: pourOsv.size }, regulariteMesuree: mesurees.length, seuilAncienneteMois: SEUIL_ANCIENNETE_MOIS,
+      verrou: verrou.etat, audit, registre, osv: { etat: osvEtat, interroges: paires.length }, regulariteMesuree: mesurees.length, seuilAncienneteMois: SEUIL_ANCIENNETE_MOIS,
       depreciees: depreciees?.slice(0, MAX_DEPRECIEES) ?? null, deprecieesTotal: depreciees?.length ?? null,
       dependances: dependances.slice(0, MAX_DEPENDANCES), dependancesTotal: dependances.length,
     },
-  }), ...suspects, ...voisins, ...constatsDeOsv];
+  }), ...suspects, ...voisins, ...identiques, ...constatsDeOsv];
 }
