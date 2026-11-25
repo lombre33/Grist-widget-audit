@@ -72,7 +72,7 @@ test('bout en bout : sans politique de sécurité les 11 voies sont ouvertes ; a
   assert.equal(ouvert.resultat, 'reussi', ouvert.detail);
   assert.equal(ouvert.ouverts, 11, ouvert.detail);
   assert.equal(sans.resume.essais.find((e) => e.id === 13).resultat, 'rien_observe', 'les voies essayées ne sont pas prises pour des fuites du widget');
-  assert.deepEqual(sans.constats.map((c) => c.regle).sort(), ['D-REEL-17', 'D-REEL-22']);
+  assert.deepEqual(sans.constats.map((c) => c.regle).sort(), ['D-REEL-17', 'D-REEL-19', 'D-REEL-22']);
 
   const csp = await auditGristReel(construireContexte(path.join(RACINE, 'tests/fixtures/widget-grist-reel-csp')), {});
   assert.equal(csp.nonExecute, undefined, csp.resume.cause);

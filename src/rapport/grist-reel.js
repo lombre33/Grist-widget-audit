@@ -31,6 +31,7 @@ const QUOI = {
   18: "On lit, dans le cadre du widget, la politique d'autorisations que le navigateur lui applique : caméra, micro, position, partage d'écran, USB, paiement, lecture du presse-papier… lesquels Grist lui délègue-t-il ?",
   23: "Une fois le widget chargé avec ses données, on regarde ce qu'il a gardé dans le navigateur (localStorage, sessionStorage, IndexedDB, cookies) et si des valeurs du document s'y trouvent : elles y survivraient à la fermeture du document.",
   24: "On charge le widget et on lit le journal de ses appels à Grist, sans cliquer ni saisir : écrit-il dans le document de lui-même ?",
+  19: "On lit les en-têtes de sécurité de la page Grist qui héberge le widget, tels que le navigateur les reçoit : politique de sécurité (CSP), protection contre l'inclusion en cadre, Referrer-Policy, nosniff.",
   20: "Depuis le cadre du widget, on appelle l'API de l'instance Grist avec la session de la personne et on regarde si le document se lit, quel que soit le niveau d'accès accordé au widget (un appel témoin est fait depuis la page Grist).",
   21: "On sert à la même adresse chacune des bibliothèques du widget avec une ligne de plus, qui ne fait rien d'autre que se signaler, et on regarde si le navigateur l'exécute ou la refuse.",
   22: "On joue ce que ferait du code étranger dans le widget pour envoyer ce qu'il a lu vers l'extérieur : fetch, image, sendBeacon, WebSocket, balises, formulaire. Chaque tentative est interceptée ; on regarde lesquelles la politique de sécurité du widget laisse passer.",
@@ -106,6 +107,10 @@ function enClair(e) {
       return t === 'reussi'
         ? `Le widget a modifié le document dès son chargement, sans qu'on lui demande rien${(e.actions ?? []).length ? ` (${e.actions.join(', ')})` : ''}. Parfois voulu (initialiser une colonne), parfois une erreur ou une boucle : à vérifier. Information sans effet sur la note.`
         : "Le widget n'a rien écrit dans le document pendant son chargement : il ne modifie les données que sur une action de la personne.";
+    case 19:
+      return t === 'reussi'
+        ? `La page Grist qui héberge le widget n'envoie pas tous ses en-têtes de sécurité : il manque ${(e.absents ?? []).length} sur ${e.total}. C'est une mesure de Grist et de son déploiement, pas du widget ; une instance derrière un proxy peut les poser. Information sans effet sur la note.`
+        : "La page Grist qui héberge le widget envoie les en-têtes de sécurité mesurés (CSP, protection contre l'inclusion en cadre, Referrer-Policy, nosniff). Leur contenu n'est pas jugé.";
     case 20:
       return t === 'reussi'
         ? "Le widget a pu lire le document avec la session de la personne par l'API de l'instance : le niveau d'accès ne le borne plus. Défaut de Grist ou de son déploiement, pas du widget : sans effet sur la note ; à signaler."
