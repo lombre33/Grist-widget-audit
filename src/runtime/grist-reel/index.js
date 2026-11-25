@@ -19,7 +19,7 @@ import { assurerGristDesktop, EPINGLE, InstallationImpossible } from './installa
 import { lancerInstance, InstanceImpossible } from './instance.js';
 import { creerClient } from './client.js';
 import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, verifierEcritures, ajouterDonneesHostiles, HOTE_PUITS, HOTE_CANAUX, HOTE_MESSAGES, CLES_POLLUTION, TABLES_SACRIFIEES } from './donnees.js';
-import { lancerChromium, jouerPhase } from './navigateur.js';
+import { lancerChromium, jouerPhase, jouerPieceJointe, PAGE_PIEGE_PIECE_JOINTE } from './navigateur.js';
 import { evaluerEssais, constatIndisponible, ESSAIS_JOUES, ESSAIS_PAS_ENCORE } from './essais.js';
 import { bacASableChromium, resumerCauseErreur } from '../dynamique.js';
 
@@ -121,6 +121,15 @@ export async function auditGristReel(ctx, options = {}) {
         } catch (e) { journal(`  Adresse forgée non jouée (${resumerCauseErreur(e)}) : l'essai 5 ne sera pas joué.`); }
         await reglerSection(client, doc, section, { url: urlWidget, access: niveau, columnsMapping: mapping });
       }
+    }
+
+    // Essai 14 : une pièce jointe HTML du document de test, servie par l'instance, s'exécute-t-elle sur l'origine de Grist ? (Indépendant du widget : c'est une mesure de Grist.)
+    if (obsNone.charge) {
+      journal(`  Phase ${++numero} : une pièce jointe HTML déposée dans le document de test…`);
+      try {
+        const pieceId = await client.televerser(doc.docId, 'gwaudit-piege.html', 'text/html', PAGE_PIEGE_PIECE_JOINTE);
+        phases.pieceJointe = await jouerPieceJointe({ navigateur, base: instance.base, cookies: client.cookiesNavigateur(), docId: doc.docId, pieceId });
+      } catch (e) { phases.pieceJointe = { depotImpossible: resumerCauseErreur(e) }; }
     }
 
     // Dernière passe, au niveau que le widget demande : essai 3 (des données hostiles font-elles ajouter une clé aux prototypes du widget ?), essai 4 (des messages forgés par un cadre voisin), essai 20 (l'API de l'instance appelée avec la session), essais 17 et 18 (quels droits du navigateur Grist donne au cadre), essai 22 (par quelles voies du
