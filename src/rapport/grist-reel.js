@@ -36,6 +36,7 @@ const QUOI = {
   21: "On sert à la même adresse chacune des bibliothèques du widget avec une ligne de plus, qui ne fait rien d'autre que se signaler, et on regarde si le navigateur l'exécute ou la refuse.",
   22: "On joue ce que ferait du code étranger dans le widget pour envoyer ce qu'il a lu vers l'extérieur : fetch, image, sendBeacon, WebSocket, balises, formulaire. Chaque tentative est interceptée ; on regarde lesquelles la politique de sécurité du widget laisse passer.",
   13: "On remplit le document de valeurs repérables (des « canaris ») et on regarde si l'une d'elles sort du widget vers un site extérieur.",
+  14: "On dépose dans le document de test une pièce jointe HTML qui ne fait que noter l'origine où elle s'exécute, et on ouvre son adresse avec la session : Grist la sert-il comme une page de sa propre origine ? (Un widget logé là lirait la page Grist qui l'encadre.)",
   15: "On regarde si le widget peut rediriger la page Grist qui l'héberge (de quoi afficher une fausse page de connexion).",
   16: "On regarde si le widget ouvre des fenêtres, des boîtes de dialogue ou des téléchargements sans qu'on le lui demande.",
 };
@@ -128,6 +129,10 @@ function enClair(e) {
       return e.sorties > 0
         ? `Le widget a tenté ${e.sorties} appel(s) vers l'extérieur (bloqués par l'audit), mais aucune valeur du document n'y figurait en clair. Ces appels restent à examiner comme dépendances (voir la synthèse en bas de rapport).`
         : "Le widget n'a contacté aucun site extérieur pendant l'essai.";
+    case 14:
+      return t === 'reussi'
+        ? "Une pièce jointe HTML déposée dans le document s'est exécutée sur l'origine de Grist : quiconque peut déposer un fichier dans un document peut y faire agir du code avec les droits de la personne qui l'ouvre. Défaut de Grist ou de son déploiement, pas du widget : sans effet sur la note, mais à signaler."
+        : "Grist ne sert pas une pièce jointe HTML comme une page de sa propre origine (téléchargement forcé et politique « sandbox ») : un widget ne peut pas être logé là pour lire la page Grist ni contourner les niveaux d'accès. Mesure de Grist, pas du widget.";
     case 15:
       if (t === 'bloque') return "Le navigateur a refusé que le widget redirige la page Grist : le garde-fou a fonctionné.";
       if (t === 'reussi') return "Le widget a redirigé la page Grist : il pourrait la remplacer par une fausse page de connexion.";

@@ -54,6 +54,17 @@ export function creerClient(base) {
     },
     async sql(docId, requete, args = []) { return appeler('POST', `/o/docs/api/docs/${docId}/sql`, { sql: requete, args }); },
     async actions(docId, listeActions) { return appeler('POST', `/o/docs/api/docs/${docId}/apply`, listeActions); },
+    /** Dépose une pièce jointe dans le document (Grist exige l'en-tête `X-Requested-With` pour ce dépôt) ; rend son identifiant. */
+    async televerser(docId, nom, type, contenu) {
+      const formulaire = new FormData();
+      formulaire.append('upload', new Blob([contenu], { type }), nom);
+      const r = await fetch(`${base}/o/docs/api/docs/${docId}/attachments`, { method: 'POST', headers: { cookie: cookies, 'x-requested-with': 'XMLHttpRequest' }, body: formulaire, signal: AbortSignal.timeout(20_000) });
+      const texte = await r.text();
+      if (!r.ok) throw new ErreurGrist(`dépôt de pièce jointe → ${r.status} ${texte.slice(0, 200)}`, r.status);
+      const id = JSON.parse(texte)?.[0];
+      if (!Number.isInteger(id)) throw new ErreurGrist(`dépôt de pièce jointe : réponse inattendue ${texte.slice(0, 100)}`, 0);
+      return id;
+    },
     /** Les documents que l'instance connaît (verrou : doit être vide au départ). */
     async documentsConnus() {
       const espaces = await api.espaces();

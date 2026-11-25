@@ -22,6 +22,10 @@
  * L'essai 22 (hors du catalogue de l'étude) mesure les voies de sortie du navigateur que la politique de sécurité (CSP) du widget laisse ouvertes
  * à du code étranger : fetch, image, sendBeacon, WebSocket, balises, formulaire… Passe à part, vers un hôte factice distinct du puits.
  *
+ * L'essai 14 dépose dans le document de test une pièce jointe HTML (qui ne fait que noter l'origine où elle s'exécute) et la charge dans le navigateur, avec la
+ * session : si Grist la servait en page, sur son origine, un widget logé là lirait la page Grist qui l'encadre et contournerait les niveaux d'accès. Mesure de
+ * Grist, pas du widget (l'audit sert toujours le widget sur une autre origine) : jamais de pénalité.
+ *
  * L'essai 19 lit les en-têtes de sécurité de la page Grist qui héberge le widget, tels que le navigateur les a reçus (CSP, protection contre
  * l'inclusion en cadre, Referrer-Policy, nosniff). Il mesure Grist Desktop et son déploiement, pas le widget : jamais de pénalité. Les en-têtes de la page
  * du widget ne sont pas mesurés : c'est l'audit qui la sert, ils ne diraient rien de son hébergement réel (l'effet de sa CSP est l'objet de l'essai 22).
@@ -37,8 +41,8 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 3, 4, 5, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
-export const ESSAIS_PAS_ENCORE = '2, 6, 11, 14';
+export const ESSAIS_JOUES = [1, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
+export const ESSAIS_PAS_ENCORE = '2, 6, 11';
 
 /** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
 const CANAUX = [['fetch', 'fetch'], ['xhr', 'XMLHttpRequest'], ['image', 'image (balise img)'], ['beacon', 'sendBeacon'], ['websocket', 'WebSocket'], ['script', 'balise script'], ['iframe', 'cadre iframe'], ['feuille', 'feuille de style'], ['cssurl', 'image de fond CSS'], ['prefetch', 'préchargement (link prefetch)'], ['formulaire', 'formulaire envoyé']];
@@ -694,6 +698,36 @@ export function evaluerEssais(phases, jeu) {
     }
   }
 
+  // --- 14. Pièce jointe HTML du document, servie par l'instance : s'exécute-t-elle sur l'origine de Grist ? (une mesure de Grist, pas du widget) ---
+  {
+    const p = phases.pieceJointe;
+    const titre = "Une pièce jointe HTML du document peut-elle s'exécuter sur l'origine de Grist ?";
+    if (p) {
+      const e = p.entetes ?? {};
+      const csp = e['content-security-policy'] ?? '';
+      const disposition = /^attachment/i.test(e['content-disposition'] ?? '');
+      if (p.depotImpossible) essais.push(essai(14, titre, 'non_teste', `la pièce jointe n'a pas pu être déposée dans le document de test (${resume(p.depotImpossible, 150)})`));
+      else if (p.erreur && !p.telechargement && !p.affichee && p.statut == null) essais.push(essai(14, titre, 'non_teste', `la pièce jointe n'a pas pu être demandée à Grist (${resume(p.erreur, 150)})`));
+      else if (p.statut !== 200) essais.push(essai(14, titre, 'non_teste', `Grist a répondu ${p.statut} à la demande de la pièce jointe`));
+      else if (p.executeDans && p.origineGrist && p.executeDans === p.origineGrist) {
+        essais.push(essai(14, titre, 'reussi', `la pièce jointe HTML s'est exécutée sur l'origine de Grist (${p.origineGrist}) quand on a ouvert son adresse`, { regle: 'D-REEL-14', severite: 'info', entetes: e }));
+        constats.push(constat({
+          regle: 'D-REEL-14', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+          titre: "Une pièce jointe HTML du document s'exécute sur l'origine de Grist",
+          constat: `Dans un vrai Grist (Grist Desktop, instance jetable), une pièce jointe HTML déposée dans le document de test, ouverte par son adresse avec la session de la personne, a exécuté son script sur l'origine de Grist (${p.origineGrist}). En-têtes reçus : ${Object.entries(e).map(([k, v]) => `${k} : ${resume(v, 80)}`).join(' ; ') || 'aucun des en-têtes suivis'}.`,
+          impact: "Quiconque peut déposer une pièce jointe dans un document peut y faire exécuter du code avec les droits de la personne qui l'ouvre, et un widget hébergé à cette adresse lirait la page Grist qui l'encadre (`window.parent.document`) et contournerait les niveaux d'accès. Défaut de Grist ou de son déploiement, pas du widget : sans effet sur la note, mais grave pour l'instance.",
+          remediation: "À signaler à l'éditeur de Grist ; sur l'instance où le widget sera installé, servir les pièces jointes en téléchargement (`Content-Disposition: attachment`) ou depuis une autre origine, avec `Content-Security-Policy: sandbox`.",
+          referentiels: ['OWASP Top 10 A03:2021 — Injection (XSS stocké)', 'CWE-79'],
+          preuve: { executeDans: p.executeDans, entetes: e },
+        }));
+      } else if (p.telechargement) essais.push(essai(14, titre, 'bloque', `Grist sert la pièce jointe HTML en téléchargement${disposition ? ' (Content-Disposition: attachment)' : ''}${/sandbox/i.test(csp) ? ' avec une politique « sandbox »' : ''} : le navigateur ne l'exécute pas`, { barriere: 'Grist (pièce jointe servie en téléchargement)', entetes: e }));
+      else if (p.executeDans) essais.push(essai(14, titre, 'bloque', `la pièce jointe s'est exécutée dans une origine isolée (« ${resume(p.executeDans, 40)} »), pas sur celle de Grist${/sandbox/i.test(csp) ? ' (politique « sandbox »)' : ''}`, { barriere: 'Grist (origine isolée)', entetes: e }));
+      else if (p.affichee && /sandbox/i.test(csp)) essais.push(essai(14, titre, 'bloque', "la pièce jointe a été affichée mais son script ne s'est pas exécuté : la politique « sandbox » de Grist l'arrête", { barriere: 'Grist (politique « sandbox »)', entetes: e }));
+      else if (p.affichee) essais.push(essai(14, titre, 'rien_observe', "la pièce jointe a été affichée sans que son script ne s'exécute, sans politique « sandbox » dans les en-têtes : l'essai n'a rien produit", { entetes: e }));
+      else essais.push(essai(14, titre, 'non_teste', `la pièce jointe n'a été ni téléchargée ni affichée${p.erreur ? ` (${resume(p.erreur, 150)})` : ''}`));
+    }
+  }
+
   // --- 19. En-têtes de sécurité de la page Grist qui héberge le widget (lus sur la vraie réponse ; une mesure de Grist, pas du widget) ---
   {
     const titre = 'La page Grist qui héberge le widget pose-t-elle ses en-têtes de sécurité ?';
@@ -765,7 +799,7 @@ export function evaluerEssais(phases, jeu) {
   if (manquantes.length) {
     const hotes = [...new Set(manquantes.map((d) => d.hote).filter(Boolean))].slice(0, 3).join(', ');
     essais.forEach((e, i) => {
-      if (e.resultat !== 'rien_observe' || e.id === 19) return; // l'essai 19 lit la réponse de la page Grist : aucun code du widget n'y entre
+      if (e.resultat !== 'rien_observe' || e.id === 19 || e.id === 14) return; // les essais 14 et 19 mesurent Grist : aucun code du widget n'y entre
       essais[i] = essai(e.id, e.titre, 'non_teste', `${manquantes.length} bibliothèque(s) du widget n'ont pas pu être chargées pendant l'essai (${hotes}) : leur code n'a pas été joué, « rien observé » ne prouverait rien`, { ...(e.niveau ? { niveau: e.niveau } : {}), bibliothequesManquantes: manquantes.length });
     });
   }
