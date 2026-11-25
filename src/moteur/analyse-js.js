@@ -595,8 +595,8 @@ function correspondance(table, normalise, special) {
  * table, la clé exacte, sinon le plus long préfixe (`"lib/": "./libs/"` : `import 'lib/x.js'` charge `libs/x.js`). Un nom nu qu'aucune
  * clé ne nomme est une erreur du navigateur, une adresse qu'aucune clé ne remappe est elle-même. Quand plusieurs portées correspondent au
  * référent (`./sub/` et `./sub/deep/`), la norme veut la plus longue ; Chromium 141 en retient une dans un ordre qui n'est pas celui-là
- * (mesuré sur des paires de portées imbriquées : pour certaines c'est la plus courte, et d'un lancement à l'autre la même) : l'outil rend alors les adresses de toutes
- * celles qui nomment le spécificateur, le doute inclut. L'ordre des cartes et des chargements (une carte lue après le premier module est
+ * (mesuré sur des paires de portées imbriquées : pour certaines c'est la plus courte, et d'un lancement à l'autre la même ; Chromium 153 applique la norme) : l'outil rend alors
+ * les adresses de toutes celles qui nomment le spécificateur, le doute inclut — vrai pour l'un comme pour l'autre. L'ordre des cartes et des chargements (une carte lue après le premier module est
  * ignorée) n'est pas modélisé : une carte de la page compte toujours.
  * @param {string} contenu la page
  * @param {string} cheminPage son chemin dans le widget

@@ -6,11 +6,14 @@ vrai produit, tel qu'un agent le verrait.
 
 ## Démarrage
 
-```bash
-export GRIST_WIDGET_DIR=/chemin/vers/le/widget/a-tester
+```powershell
+$env:GRIST_WIDGET_DIR = "C:\chemin\vers\le\widget\a-tester"
 cd docker
 docker compose up -d
 ```
+
+(Docker Desktop est nécessaire. Pour jouer le widget dans un vrai Grist sans rien
+installer ni lancer à la main, voir `gwaudit --grist-reel` dans le README.)
 
 Puis :
 1. Ouvrir http://localhost:8484, créer un compte de test et un document.
@@ -38,14 +41,9 @@ un hébergement officiel — c'est ce que demande le guide de contribution
 pour la voie B (« une vérification de sécurité supplémentaire sera menée
 par l'équipe technique avant tout déploiement en production »).
 
-## Remarque sur cet environnement cloud
+## Statut
 
-Cette pile n'a pas pu être validée de bout en bout dans la session qui l'a
-écrite : la politique réseau de cet environnement de développement cloud
-bloque le téléchargement de l'image `gristlabs/grist` depuis Docker Hub
-(`production.cloudfront.docker.com`, HTTP 403) ainsi que l'accès à
-`grist.numerique.gouv.fr`. Le fichier ci-dessus suit néanmoins la structure
-officielle du dépôt `gristlabs/grist-core`
-(`docker-compose-examples/grist-local-testing/docker-compose.yml`) et
-devrait fonctionner tel quel sur un poste dont la politique réseau autorise
-Docker Hub — ce qui est le cas la plupart du temps en local.
+Cette pile suit la structure officielle du dépôt `gristlabs/grist-core`
+(`docker-compose-examples/grist-local-testing/docker-compose.yml`) mais n'a pas
+été éprouvée de bout en bout par l'outil : le réseau de l'environnement où elle a
+été écrite bloquait Docker Hub. À confirmer au premier lancement réel.

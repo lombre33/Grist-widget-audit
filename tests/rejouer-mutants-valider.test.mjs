@@ -4,7 +4,7 @@
  * chargement, sans rien dire des autres : le moteur le refuse en le nommant (avec le fichier), tous d'un
  * coup, code 2. Chaque comportement a son mutant : `scripts/mutants-rejouer.mjs`.
  */
-import test from 'node:test';
+import test from './aide-linux.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';

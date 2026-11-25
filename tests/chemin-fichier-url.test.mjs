@@ -37,7 +37,7 @@ test("l'ancien motif (new URL(...).pathname) est bien celui qui cassait — non-
 
 /** Retire les commentaires `//` (ligne par ligne) pour ne pas confondre une mention en prose du motif interdit — utile pour l'expliquer, comme ci-dessus — avec un vrai usage en code. Grossier (ignore un `//` à l'intérieur d'une chaîne) mais suffisant pour ce garde-fou ciblé. */
 function sansCommentairesDeLigne(code) {
-  return code.split('\n').map((ligne) => ligne.replace(/\/\/.*$/, '')).join('\n');
+  return code.split(/\r?\n/).map((ligne) => ligne.replace(/\/\/.*$/, '')).join('\n'); // `\r?` : un dépôt cloné sous Windows a des fins de ligne CRLF, que `.` ne traverse pas
 }
 
 test('aucun fichier de code du dépôt ne dérive un chemin depuis import.meta.url autrement que via fileURLToPath', () => {

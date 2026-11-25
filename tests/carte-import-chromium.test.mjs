@@ -30,7 +30,8 @@ const ERREUR = 'ERREUR';
  * options.base : le `href` de la `<base>` qui précède les cartes
  * options.libre : plusieurs portées correspondent au module et nomment le nom : la norme veut la plus longue, Chromium 141 n'en retient pas toujours
  *   la plus longue (voir `resolveurDeCartes`) ; l'outil rend les adresses de toutes, et la réponse de Chromium est l'une d'elles
- * options.retenue : ce que Chromium 141 retient dans ce cas libre (la mention de `resolveurDeCartes` tombe le jour où cet essai échoue)
+ * options.retenue : ce que Chromium 141 retient dans ce cas libre ; options.norme : ce que retient Chromium 153 et plus, la plus longue (par défaut `retenue`).
+ *   Une autre version n'est jugée que sur les deux contrôles du cas libre : l'outil garde toutes les adresses, et Chromium en retient une.
  */
 const CAS = [
   ['un nom que la carte nomme', [{ imports: { lib: './vendor/lib.js' } }], 'app.js', 'lib'],
@@ -50,7 +51,7 @@ const CAS = [
   ['une portée : le module de ce dossier voit sa table', [{ imports: { x: './haut.js' }, scopes: { './sub/': { x: './portee.js' } } }], 'sub/m.js', 'x'],
   ['une portée : un module d\'ailleurs voit la table du dessus', [{ imports: { x: './haut.js' }, scopes: { './sub/': { x: './portee.js' } } }], 'm.js', 'x'],
   ['une portée dont la table ne nomme pas le nom : celle du dessus', [{ imports: { x: './haut.js' }, scopes: { './sub/': { y: './y.js' } } }], 'sub/m.js', 'x'],
-  ['deux portées imbriquées qui nomment le nom : Chromium en retient une, l\'outil les garde toutes', [{ scopes: { './sub/': { x: './court.js' }, './sub/deep/': { x: './long.js' } } }], 'sub/deep/m.js', 'x', { libre: true, retenue: 'court.js' }],
+  ['deux portées imbriquées qui nomment le nom : Chromium en retient une, l\'outil les garde toutes', [{ scopes: { './sub/': { x: './court.js' }, './sub/deep/': { x: './long.js' } } }], 'sub/deep/m.js', 'x', { libre: true, retenue: 'court.js', norme: 'long.js' }],
   ['deux portées imbriquées, l\'autre paire : la plus longue', [{ scopes: { './sub/': { x: './court.js' }, './sub/d/': { x: './long.js' } } }], 'sub/d/m.js', 'x', { libre: true, retenue: 'long.js' }],
   ['deux portées imbriquées dont la longue ne nomme pas le nom : la courte', [{ scopes: { './sub/': { x: './court.js' }, './sub/deep/': { y: './y.js' } } }], 'sub/deep/m.js', 'x'],
   ['une portée sans barre finale ne vaut que pour l\'adresse exacte', [{ scopes: { './sub/m.js': { x: './exacte.js' } } }], 'sub/m.js', 'x'],
@@ -90,7 +91,8 @@ test('le résolveur de cartes d\'import rend ce que Chromium rend pour le même 
   if (!executable) { chromiumIndisponible(t, 'aucun Chromium lançable (voir GWAUDIT_CHROMIUM_PATH)'); return; }
   const navigateur = await chromium.launch({ executablePath: executable, args: process.env.GWAUDIT_CHROMIUM_SANS_SANDBOX === '1' ? ['--no-sandbox'] : [] });
   try {
-    for (const [nom, cartes, referent, specificateur, { base, libre = false, retenue } = {}] of CAS) {
+    const majeure = Number(navigateur.version().split('.')[0]);
+    for (const [nom, cartes, referent, specificateur, { base, libre = false, retenue, norme = retenue } = {}] of CAS) {
       const sonde = `window.__resolu = (() => { try { return import.meta.resolve(${JSON.stringify(specificateur)}); } catch { return '${ERREUR}'; } })();`;
       const accueil = `<!doctype html><meta charset=utf-8>${base ? `<base href="${base}">` : ''}${cartes.map((c) => `<script type="importmap">${JSON.stringify(c)}</script>`).join('')}${referent === null ? `<script type="module">${sonde}</script>` : `<script type="module" src="/${referent}"></script>`}`;
       const contexte = await navigateur.newContext();
@@ -110,7 +112,8 @@ test('le résolveur de cartes d\'import rend ce que Chromium rend pour le même 
         if (libre) {
           assert.ok(possibles.length > 1, `${nom} : l'outil garde les adresses de toutes les portées qui nomment le nom (${possibles.join(' ')})`);
           assert.ok(possibles.includes(chromiumDit), `${nom} : Chromium retient l'une d'elles (${chromiumDit} parmi ${possibles.join(' ')})`);
-          if (retenue) assert.equal(chromiumDit, `${ORIGINE_LOCALE}/${retenue}`, `${nom} : ce que Chromium 141 retient ; s'il change, la mention de \`resolveurDeCartes\` sur l'ordre des portées est à revoir`);
+          const attendue = majeure === 141 ? retenue : majeure >= 153 ? norme : undefined;
+          if (attendue) assert.equal(chromiumDit, `${ORIGINE_LOCALE}/${attendue}`, `${nom} : ce que Chromium ${majeure} retient ; s'il change, la mention de \`resolveurDeCartes\` sur l'ordre des portées est à revoir`);
         } else {
           assert.deepEqual(possibles, chromiumDit === ERREUR ? [] : [chromiumDit], `${nom} : l'outil résout « ${specificateur} » comme Chromium`);
         }

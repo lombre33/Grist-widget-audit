@@ -11,7 +11,7 @@
  * Chromium n'est nécessaire (la vérification ne lance aucune suite) : la variable qui le désigne est retirée
  * de l'environnement des lots, ce qui éprouve aussi qu'un lot qui l'exige la vérifie sans lui.
  */
-import test from 'node:test';
+import test from './aide-linux.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import os from 'node:os';

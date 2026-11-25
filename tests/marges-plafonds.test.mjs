@@ -206,7 +206,7 @@ test('la ligne de commande : code 0 et JSON complet sur un dépôt, code 2 sans 
     assert.equal(unFichier.status, 2, 'un fichier n\'est pas un dépôt');
     const deux = spawnSync(process.execPath, [CLI, racine, '/introuvable/depot'], { encoding: 'utf8' });
     assert.equal(deux.status, 2);
-    assert.match(deux.stderr, /Dépôt introuvable : \/introuvable\/depot/);
+    assert.match(deux.stderr, /Dépôt introuvable : (?:[A-Za-z]:)?[\\/]introuvable[\\/]depot/); // sous Windows le chemin reçoit une lettre de lecteur et des « \ »
     assert.equal(deux.stdout, '', 'rien n\'est mesuré à moitié');
   });
   const sans = spawnSync(process.execPath, [CLI], { encoding: 'utf8' });

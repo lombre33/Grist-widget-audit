@@ -6,7 +6,7 @@
  * `rejouer-mutants-classement.test.mjs` ; chaque comportement a son mutant :
  * `scripts/mutants-rejouer.mjs`.
  */
-import test from 'node:test';
+import test from './aide-linux.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
