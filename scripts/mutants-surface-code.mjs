@@ -106,7 +106,6 @@ MUTANTS.push(
 );
 
 // --- les workers, lus dans l'AST puis, si le code ne se parse pas, par expressions régulières -------------------------
-const ALIAS = String.raw`'(?:(?:window|self|globalThis)\\.)?'`;
 for (const [nom, de, par] of [['window', 'window|', ''], ['self', 'self|', ''], ['globalThis', '|globalThis', '']]) {
   MUTANTS.push(dansLigne(I, 'const ALIAS_GLOBAL = ', de, par, `worker : l'alias ${nom}. n'est plus reconnu`));
 }

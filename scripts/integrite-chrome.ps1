@@ -4,7 +4,7 @@
 # Le bac à sable de Chromium sous Windows abaisse le jeton des processus de rendu
 # (non fiable ou faible) ; sous --no-sandbox ils gardent le niveau moyen du
 # navigateur : c'est la preuve directe, indépendante de tout argument de ligne de
-# commande, utilisée par docker/ci/verifier-windows.mjs.
+# commande, utilisée par scripts/verifier-windows.mjs.
 Add-Type -TypeDefinition @"
 using System;
 using System.Runtime.InteropServices;

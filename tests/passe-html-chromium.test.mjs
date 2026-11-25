@@ -17,7 +17,6 @@ import { lirePage, urlDe } from '../src/moteur/page-html.js';
  */
 
 const exec = (id) => `(window.vus=window.vus||[]).push("${id}")`;
-const G = 'x'; // clé de la page courante, jamais dans un chemin
 
 // [nom, corps, options] ; options : nue (rien après le corps), carte (id du module qui ne tourne que si l'import map s'applique)
 const CAS = [

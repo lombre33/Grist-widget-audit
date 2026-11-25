@@ -526,8 +526,6 @@ export function usageLien(attributs) {
   return usages.filter((u) => u.urls.length);
 }
 
-const ELEMENTS_LUS = new Set(['script', 'base', 'link', 'iframe', 'img', 'object', 'embed']);
-
 const DEBUT_VALEUR_STYLE = /^style[\t\n\f\r ]*=[\t\n\f\r ]*(["']?)/i;
 const sansRetourChariot = (texte) => texte.replace(/\r\n?/g, '\n');
 

@@ -14,8 +14,8 @@
  *
  * Ce que ce script ne peut PAS rejouer : le lancement Windows
  * (`launchServer({ chromiumSandbox: bacASableChromium() })`) ne s'exécute que
- * sous Windows. Un mutant qui l'affaiblirait survivrait ici ; c'est le job
- * « windows » de .github/workflows/image-v2.yml qui le voit (niveau d'intégrité
+ * sous Windows. Un mutant qui l'affaiblirait survivrait ici ; c'est la CI
+ * Windows (`scripts/verifier-windows.mjs`, workflow « Windows ») qui le voit (niveau d'intégrité
  * des rendus, `--no-sandbox` dans la ligne de commande — la même sonde voit
  * l'un et l'autre sous la dérogation, c'est son témoin).
  *

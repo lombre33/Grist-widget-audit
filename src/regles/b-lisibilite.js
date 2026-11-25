@@ -11,7 +11,6 @@
  * commentaires cohérente avec la complexité, et l'absence des marqueurs qui
  * signalent une production non relue.
  */
-import path from 'node:path';
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs } from '../moteur/analyse-js.js';
 import { numeroLigne } from '../moteur/lignes.js';

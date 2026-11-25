@@ -13,7 +13,7 @@
  *    lecture d'acorn y tombait (`catchStackOverflow` compile une expression régulière au bord de la pile) : `LecteurAcorn`
  *    (src/moteur/analyse-js.js) le corrige à la source, et `--sans-abandon` fait de l'abandon une fin interdite pour le rejouer
  *    sur un arbre qui porte ce correctif. Sans l'option, l'abandon reste une fin permise, parce qu'un arbre d'avant le correctif
- *    (comparé par `--arbre`) s'abandonne encore, et que l'enfant qui isole l'analyse (V2) contient ce qui pourrait venir d'ailleurs.
+ *    (comparé par `--arbre`) s'abandonne encore, et que l'enfant qui isole l'analyse contient ce qui pourrait venir d'ailleurs.
  *    Le tableau dit la cause de chaque abandon, la ligne « FATAL ERROR: … » que V8 écrit en s'arrêtant : un compte d'abandons ne dit pas
  *    à lui seul si c'est la compilation d'une expression régulière au bord de la pile (ce que ferme le correctif) ou autre chose.
  * Une quatrième fin ne doit pas exister : un rapport complet qui conclut sans avoir lu le fichier (`silence`, une lecture qui

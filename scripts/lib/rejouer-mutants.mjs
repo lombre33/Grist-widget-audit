@@ -48,7 +48,7 @@ import { fileURLToPath } from 'node:url';
 
 export const RACINE = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 export const DELAI_MS = 10 * 60 * 1000;                           // par défaut : la suite d'un lot de tests entiers ; un mutant qui boucle sans fin y est tué par ce délai (dit comme tel)
-/** Ce que la copie contient par défaut ; un script dont les tests lancent `bin/gwaudit.js` ou lisent `docker/` ajoute ce qu'il lui faut via `dossiers`. */
+/** Ce que la copie contient par défaut ; un script dont les tests lancent `bin/gwaudit.js` ajoute ce qu'il lui faut via `dossiers`. */
 export const DOSSIERS_COPIES = ['src', 'tests', 'fixtures', 'scripts'];
 
 /** Un nombre du résumé que `node --test` imprime (`# tests 12`, `# fail 1`…) ; NaN s'il ne l'a pas imprimé. */

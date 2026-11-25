@@ -4,4 +4,3 @@ rapport-*/
 rapports/
 *.log
 docker/persist/
-build/

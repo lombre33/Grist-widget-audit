@@ -13,14 +13,14 @@ import { noter } from '../src/moteur/notation.js';
  * Le bac à sable natif de Chromium est actif par défaut ; la seule dérogation
  * est GWAUDIT_CHROMIUM_SANS_SANDBOX=1, et le rapport la dit. Playwright ajoute
  * `--no-sandbox` de lui-même tant qu'on ne lui passe pas chromiumSandbox: true
- * — ce que gwaudit ne faisait pas (constat 3, docs/ARCHITECTURE-V2.md) : ces
+ * — ce que gwaudit ne faisait pas (voir docs/archive-v2-vps.md) : ces
  * tests le prouvent sur les arguments réellement transmis au binaire.
  *
  * Un faux Chromium (script shell) enregistre ses arguments et échoue comme
  * Chromium échoue quand il ne peut pas installer son bac à sable : le test est
  * le même sur toute machine, root ou non, avec ou sans espaces de noms
  * utilisateur. Ce script ne se lance pas sous Windows (explicite ci-dessous) ;
- * la preuve sous Windows est le job « windows » de .github/workflows/image-v2.yml.
+ * la preuve sous Windows est `scripts/verifier-windows.mjs`, lancé par le workflow « Windows ».
  */
 const SOUS_WINDOWS = process.platform === 'win32';
 
@@ -205,7 +205,7 @@ test("sous dérogation, un échec de lancement n'est pas rangé parmi les refus 
  * Un processus enfant sans dérogation. Sous root, Chromium ne démarre pas avec son bac à sable : l'enfant tourne alors
  * sous un utilisateur sans privilège (nobody) — ce que fait un vrai déploiement. Là où le bac à sable ne peut pas
  * démarrer du tout (espaces de noms utilisateur interdits), l'essai ne prouve rien : hors root il ÉCHOUE et le dit (c'est là que le bac à
- * sable doit démarrer, sur le poste d'un contributeur et dans la construction de l'image), sous root (un conteneur, qui interdit ces espaces de
+ * sable doit démarrer, sur le poste d'un contributeur), sous root (un conteneur, qui interdit ces espaces de
  * noms plus souvent qu'il ne les laisse) il SAUTE en nommant la cause, et GWAUDIT_SUITE_SANS_CHROMIUM=1 le saute partout (saut explicite,
  * comme les autres essais qui lancent Chromium).
  */
@@ -225,7 +225,7 @@ function bacASableImpossible(t, detail) {
   assert.fail(`Chromium ne démarre pas avec son bac à sable sur cette machine : ${detail} — ce test ne prouve rien sans lui. GWAUDIT_SUITE_SANS_CHROMIUM=1 le saute explicitement.`);
 }
 
-test("par défaut, avec un vrai Chromium et son bac à sable : l'axe D tourne et aucun marqueur de dérogation n'est posé", { skip: SOUS_WINDOWS && 'le job windows du workflow le vérifie (verifier-windows.mjs)' }, (t) => {
+test("par défaut, avec un vrai Chromium et son bac à sable : l'axe D tourne et aucun marqueur de dérogation n'est posé", { skip: SOUS_WINDOWS && 'le workflow Windows le vérifie (scripts/verifier-windows.mjs)' }, (t) => {
   const cli = path.join(import.meta.dirname, '..', 'bin', 'gwaudit.js');
   const fixture = path.join(import.meta.dirname, '..', 'fixtures', 'widget-exemple');
   const sortie = 'sortie';
@@ -239,7 +239,7 @@ test("par défaut, avec un vrai Chromium et son bac à sable : l'axe D tourne et
   assert.doesNotMatch(html, /sans le bac à sable de Chromium/);
 });
 
-test("par défaut, un échec de l'axe D APRÈS le lancement ne pose aucun marqueur de dérogation", { skip: SOUS_WINDOWS && 'le job windows du workflow le vérifie (verifier-windows.mjs)' }, (t) => {
+test("par défaut, un échec de l'axe D APRÈS le lancement ne pose aucun marqueur de dérogation", { skip: SOUS_WINDOWS && 'le workflow Windows le vérifie (scripts/verifier-windows.mjs)' }, (t) => {
   const { r } = enfantAvecBacASable(t, [path.join(import.meta.dirname, 'aide-audit-sans-derogation.mjs')]);
   assert.equal(r.status, 0, `le processus d'essai a échoué (code ${r.status}) : ${(r.stderr ?? '').slice(-500)}`);
   const { constats, nonExecute } = JSON.parse(r.stdout.trim().split('\n').pop());

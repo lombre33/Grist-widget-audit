@@ -7,7 +7,6 @@
  * ans — taille des unités, complexité, duplication, erreurs silencieuses,
  * couverture de tests.
  */
-import path from 'node:path';
 import { constat } from '../moteur/modele.js';
 import { pourChaqueUniteJs, nomPointe, aCommentaireDansPortee, ligneFinDans, erreurDeParcours } from '../moteur/analyse-js.js';
 import { numeroLigne } from '../moteur/lignes.js';

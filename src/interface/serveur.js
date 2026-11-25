@@ -10,11 +10,10 @@
  * fils, et réutilise sans les dupliquer les protections déjà en place côté
  * CLI (validation SSRF de l'hôte cloné, timeout de clonage…).
  *
- * Pensée pour un usage local mono-utilisateur (le modèle de confiance de la
- * V1) : aucune authentification, aucun compte, liée à 127.0.0.1 par défaut.
- * Le fil V2 est responsable d'envelopper cette même interface d'isolation,
- * d'authentification et de quotas pour un usage exposé publiquement — ne
- * jamais la lier à une interface réseau publique telle quelle.
+ * Pensée pour un usage local mono-utilisateur : aucune authentification,
+ * aucun compte, liée à 127.0.0.1 et à rien d'autre. Un usage exposé
+ * publiquement (isolation, authentification, quotas) n'est pas prévu — voir
+ * docs/archive-v2-vps.md : ne jamais la lier à une interface réseau publique.
  */
 import http from 'node:http';
 import { spawn, execFile } from 'node:child_process';
@@ -487,15 +486,8 @@ ${lignesRepliees}
 </html>`;
 }
 
-/**
- * Démarre l'interface. Liée à 127.0.0.1 par défaut — voir l'en-tête du
- * module. `GWAUDIT_INTERFACE_HOTE` permet de changer cette liaison
- * (nécessaire par exemple derrière l'isolation d'un conteneur V2, qui
- * gère alors elle-même ce qui est réellement exposé) : volontairement une
- * variable d'environnement plutôt qu'un simple drapeau CLI, pour qu'un
- * usage local ordinaire ne l'active jamais par accident.
- */
-export function demarrerInterface({ port = 4317, hote = process.env.GWAUDIT_INTERFACE_HOTE || '127.0.0.1' } = {}) {
+/** Démarre l'interface, liée à 127.0.0.1 — voir l'en-tête du module. */
+export function demarrerInterface({ port = 4317, hote = '127.0.0.1' } = {}) {
   const serveur = http.createServer(async (req, res) => {
     try {
       const url = new URL(req.url, `http://${req.headers.host ?? 'localhost'}`);

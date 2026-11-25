@@ -1,7 +1,7 @@
 /**
  * Lancer `npm` hors du dépôt audité. `npm` lit le `.npmrc` du dossier courant avant toute option de ligne de commande : un dépôt hostile pourrait
  * sinon y déclarer un `registry` arbitraire et faire partir la requête (avec l'environnement du process qui l'exécute, dont d'éventuels secrets)
- * vers un hôte qu'il contrôle plutôt que vers le registre npm réel (docs/ARCHITECTURE-V2.md, constat 2). Chaque appel de l'audit à `npm`
+ * vers un hôte qu'il contrôle plutôt que vers le registre npm réel. Chaque appel de l'audit à `npm`
  * (`npm audit`, `npm view`) passe donc par un dossier neutre, un `HOME` isolé et un environnement réduit, jamais le dépôt.
  */
 import path from 'node:path';

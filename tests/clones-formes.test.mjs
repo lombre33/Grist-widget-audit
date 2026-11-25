@@ -17,7 +17,6 @@ const unite = (chemin, source) => {
 };
 const clonesDe = (a, b, seuils) => detecterClones([unite('a.js', a), unite('b.js', b)], seuils).clones;
 /** Les seuils les plus bas : le moindre bloc compte, si bien que seule la forme décide. */
-const BAS = { masse: 1, logique: 0 };
 /** Le nombre de nœuds du premier bloc d'une source. */
 const masseDe = (source) => {
   const { ast } = lire(source);

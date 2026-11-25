@@ -1,4 +1,4 @@
-/** Export JSON — pour intégration outillée (V2, CI, tableau de bord). */
+/** Export JSON — pour intégration outillée (CI, tableau de bord, comparaison de deux audits). */
 export function genererJson({ ctx, notation, meta }) {
   const axes = {};
   for (const [code, a] of Object.entries(notation.parAxe)) {

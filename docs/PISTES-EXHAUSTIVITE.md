@@ -188,10 +188,10 @@ regard de RSSI qui anticipe activement le vol de données et l'intrusion,
 plutôt que la qualité générale. Deux questions de sécurité ne doivent pas
 se mélanger ici : ce que peut faire un widget malveillant aux données de
 celui qui l'installe (le sujet ci-dessous, axes C et D) ; et l'exposition
-de l'outil d'audit lui-même, qui exécute du code inconnu (déjà traitée à
-part — `docs/ARCHITECTURE-V2.md`, quatorze écarts recensés, neuf corrigés,
-trois atténués, deux ouverts sur la mémoire/la concurrence — pas repris
-ici).
+de l'outil d'audit lui-même, qui exécute du code inconnu (traitée à
+part, dans `docs/archive-v2-vps.md` : quatorze écarts recensés, dix corrigés
+dans le moteur, deux atténués, deux ouverts sur la mémoire/la concurrence —
+pas repris ici).
 
 Le signal le plus fort déjà en place reste l'observation réseau réelle de
 l'axe D (Chromium chargé face au protocole Grist réel) : c'est lui qui a
@@ -272,113 +272,3 @@ Filtré à dessein : une bonne part de ce qu'un RSSI généraliste demanderait
 (authentification forte, cloisonnement réseau, gestion des secrets côté
 serveur...) ne s'applique pas à un widget navigateur de quelques fichiers
 sans backend propre, et n'est pas listée.
-
-## 9. Regard RSSI sur la soumission anonyme (V2) — étude, pas implémentation
-
-Antoine a confirmé le 2026-09-28 une soumission anonyme (pas de compte) sur
-la V2 : n'importe qui peut donc fournir l'URL du dépôt à cloner sur
-l'infrastructure d'Antoine, sous son nom. J'ai cherché un chemin où le
-proxy CONNECT décrit en §4 ne tient pas — deux hypothèses posées puis
-vérifiées contre le code réellement poussé entre-temps
-(`docker/egress-proxy/squid.conf`, `docker/execution/`,
-`docker-compose.v2-execution.yml`, commit `8052c8b`), donc daté et
-vérifié, pas seulement supposé sur la base du document de conception.
-Fichiers lus, pas modifiés — `docker/` et `docs/ARCHITECTURE-V2.md`
-restent hors de mon périmètre.
-
-**Les deux hypothèses ne tiennent pas contre ce qui a été écrit** — à
-confirmer une fois construit pour de vrai sur le VPS, mais rien dans la
-lecture du code ne les soutient :
-
-1. *Un domaine possédé par l'attaquant (`github.com.attaquant.example`,
-   `evilgithub.com`) passerait-il le filtre par nom d'hôte ?* Non : la
-   liste blanche (`squid.conf`) utilise `acl domaines_autorises dstdomain
-   .github.com .gitlab.com registry.npmjs.org` — la syntaxe Squid à point
-   initial (`.github.com`) est un filtre par suffixe ancré sur les
-   frontières de labels, pas une recherche de sous-chaîne : elle exige que
-   le nom se termine exactement par `.github.com`, ce qu'aucun des deux
-   noms ci-dessus ne fait. `registry.npmjs.org` sans point initial exclut
-   même ses propres sous-domaines, volontairement.
-2. *`git@hôte:chemin` (SSH), qui ne respecte pas `HTTP_PROXY`,
-   contournerait-il le proxy CONNECT ?* Sans objet, pour une raison plus
-   solide qu'une simple absence de mention : `execution-audit` n'a
-   qu'un seul réseau, `reseau-ferme`, déclaré `internal: true` — aucune
-   route par défaut vers l'extérieur. Seul `egress-proxy` a une seconde
-   patte sur `reseau-sortie-controlee`. Le conteneur d'exécution ne peut
-   donc atteindre *aucun* hôte externe par *aucun* protocole, SSH compris,
-   qu'il passe ou non par une variable d'environnement — l'isolation est
-   réseau, pas seulement applicative, ce qui ferme la question au niveau
-   où elle doit l'être plutôt qu'au niveau de chaque client (git, npm, un
-   futur outil qui ignorerait lui aussi `HTTP_PROXY`).
-
-**Point fonctionnel signalé ci-dessus : corrigé.** `HTTP_PROXY`/`HTTPS_PROXY`
-manquaient bien dans l'environnement d'`execution-audit` — ajoutées depuis
-(commit `3b48de4`), avec le cas SSH (`git@hôte:chemin`, qui ignore ces deux
-variables) explicitement documenté à côté : pas un trou, parce que
-`reseau-ferme` n'a de route que vers `egress-proxy`, qui ne relaie pas SSH
-— mais une affirmation qui reste, comme le reste de cette pile, écrite et
-non éprouvée. Une checklist de vérification dédiée est apparue au même
-commit (`docker/README-V2-VERIFICATIONS.md`) : voir §10.
-
-**Correction sur la conclusion ci-dessus (§9, point 2).** Je l'ai écrite
-comme si l'isolation réseau fermait la question — c'est ce que le fichier
-*demande*, pas ce qui a été *observé* : personne n'a jamais construit ni
-démarré cette pile (Docker Hub inatteignable depuis cet environnement de
-développement). Le raisonnement lu dans `docker-compose.v2-execution.yml`
-tient, mais reste à confirmer à la première exécution réelle sur le VPS,
-comme le fichier le dit lui-même dans ses propres commentaires.
-
-## 10. Ce qui, dans la pile V2, n'est aujourd'hui vrai que par écrit
-
-Demandé après la correction ci-dessus : lister ce qui repose sur une
-directive déclarative jamais éprouvée, et dire pour chacune comment on le
-saurait au premier démarrage réel. Étude de ce qui est déjà écrit dans
-`docker/` et `docs/ARCHITECTURE-V2.md` — rien modifié.
-
-**Corrigé** (commit à suivre) : `bin/gwaudit.js` créait le clone temporaire
-d'une cible distante avec `fs.mkdtempSync(path.join(RACINE_OUTIL,
-'.tmp-clone-'))`, où `RACINE_OUTIL` vaut `/app` dans l'image V2
-(`docker/execution/Dockerfile`, `WORKDIR /app`). Or
-`docker-compose.v2-execution.yml` déclare `read_only: true` avec pour
-seul espace inscriptible `/tmp` (tmpfs). Une soumission anonyme est
-toujours une URL (jamais un chemin local) : chaque job serait donc passé
-par cette ligne, qui aurait écrit dans un système de fichiers en lecture
-seule — `EROFS` garanti par le noyau, pas une hypothèse à vérifier sur le
-VPS. Aligné sur le reste du code, qui avait déjà appris cette leçon : le
-dossier isolé de `npm audit` (`e-dependances.js:233`) et celui de l'axe D
-(`dynamique.js:441`) utilisent tous les deux `os.tmpdir()`, jamais
-`RACINE_OUTIL`. Vérifié après correctif par un clonage réel (HTTPS, axe D
-inclus) : le dossier temporaire apparaît sous `/tmp`, jamais à côté de
-l'outil, et disparaît bien après l'audit, succès ou erreur confondus.
-`--sortie /out` (`entrypoint.sh`) évite le même problème pour le rapport
-en pointant vers un volume monté, en dehors du système de fichiers en
-lecture seule du conteneur.
-
-**Une checklist dédiée est apparue depuis** (`docker/README-V2-VERIFICATIONS.md`,
-commit `3b48de4`) : elle couvre déjà, pour cinq points, exactement le
-critère qui rend une checklist utile — pas seulement quoi vérifier, mais
-comment reconnaître un échec qui ne crierait pas assez fort pour être cru
-cassé (le piège déjà payé sur l'axe D). Je ne les reproduis pas ici pour
-ne pas créer deux versions qui divergent :
-
-- filtre Squid (`dstdomain`/`dst`) contre une cible autorisée et une cible
-  piège (§1 de la checklist) ;
-- `reseau-ferme: internal: true` : une sortie directe doit échouer par
-  absence de route, pas par simple refus HTTP (§2) ;
-- `git clone`/`npm audit` passent réellement par `egress-proxy`, dans un
-  sens comme dans l'autre — hôte autorisé qui doit réussir, hors liste qui
-  doit échouer (§3) ;
-- SSH (`git@hôte:chemin`) doit échouer par absence de route, pas par
-  absence de clé — la checklist insiste sur cette distinction précise,
-  parce qu'un échec de credentials ne prouve rien sur l'isolation (§4) ;
-- `mem_limit: 768m` doit se traduire par un conteneur tué (`OOMKilled`
-  visible), pas par un Chromium qui dégrade en silence ou tourne
-  indéfiniment (§5).
-
-Deux points de mon tableau initial n'y figurent pas encore — je les garde
-ici avec le même critère :
-
-| Ce qui est écrit | Comment un échec silencieux se distinguerait d'un échec franc |
-|---|---|
-| `pids_limit: 128`, censé suffire à un widget légitime et contraindre un widget hostile | Chromium est lui-même multi-processus (rendu, GPU, réseau) : un dépassement peut faire échouer la création d'un seul processus de rendu sans tuer le conteneur — l'axe D se terminerait alors avec un résultat partiel plutôt qu'une erreur explicite. À vérifier : que le widget-fixture (légitime) ne s'approche pas de la limite, et que le dépassement délibéré produise soit un `OOMKilled`/`pids` explicite, soit un `D-INDISPONIBLE` franc — jamais un rapport qui a l'air complet et ne l'est pas |
-| Résolution de `GWAUDIT_CHROMIUM_PATH` (`ls -d /ms-playwright/chromium-*/chrome-linux/chrome \| head -n1` dans `entrypoint.sh`) | Lisible sans exécuter : le script n'échoue que si **aucune** correspondance n'est trouvée (`-z`) — s'il y en avait deux (l'image de base embarque un jour un second binde `chromium-*`), `head -n1` en choisirait une arbitrairement, sans erreur ni journal. Ce n'est pas un cas connu aujourd'hui, mais le garde-fou du script est asymétrique : à surveiller au premier build (journaliser le chemin résolu, confirmer une correspondance unique) plutôt qu'à supposer réglé parce que ça démarre |

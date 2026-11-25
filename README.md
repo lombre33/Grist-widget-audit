@@ -15,7 +15,7 @@ Prérequis : [Node.js](https://nodejs.org/) 20 ou plus récent, et `git`
 disponible dans le `PATH` (utilisé pour auditer une URL de dépôt et pour
 lier chaque rapport au commit audité).
 
-```bash
+```powershell
 npm install                                   # dépendances de l'outil
 npx playwright install chromium               # nécessaire pour l'axe D (analyse dynamique)
 ```
@@ -32,10 +32,13 @@ normalement. Utiliser `--sans-dynamique` pour l'ignorer volontairement.
 
 ### Windows
 
-L'outil tourne sous Windows (10/11), avec une différence : la protection
-qui plafonne le temps CPU que peut consommer Chromium pendant l'axe D
-repose sous Linux/macOS sur `ulimit`, absent de Windows — elle y est donc
-réimplémentée avec l'équivalent natif (Job Objects Win32, via un script
+L'outil est conçu, utilisé et éprouvé (CI `windows-latest`) sous Windows 11 ;
+les commandes de ce document sont écrites pour PowerShell. Le code reste
+portable, mais Linux et macOS ne sont plus suivis : rien n'y est garanti.
+
+La protection qui plafonne le temps CPU que peut consommer Chromium pendant
+l'axe D repose sous Linux/macOS sur `ulimit`, absent de Windows — elle y est
+donc réimplémentée avec l'équivalent natif (Job Objects Win32, via un script
 PowerShell généré à la volée ; PowerShell 5.1, présent par défaut sur
 Windows 10/11, suffit). Confirmé sur une machine Windows 11 réelle : le
 mécanisme s'installe sans erreur (pas de message `⚠ Plafond CPU inactif
@@ -69,8 +72,9 @@ message plus vague `Target page, context or browser has been closed` si
 l'échec survient après le lancement plutôt qu'avant). Pointer explicitement
 dessus avec la variable d'environnement `GWAUDIT_CHROMIUM_PATH` :
 
-```bash
-GWAUDIT_CHROMIUM_PATH=/chemin/vers/chromium node bin/gwaudit.js /chemin/vers/mon-widget
+```powershell
+$env:GWAUDIT_CHROMIUM_PATH = "C:\chemin\vers\chrome.exe"
+node bin/gwaudit.js C:\chemin\vers\mon-widget
 ```
 
 ### Le bac à sable de Chromium (`GWAUDIT_CHROMIUM_SANS_SANDBOX`)
@@ -80,16 +84,14 @@ sable natif de Chromium est **actif par défaut** : Playwright, lui, lance
 Chromium avec `--no-sandbox` tant qu'on ne lui demande pas l'inverse, et
 `gwaudit` le lui demande (`chromiumSandbox: true`).
 
-Quand Chromium ne peut pas démarrer avec son bac à sable (lancement en `root`,
-espaces de noms utilisateur non privilégiés interdits — restriction AppArmor
-d'Ubuntu 23.10 et suivants —, profil seccomp par défaut de Docker), l'axe D est
-signalé non exécuté avec cette cause précise (`D-INDISPONIBLE`), jamais
-silencieusement. Deux issues : corriger l'environnement (ne pas lancer en
-`root` ; en conteneur, le profil seccomp et la capacité `SYS_CHROOT` de
-`docker/execution/`), ou déroger **explicitement** :
+Quand Chromium ne peut pas démarrer avec son bac à sable, l'axe D est signalé
+non exécuté avec cette cause précise (`D-INDISPONIBLE`), jamais
+silencieusement. Deux issues : corriger l'environnement, ou déroger
+**explicitement** :
 
-```bash
-GWAUDIT_CHROMIUM_SANS_SANDBOX=1 node bin/gwaudit.js /chemin/vers/mon-widget
+```powershell
+$env:GWAUDIT_CHROMIUM_SANS_SANDBOX = "1"
+node bin/gwaudit.js C:\chemin\vers\mon-widget
 ```
 
 C'est alors le widget audité qui s'exécute dans un Chromium sans bac à sable, sur
@@ -97,7 +99,7 @@ votre machine : une faille du moteur de rendu que ce code exploiterait lui
 donnerait vos droits. À ne faire que sur un widget dont la source est connue. Le
 rapport le dit (`D-INDISPONIBLE-BAC-A-SABLE`, information, sans effet sur le
 verdict). `GWAUDIT_CHROMIUM_SANDBOX=1`, l'ancien nom de la demande, est encore
-accepté et ne change rien. L'image de la V2 refuse cette dérogation.
+accepté et ne change rien.
 
 Un widget qui garde le navigateur occupé (boucle sans fin au chargement) n'est
 pas une panne de l'axe D : `D-TIMEOUT-01`, bloquant, le dit — bloquer la mesure
@@ -109,7 +111,7 @@ chargement de la page en est déduit, 15 s de moins.
 
 Depuis une copie clonée du dépôt :
 
-```bash
+```powershell
 npm install
 npm link                                      # crée le lien symbolique global
 gwaudit /chemin/vers/mon-widget               # utilisable depuis n'importe quel dossier
@@ -121,7 +123,7 @@ aucune configuration supplémentaire n'est nécessaire. Pour retirer le lien :
 
 ## Utilisation
 
-```bash
+```powershell
 node bin/gwaudit.js /chemin/vers/mon-widget
 node bin/gwaudit.js https://github.com/quelquun/grist-widget-exemple
 ```
@@ -144,8 +146,7 @@ Options :
 Le code de sortie reflète le verdict : `0` conforme, `1` conforme sous
 réserve, `2` non conforme (point bloquant), `3` erreur d'exécution de
 l'outil lui-même, `4` cible refusée ou inaccessible (URL refusée par la
-validation ou par le proxy de sortie de la V2, clonage impossible, chemin
-introuvable) : un refus est dit en clair, sans pile, et ce n'est pas une panne.
+validation, clonage impossible, chemin introuvable) : un refus est dit en clair, sans pile, et ce n'est pas une panne.
 
 ## Comparer deux audits
 
@@ -153,7 +154,7 @@ Pour suivre l'effet d'un correctif, ou faire échouer une étape CI en cas de
 régression, comparer deux rapports `--json` déjà générés (pas besoin de
 relancer l'analyse) :
 
-```bash
+```powershell
 node bin/gwaudit.js /chemin/vers/mon-widget --json --sortie ./avant
 # ... correctifs sur le widget ...
 node bin/gwaudit.js /chemin/vers/mon-widget --json --sortie ./apres
@@ -187,7 +188,7 @@ limites (nombres négatifs, cellules vides, texte très long) :
 }
 ```
 
-```bash
+```powershell
 node bin/gwaudit.js /chemin/vers/mon-widget --scenario ./mon-scenario.json
 ```
 
@@ -212,7 +213,7 @@ dans le même rapport : voir [Essais contre un Grist réel](#essais-contre-un-gr
 Le premier audit coché télécharge Grist Desktop (environ 320 Mo) ; le délai
 global de l'interface passe alors de 5 à 20 minutes.
 
-```bash
+```powershell
 node bin/gwaudit.js --interface          # http://127.0.0.1:4317
 node bin/gwaudit.js --interface --port 8080
 ```
@@ -222,23 +223,20 @@ même chose : il démarre l'interface et ouvre le navigateur par défaut. Il
 garde aussi tout le travail sur le disque de l'outil : les rapports vont dans
 ce dossier, les fichiers temporaires dans `.tmp-travail` et Grist Desktop
 (téléchargé pour les essais contre un Grist réel) dans `.tmp-cache`, au lieu
-des dossiers de `C:`. `lancer-interface.sh` est l'équivalent pour Linux
-et macOS.
+des dossiers de `C:`.
 
 Cette interface ne réimplémente rien : elle pilote `gwaudit` lui-même en
 sous-processus et affiche ce qu'il imprime déjà (mêmes rapports, mêmes
-codes de sortie). C'est le même code, quel que soit l'endroit où il
-tourne (poste local, VPS) — voir le fil de discussion sur les versions du
-dépôt.
+codes de sortie).
 
 Pensée pour un usage local, mono-utilisateur, sans authentification : elle
-n'écoute que sur `127.0.0.1` par défaut, un audit à la fois, et seuls les
-liens de dépôt (`https://` ou `git@`) sont acceptés — jamais un chemin
-local, pour qu'un formulaire ne puisse jamais faire auditer (donc lire) un
-dossier arbitraire de la machine qui l'héberge. Un usage hébergé et exposé
-publiquement (plusieurs utilisateurs, code non fiable) demande l'isolation
-que la V2 est censée fournir autour de cette même interface — ne pas la
-lier à une interface réseau publique telle quelle.
+n'écoute que sur `127.0.0.1`, un audit à la fois, et seuls les liens de dépôt
+(`https://` ou `git@`) sont acceptés — jamais un chemin local, pour qu'un
+formulaire ne puisse jamais faire auditer (donc lire) un dossier arbitraire
+de la machine qui l'héberge. Un usage hébergé et exposé publiquement
+(plusieurs utilisateurs, code non fiable) demanderait une isolation que cet
+outil ne fournit pas (voir [`docs/archive-v2-vps.md`](docs/archive-v2-vps.md)) :
+ne jamais la lier à une interface réseau publique.
 
 Lancée avec succès sous Windows 11 (parcours complet : démarrage,
 formulaire, clonage, audit, page de rapport) — aucune invite de pare-feu au
@@ -269,23 +267,23 @@ En bref :
 
 ## Essais contre un Grist réel
 
-`gwaudit <widget> --grist-reel` ajoute à l'audit des essais joués par un vrai Grist, au lieu du faux hôte de test de l'axe D. Rien à préparer : au premier lancement, l'outil télécharge Grist Desktop (version épinglée dans `src/runtime/grist-reel/grist-desktop.json`, environ 300 Mo, empreinte SHA-256 vérifiée), le range dans un dossier de cache (`%LOCALAPPDATA%\gwaudit\cache` sous Windows, `~/.cache/gwaudit` sous Linux, ou `GWAUDIT_CACHE`) et le réutilise ensuite. Il n'utilise jamais ton propre Grist Desktop, tes documents ni ton profil : chaque audit lance une instance neuve dans un dossier temporaire, y crée un document de test (valeurs « canaris », table appât, section Custom qui charge le widget), joue le widget, puis arrête l'instance et supprime le dossier.
+`gwaudit <widget> --grist-reel` ajoute à l'audit des essais joués par un vrai Grist, au lieu du faux hôte de test de l'axe D. Rien à préparer : au premier lancement, l'outil télécharge Grist Desktop (version épinglée dans `src/runtime/grist-reel/grist-desktop.json`, environ 300 Mo, empreinte SHA-256 vérifiée), le range dans un dossier de cache (`%LOCALAPPDATA%\gwaudit\cache`, ou `GWAUDIT_CACHE`) et le réutilise ensuite. Il n'utilise jamais ton propre Grist Desktop, tes documents ni ton profil : chaque audit lance une instance neuve dans un dossier temporaire, y crée un document de test (valeurs « canaris », table appât, section Custom qui charge le widget), joue le widget, puis arrête l'instance et supprime le dossier.
 
 Ce qui est joué (numéros du catalogue de l'étude) : le widget chargé au niveau d'accès « none » puis à celui qu'il demande ; 1 XSS par valeur de cellule, avec lecture d'une autre table par l'API Grist au niveau réellement accordé, puis sortie ; 7 aucune donnée transmise à « none » ; 13 exfiltration mesurée (un canari du document retrouvé dans une requête sortante) ; 15 navigation de la page Grist ; 16 fenêtres, boîtes de dialogue, téléchargements. Les requêtes vers l'extérieur sont interceptées, jamais envoyées. Le rapport gagne une section « Essais contre un Grist réel » et des constats `D-REEL-NN`, notés comme les autres ; un essai qui n'a pas pu se jouer est dit « non testé » avec sa raison, jamais « rien trouvé ».
 
 À savoir :
 - Windows : une fenêtre de Grist Desktop peut apparaître quelques secondes pendant l'audit. Aucun droit d'administrateur, aucune installation système.
-- Derrière un proxy d'entreprise, le téléchargement peut échouer : le message donne l'adresse du fichier et le dossier où le déposer à la main (il est vérifié comme un fichier téléchargé). `GWAUDIT_GRIST_DESKTOP=<exécutable>` impose un Grist Desktop déjà installé (seule voie sur macOS, où rien n'est épinglé).
+- Derrière un proxy d'entreprise, le téléchargement peut échouer : le message donne l'adresse du fichier et le dossier où le déposer à la main (il est vérifié comme un fichier téléchargé). `GWAUDIT_GRIST_DESKTOP=<exécutable>` impose un Grist Desktop déjà installé.
 - Windows : garder le dossier de l'outil à un chemin court (moins de 50 caractères, par exemple `D:\Grist-widget-audit`) : Grist Desktop contient des chemins de 155 caractères, rangés dans `.tmp-cache` sous l'interface web.
-- Linux sans écran : `xvfb` est nécessaire (`apt install xvfb`).
 - Le résultat vaut pour la version de Grist Desktop testée, pas pour l'instance où le widget sera installé si elle diffère.
-- Test de bout en bout : `GWAUDIT_GRIST_REEL_E2E=1 node --test tests/grist-reel.test.mjs`.
+- Test de bout en bout : `$env:GWAUDIT_GRIST_REEL_E2E = "1"; node --test tests/grist-reel.test.mjs`.
 
-## Environnement de test Grist réel (image Docker)
+## Essai manuel dans un Grist réel (Docker, facultatif)
 
-`gwaudit --dynamique` (activé par défaut) simule un hôte Grist minimal, pas
-une vraie instance : voir la méthodologie pour pourquoi ce choix. Pour
-valider un widget dans un vrai Grist avant publication, voir
+L'axe D par défaut simule un hôte Grist minimal, pas une vraie instance : voir
+la méthodologie pour pourquoi ce choix. `--grist-reel` (ci-dessus) joue le
+widget dans un vrai Grist, sans rien installer. Pour le voir fonctionner à la
+main dans un vrai Grist avant publication, avec Docker Desktop, voir
 [`docker/README.md`](docker/README.md).
 
 ## Réseau et proxy d'entreprise
@@ -318,24 +316,22 @@ bin/gwaudit.js              point d'entrée CLI
 src/contexte/               inventaire du dépôt, calcul de la surface exécutée
 src/moteur/                 modèle de données, notation, analyse JS (AST)
 src/regles/                 les règles des axes A, B, C, E, F (analyse statique)
-src/runtime/                axe D : hôte Grist de test, serveur local, orchestration Playwright
-src/rapport/                génération Markdown / JSON
+src/runtime/                axe D : hôte Grist de test, serveur local, orchestration Playwright, essais contre un Grist réel
+src/rapport/                génération Markdown / HTML / JSON / SARIF
 ressources/grist-plugin-api/ client Grist vendu (voir docs/METHODOLOGIE.md § axe D)
-docker/                     instance Grist réelle pour validation manuelle
-docs/                       méthodologie, guide de contribution Grist.Gouv (source)
+tests/                      suite de tests (`npm test`)
+scripts/                    outils de mise au point (mutants, mesures) et preuve du bac à sable sous Windows
+docker/                     instance Grist réelle pour validation manuelle (facultatif)
+docs/                       méthodologie, guide de contribution Grist.Gouv (source), archive du projet d'hébergement
 ```
 
-## V2 (esquisse, hors périmètre de cette V1)
+## Hébergement sur un serveur (abandonné)
 
-Le besoin exprimé va au-delà d'un outil en ligne de commande : intégrer le
-module sur un site, pour que des agents puissent faire vérifier
-l'intégrité d'un widget avant de l'installer sur leur propre Grist. Cela
-suppose au minimum : mettre en sandbox l'exécution de code arbitraire côté
-serveur (l'analyse dynamique lance aujourd'hui un vrai navigateur sur du
-code non maîtrisé — acceptable pour un usage local, à isoler fortement en
-service public), une file d'attente et des quotas, une conservation des
-rapports, et une authentification. Cette V1 n'a pas été conçue pour cet
-usage et ne doit pas être exposée telle quelle sur un service public.
+Un projet d'audit hébergé (soumission d'un lien par des inconnus, exécution dans
+un conteneur durci sur un VPS) a été conçu et en partie éprouvé, puis mis de
+côté : l'outil n'est utilisé qu'en local, sous Windows. Ce qui existait, et
+comment le retrouver dans l'historique du dépôt, est dans
+[`docs/archive-v2-vps.md`](docs/archive-v2-vps.md).
 
 ## Licence
 

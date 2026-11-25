@@ -1,0 +1,53 @@
+# Éprouve l'outil sur ce qui est son seul poste d'usage : Windows (runner windows-latest).
+#   - la suite de tests complète (`npm test`, comme sur le poste) ;
+#   - la preuve que Chromium tourne AVEC son bac à sable pendant un vrai audit
+#     (scripts/verifier-windows.mjs : niveau d'intégrité des processus de rendu,
+#     témoin sous la dérogation, widget qui boucle sans chrome.exe orphelin).
+#
+#   - « Run workflow » (workflow_dispatch) : joue le tout sur la branche choisie ;
+#   - push sur une branche dev/… : idem, pour voir le résultat avant la fusion.
+#
+# Aucun droit d'écriture : ce job exécute le code de widgets de test (hostiles compris).
+name: Windows
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - 'dev/**'
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      # v6.1.0 ; épinglée par SHA, comme toute action tierce ici.
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+
+      - name: Environnement
+        run: |
+          node --version
+          npm --version
+          [System.Environment]::OSVersion.VersionString
+
+      - name: Dépendances, comme un utilisateur (npm ci)
+        run: npm ci
+
+      - name: Chromium de Playwright
+        run: npx playwright install chromium
+
+      # Même commande que sur le poste d'Antoine.
+      - name: Suite de tests
+        run: npm test
+
+      - name: Bac à sable de Chromium, pendant un vrai audit (et un widget qui boucle)
+        run: node scripts/verifier-windows.mjs

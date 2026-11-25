@@ -1,6 +1,6 @@
 /**
  * Mémoire de la lecture d'un fichier que ni le mode module ni le mode script d'acorn ne lisent (du TypeScript à la dernière ligne d'un
- * gros paquet), sous un tas plafonné : le conteneur de la V2 limite la mémoire, et c'est là qu'une lecture qui garde trop plante. Chaque essai se fait dans un processus neuf, avec son plafond de tas (`--max-old-space-size`) : il dit s'il passe, ce
+ * gros paquet), sous un tas plafonné : c'est là qu'une lecture qui garde trop plante. Chaque essai se fait dans un processus neuf, avec son plafond de tas (`--max-old-space-size`) : il dit s'il passe, ce
  * qu'il a consommé, combien de temps il a pris.
  *
  * Deux structures de lecture : `lire` (celle de `src/moteur/analyse-js.js`, chaque lecture dans son propre appel) et `boucle` (l'ancienne,

@@ -1,4 +1,4 @@
-# Provenance de build/grist-plugin-api.js
+# Provenance de ressources/grist-plugin-api/grist-plugin-api.js
 
 Compilé depuis `app/plugin/grist-plugin-api.ts` du dépôt
 [gristlabs/grist-core](https://github.com/gristlabs/grist-core), licence

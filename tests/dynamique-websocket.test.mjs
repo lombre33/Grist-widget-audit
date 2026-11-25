@@ -14,7 +14,7 @@ import { auditDynamique } from '../src/runtime/dynamique.js';
  * « featues à date » (docs/PISTES-EXHAUSTIVITE.md, point 1) : `context.route()`
  * n'intercepte que le trafic HTTP, jamais les WebSocket. `--host-resolver-rules`
  * bloque déjà une cible externe réelle (nom d'hôte ou IP littérale, voir
- * docs/ARCHITECTURE-V2.md §1 constat 5), mais laisse passer `127.0.0.1`/
+ * docs/archive-v2-vps.md, constat 5), mais laisse passer `127.0.0.1`/
  * `localhost` sans la vérification d'origine exacte que `context.route()`
  * applique au HTTP : avant correctif, un widget ouvrant une connexion
  * WebSocket vers un autre port local l'aurait réellement établie pendant

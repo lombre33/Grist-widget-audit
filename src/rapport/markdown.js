@@ -7,7 +7,7 @@
  * remédiation, référentiel) : c'est la forme d'un avis RSSI, pas d'un
  * listing d'outil.
  */
-import { AXES, SEVERITES, CONFIANCES, trierConstats } from '../moteur/modele.js';
+import { CONFIANCES, trierConstats } from '../moteur/modele.js';
 import { raisonsDeTroncature } from '../contexte/inventaire.js';
 import { markdownGristReel } from './grist-reel.js';
 

@@ -267,8 +267,8 @@ ou de configuration, à un nom qui évoque un secret ; un JWT collé à un carac
 de base64 URL n'est pas reconnu (le prix de ne chercher une suite qu'à son
 début).
 
-**Le coût est borné par construction**, parce qu'en V2 un algorithme quadratique
-est un déni de service : le nom se juge sur ses derniers caractères et la valeur
+**Le coût est borné par construction**, parce qu'un algorithme quadratique sur un
+dépôt hostile est un déni de service : le nom se juge sur ses derniers caractères et la valeur
 sur ses premiers (`LONGUEUR_DE_NOM`, `APERCU`), chaque occurrence d'un mot de
 secret est prise pour centre d'un travail borné (pas d'expression régulière à nom
 libre, qui relirait la suite entière à chaque départ), et chaque suite gloutonne

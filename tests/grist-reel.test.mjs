@@ -70,9 +70,8 @@ test("téléchargement : l'empreinte est celle des octets reçus, et une ligne q
   } finally { serveur.closeAllConnections(); await new Promise((r) => serveur.close(r)); fs.rmSync(dossier, { recursive: true, force: true }); }
 });
 
-test("lanceurs de l'interface : Grist Desktop est rangé dans le dossier de l'outil, pas sur C:", () => {
+test("lanceur de l'interface : Grist Desktop est rangé dans le dossier de l'outil, pas sur C:", () => {
   assert.match(fs.readFileSync(path.join(RACINE, 'lancer-interface.cmd'), 'utf8'), /set "GWAUDIT_CACHE=%~dp0\.tmp-cache"/);
-  assert.match(fs.readFileSync(path.join(RACINE, 'lancer-interface.sh'), 'utf8'), /GWAUDIT_CACHE="\$PWD\/\.tmp-cache"[\s\S]*export TMPDIR GWAUDIT_CACHE/);
 });
 
 test('données : canaris uniques par audit, charge XSS observable dans le cadre du widget, canari retrouvé même encodé', () => {

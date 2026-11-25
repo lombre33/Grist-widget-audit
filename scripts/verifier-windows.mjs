@@ -4,8 +4,8 @@
 // d'intégrité du jeton de chaque processus chrome.exe (integrite-chrome.ps1).
 // Puis rejoue la même chose avec la dérogation explicite (témoin : la sonde doit
 // y voir des processus de rendu de niveau moyen et --no-sandbox, sinon elle ne
-// saurait pas distinguer). Relève aussi le score de widget-exemple, pour
-// comparer avec Linux.
+// saurait pas distinguer). Relève aussi le score de widget-exemple (à comparer
+// avec celui d'une exécution sous Linux).
 // Enfin, un widget qui boucle sans fin (bac à sable actif) : l'audit conclut de
 // lui-même par D-TIMEOUT-01 (bloquant) et ne laisse aucun chrome.exe derrière lui
 // — la sonde, qui vient de voir les processus pendant l'audit, sait les voir.
@@ -16,7 +16,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const ICI = path.dirname(fileURLToPath(import.meta.url));
-const RACINE = path.resolve(ICI, '..', '..');
+const RACINE = path.resolve(ICI, '..');
 const PS1 = path.join(ICI, 'integrite-chrome.ps1');
 const MOYEN = 8192;
 

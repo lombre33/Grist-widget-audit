@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Reconstruit build/grist-plugin-api.js à partir des sources officielles de
+ * Reconstruit ressources/grist-plugin-api/grist-plugin-api.js à partir des sources officielles de
  * grist-core (gristlabs/grist-core, licence Apache 2.0). Ce script clone le
  * dépôt dans un dossier temporaire, compile l'entrée officielle
  * `app/plugin/grist-plugin-api.ts` avec esbuild — exactement l'entrée que le
@@ -11,7 +11,7 @@
  * (`https://docs.getgrist.com/grist-plugin-api.js`) : le dépôt fait
  * exactement ce que le guide de contribution demande aux widgets audités de
  * ne pas faire — dépendre d'un fichier récupéré à l'exécution sans contrôle
- * de version. La version vendue dans `build/` est donc reconstruite depuis
+ * de version. La version vendue dans `ressources/grist-plugin-api/` est donc reconstruite depuis
  * une référence Git figée (voir PROVENANCE.md dans ce dossier).
  *
  * Usage : node scripts/construire-grist-plugin-api.mjs [référence-git]
@@ -44,7 +44,7 @@ try {
 
   cpSync(path.join(tmp, 'LICENSE'), path.join(RACINE, 'ressources/grist-plugin-api/LICENSE-grist-core-apache-2.0.txt'));
   writeFileSync(path.join(RACINE, 'ressources/grist-plugin-api/PROVENANCE.md'),
-`# Provenance de build/grist-plugin-api.js
+`# Provenance de ressources/grist-plugin-api/grist-plugin-api.js
 
 Compilé depuis \`app/plugin/grist-plugin-api.ts\` du dépôt
 [gristlabs/grist-core](https://github.com/gristlabs/grist-core), licence
@@ -60,7 +60,7 @@ notre hôte de test le rôle de la vraie fenêtre parente Grist, en dialoguant
 avec le widget audité via le protocole RPC réel (\`grain-rpc\`), sans se
 substituer à une vraie instance Grist en production.
 `);
-  console.log('OK — build/grist-plugin-api.js régénéré, commit', commit);
+  console.log('OK — ressources/grist-plugin-api/grist-plugin-api.js régénéré, commit', commit);
 } finally {
   rmSync(tmp, { recursive: true, force: true });
 }

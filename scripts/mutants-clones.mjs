@@ -49,7 +49,6 @@ const TESTS_REGLE = ['tests/a-dup.test.mjs', 'tests/a-dup-ecarte.test.mjs', 'tes
 
 const SEUILS = 'export const SEUILS_CLONES';
 const ATTRIBUTS = 'const ATTRIBUTS = new Set(';
-const LOGIQUES = 'const LOGIQUES = new Set([';
 const SEVERITE = "severite: entreFichiers.length > 5 || massifs.length ? 'majeur' : 'mineur', confiance: 'probable',";
 
 /** Retire un nom d'une liste littérale (`'operator', ` ou `, 'await'`). */

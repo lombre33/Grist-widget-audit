@@ -2,7 +2,7 @@
 /**
  * Chronomètre l'outil sur des entrées piégées : temps et pic de mémoire d'une
  * analyse complète (inventaire, page, règles statiques) ou de la seule lecture
- * de la page. `gwaudit` tourne sur du code qu'on ne connaît pas : en V2, un
+ * de la page. `gwaudit` tourne sur du code qu'on ne connaît pas : un
  * algorithme quadratique ou un rapport géant est un déni de service.
  *
  * Chaque cas tourne dans son propre processus (un pic de mémoire par cas, un

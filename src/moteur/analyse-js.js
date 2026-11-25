@@ -206,7 +206,7 @@ export function erreurDeParcours(e) {
  * Une lecture d'acorn, dans un mode (`module` ou `script`). Dans son propre appel : l'erreur d'une lecture qui échoue, et ce que le
  * cadre qui l'a attrapée tient, ne restent pas dans le cadre de `lire` pendant la lecture du mode suivant. Mesuré sur un gros
  * fichier qui ne se lit dans aucun mode (`scripts/mesurer-memoire-lecture.mjs`) : quand la vérification de l'erreur se faisait dans le
- * cadre de la boucle, la mémoire de la première lecture n'était pas rendue à temps et le tas plafonné d'un conteneur n'y suffisait plus,
+ * cadre de la boucle, la mémoire de la première lecture n'était pas rendue à temps et un tas plafonné n'y suffisait plus,
  * alors que, lues une à une dans leur propre appel, les deux lectures y tiennent. La cause exacte dans V8 n'est pas établie.
  */
 function tenter(source, sourceType) {

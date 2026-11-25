@@ -38,7 +38,7 @@ import { citer, citerSiBesoin } from '../moteur/texte-du-widget.js';
 /**
  * Le début d'une suite de caractères de base64 URL. Les formats dont la queue est une suite longue ne se cherchent qu'à son
  * début : un départ à chaque `eyJ` d'une suite `eyJ-eyJ-eyJ-…` relirait la suite entière à chaque fois, quadratique sur un
- * dépôt qui n'a qu'à répéter le motif (V2 : un quadratique est un déni de service).
+ * dépôt qui n'a qu'à répéter le motif (un quadratique sur un dépôt hostile est un déni de service).
  */
 const DEBUT_DE_SUITE = '(?<![A-Za-z0-9_-])';
 
@@ -162,7 +162,7 @@ const estChiffre = (c) => c >= 48 && c <= 57;
  * `clientSecret`, `CLIENT_SECRET`, `client-secret` donnent `client`, `secret` (à la casse près), `XMLHttpRequest` donne `XML`,
  * `Http`, `Request`. `chiffres` coupe aussi entre une minuscule et un chiffre (`token2`). Un seul parcours : des expressions
  * régulières qui coupent aux majuscules relisent chaque suite de majuscules à chaque départ, quadratiques sur une suite de
- * 4 096 lettres ou sur un identifiant de 16 Mio (V2 : un quadratique est un déni de service).
+ * 4 096 lettres ou sur un identifiant de 16 Mio (un quadratique sur un dépôt hostile est un déni de service).
  */
 function morceauxDe(texte, chiffres) {
   const morceaux = [];

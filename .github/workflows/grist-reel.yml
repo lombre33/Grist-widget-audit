@@ -1,4 +1,4 @@
-# Éprouve le mode --grist-reel de bout en bout sur les deux systèmes où il doit marcher :
+# Éprouve le mode --grist-reel de bout en bout sous Windows (le poste d'usage) :
 # téléchargement épinglé de Grist Desktop (empreinte SHA-256 vérifiée), extraction, lancement d'une instance
 # jetable, widget défaillant puis widget sain joués dans un vrai Chromium, profil jetable supprimé ;
 # et l'interface web (case « Grist réel », lancement d'un audit en sous-processus).
@@ -24,11 +24,7 @@ permissions:
 
 jobs:
   e2e:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-latest, ubuntu-24.04]
-    runs-on: ${{ matrix.os }}
+    runs-on: windows-latest
     timeout-minutes: 40
     steps:
       # v6.1.0 ; épinglée par SHA, comme toute action tierce ici.
