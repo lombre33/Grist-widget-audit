@@ -149,6 +149,51 @@ export async function creerSectionCustom(client, doc) {
   return { sectionRef, viewRef, chemin: `/o/docs/${doc.docId}/gwaudit/p/${viewRef}` };
 }
 
+/** Nombre de lignes courtes ajoutées pour l'essai 2 (en plus des lignes aux valeurs limites). */
+export const NB_LIGNES_LIMITES = 5000;
+/** Le nom de la colonne « Any » ajoutée pour l'essai 2 : listes, erreurs, dates invalides, que seul un widget qui lit toute la table reçoit. */
+export const COLONNE_LIMITES = 'GwauditLimites';
+
+/**
+ * Essai 2 : ajoute à la table du widget des lignes aux valeurs limites (cellule de 1 Mo, texte de droite à gauche, caractère nul, émoji composé, vide, null, HTML, mot sans espace,
+ * pourcentage mal formé) et NB_LIGNES_LIMITES lignes courtes, plus une colonne « Any » (liste, erreur, dates, nombre). Rend de quoi les retirer, ou null si la table n'a pas de colonne texte.
+ */
+export async function ajouterDonneesLimites(client, doc, jeu) {
+  const table = jeu.table.id;
+  const colTexte = jeu.table.colonnes.find((c) => c.type === 'Text' && c.id !== 'GwauditCanari')?.id;
+  if (!colTexte) return null;
+  // Deux envois : Grist refuse une requête de plus d'environ 1 Mo (413), la cellule de 1 Mo part donc seule avec les autres valeurs limites.
+  const textesLimites = ['x'.repeat(1_000_000), 'a\u202Eb\u200Bc', 'nul\u0000nul', '\u{1F468}\u200D\u{1F469}\u200D\u{1F467}', '', null, '<b>&amp;</b> \\ "', 'a'.repeat(5000), '100% sûr %E0%A4%A'];
+  const autresLimites = [null, ['L', 1, 'a'], ['E', 'ZeroDivisionError'], ['D', 1e15, 'UTC'], ['d', 'pas une date'], 'texte', 3.5, ['L'], 'x'];
+  const textesCourts = Array.from({ length: NB_LIGNES_LIMITES }, (_, i) => `ligne ${i}`);
+  const ajouter = async (textes, autres) => {
+    const r = await client.actions(doc.docId, [['BulkAddRecord', table, textes.map(() => null), { [colTexte]: textes, [COLONNE_LIMITES]: autres }]]);
+    const ids = r?.retValues?.[0];
+    if (!Array.isArray(ids) || ids.length !== textes.length) throw new Error("Grist n'a pas rendu les identifiants des lignes ajoutées");
+    return ids;
+  };
+  await client.actions(doc.docId, [['AddColumn', table, COLONNE_LIMITES, { type: 'Any', isFormula: false }]]);
+  const ids = [...await ajouter(textesLimites, autresLimites), ...await ajouter(textesCourts, textesCourts.map((_, i) => i))];
+  return { ids, lignes: ids.length };
+}
+
+/** Retire les lignes et la colonne de l'essai 2 : la dernière passe doit retrouver la table telle que les autres essais l'ont connue. */
+export async function retirerDonneesLimites(client, doc, jeu, limites) {
+  await client.actions(doc.docId, [['BulkRemoveRecord', jeu.table.id, limites.ids], ['RemoveColumn', jeu.table.id, COLONNE_LIMITES]]);
+}
+
+/** Essai 6 : une rafale de changements sur les premières lignes de la table (30 lots de 50 mises à jour envoyés ensemble), puis des ajouts et retraits de lignes en série. */
+export async function rafaleDeChangements(client, doc, jeu) {
+  const table = jeu.table.id;
+  const colTexte = jeu.table.colonnes.find((c) => c.type === 'Text' && c.id !== 'GwauditCanari')?.id;
+  const ids = (await client.sql(doc.docId, `select id from ${table} order by id limit 50`)).records.map((x) => x.fields.id);
+  await Promise.all(Array.from({ length: 30 }, (_, k) => client.actions(doc.docId, [['BulkUpdateRecord', table, ids, { [colTexte]: ids.map((_, j) => `rafale ${k}-${j}`) }]])));
+  for (let k = 0; k < 10; k++) {
+    const r = await client.actions(doc.docId, [['BulkAddRecord', table, Array(20).fill(null), { [colTexte]: Array.from({ length: 20 }, (_, j) => `rafale ajout ${k}-${j}`) }]]);
+    await client.actions(doc.docId, [['BulkRemoveRecord', table, r.retValues[0]]]);
+  }
+}
+
 /** Règle l'adresse du widget, le niveau d'accès accordé et la correspondance des colonnes de la section. */
 export async function reglerSection(client, doc, section, { url, access, columnsMapping }) {
   const customView = { mode: 'url', url, access, ...(columnsMapping ? { columnsMapping } : {}) };

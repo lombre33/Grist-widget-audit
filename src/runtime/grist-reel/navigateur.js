@@ -151,14 +151,15 @@ const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; retur
  * @param {object} [p.pollution]  clés cherchées dans `Object.prototype` (voir kitPollution) : si fourni, joué dans le cadre du widget ; les lignes hostiles doivent être déjà dans la table (voir `ajouterDonneesHostiles`)
  * @param {boolean} [p.droits]    joue le kit des droits du navigateur donnés au cadre (voir kitDroits), avec un vrai clic de l'audit dans le widget ; l'écriture du presse-papier est accordée à la page Grist, comme le fait un Chrome ordinaire pour l'onglet actif
  * @param {object} [p.ecritures]  identifiants des tables sacrifiées (voir kitEcritures) : si fourni, le kit des écritures est joué dans le cadre du widget, en tout dernier
+ * @param {{rafale: () => Promise<void>}} [p.robustesse]  joue les essais 2 et 6 : après le chargement (les lignes limites sont déjà dans la table), mesure les erreurs non rattrapées du widget et sa réponse ; lance la rafale de changements, mesure de nouveau
  * @param {object} [p.kit]         paramètres du kit de la dépendance piégée (voir kit.js) : s'il est fourni, il est joué dans le cadre du widget
  * @param {number} [p.delaiMs]
  */
-export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, canaux, ecritures, droits, pollution, stockage, messages, apiInstance, lireMarqueurs, delaiMs = 45_000 }) {
+export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, canaux, ecritures, droits, pollution, stockage, messages, apiInstance, robustesse, lireMarqueurs, delaiMs = 45_000 }) {
   const obs = {
     charge: false, appelsRpc: [], configure: null, canariRecu: false, texteDuCadre: '',
     xss: { executions: 0, lu: null, refus: null, erreur: null },
-    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null, droits: null, pollution: null, stockage: null, messages: null, apiInstance: null, hostileRecu: false, entetesPage: null,
+    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null, droits: null, pollution: null, stockage: null, messages: null, apiInstance: null, hostileRecu: false, entetesPage: null, erreursWidget: { total: 0, distinctes: [] }, robustesse: null,
     consoles: [], erreursPage: [], erreur: null,
   };
   const origineGrist = origineDe(base);
@@ -231,7 +232,16 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
     });
     // Ressources du widget que son propre serveur n'a pas trouvées (ex. `/grist-plugin-api.js` demandé à la racine) : la raison la plus courante d'un widget qui n'échange rien avec Grist.
     page.on('response', (r) => { try { if (r.status() >= 400 && origineDe(r.url()) === origineWidget && obs.introuvables.length < 10) obs.introuvables.push({ chemin: new URL(r.url()).pathname.slice(0, 120), statut: r.status() }); } catch { /* réponse sans adresse exploitable */ } });
-    page.on('pageerror', (e) => obs.erreursPage.push(String(e?.message ?? e).slice(0, 500)));
+    page.on('pageerror', (e) => {
+      const message = String(e?.message ?? e).slice(0, 500);
+      if (obs.erreursPage.length < 50) obs.erreursPage.push(message);
+      // Une erreur non rattrapée est celle du widget quand l'origine du widget figure dans sa pile ; celles de Grist, et de l'API que l'audit sert au widget, n'y figurent pas.
+      if (String(e?.stack ?? '').includes(origineWidget)) {
+        const w = obs.erreursWidget; w.total += 1;
+        const connue = w.distinctes.find((x) => x.message === message);
+        if (connue) connue.n += 1; else if (w.distinctes.length < 20) w.distinctes.push({ message, n: 1 });
+      }
+    });
 
     const travail = (async () => {
       const reponsePage = await page.goto(base + chemin, { waitUntil: 'load', timeout: Math.max(5000, delaiMs - 15_000) });
@@ -288,6 +298,17 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
         // Le widget a pu naviguer ailleurs en obéissant au message : la lecture du cadre échoue alors, les requêtes vues suffisent.
         const apres = await cadre.evaluate(() => ({ executions: window.__gw_msg || 0, forgeRecu: window.__gw?.forgeRecu || 0 })).catch(() => ({ cadreIllisible: true }));
         obs.messages = { ...envoi, ...apres, requetes: obs.requetesExternes.slice(avant).filter((r) => r.hote === messages.hote).length };
+      }
+      if (robustesse && cadre) {
+        // Le cadre répond-il encore ? Un cadre qui ne répond pas à un aller-retour trivial pendant 10 s est figé.
+        const mesurer = async () => {
+          const t0 = Date.now();
+          const reponseMs = await Promise.race([cadre.evaluate(() => 1).then(() => Date.now() - t0).catch(() => null), new Promise((r) => setTimeout(() => r(null), 10_000))]);
+          return { reponseMs, erreurs: obs.erreursWidget.total, distinctes: obs.erreursWidget.distinctes.map((d) => ({ ...d })) };
+        };
+        obs.robustesse = { apresChargement: await mesurer(), apresRafale: null, rafaleErreur: null };
+        try { await robustesse.rafale(); await page.waitForTimeout(2500); obs.robustesse.apresRafale = await mesurer(); }
+        catch (e) { obs.robustesse.rafaleErreur = String(e?.message ?? e).slice(0, 200); }
       }
       if (canaux && cadre) obs.canaux = await cadre.evaluate(kitCanaux, canaux).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       // En tout dernier : l'écriture d'une règle d'accès fait recharger la page par Grist, le cadre disparaît (l'échec d'`evaluate` qui s'ensuit est attendu).

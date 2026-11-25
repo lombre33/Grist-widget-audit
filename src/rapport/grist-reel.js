@@ -19,9 +19,11 @@ const ESSAIS_DU_CATALOGUE = 24;
 /** Ce que chaque essai tente, en une phrase. */
 const QUOI = {
   1: "On place dans une cellule du document un texte piégé (du code déguisé en donnée), puis on regarde si le widget l'exécute.",
+  2: "On ajoute à la table du widget des valeurs limites (cellule de 1 Mo, texte de droite à gauche, caractère nul, vide, null, HTML, pourcentage mal formé, 5 000 lignes) puis on compte les erreurs non rattrapées du widget et on regarde si son cadre répond encore.",
   3: "On ajoute au document des lignes dont le texte est piégé (JSON avec __proto__ ou constructor.prototype, chemin __proto__.clé) et on regarde si le widget, en les lisant, modifie les objets de base de JavaScript (pollution de prototype).",
   4: "Un cadre voisin sans aucun droit (comme un autre widget de la même page) envoie au widget des messages forgés ; on regarde si le widget les prend pour des ordres : exécution de code, appel d'une adresse donnée par le message.",
   5: "On appelle le widget avec une adresse qui affirme « access=full&readonly=false » alors que Grist lui accorde moins, et on compare ses appels à Grist (accès demandé, écritures tentées) avec ceux de l'adresse normale.",
+  6: "Le widget étant chargé, on envoie au document une rafale de changements (30 lots de 50 mises à jour, puis des ajouts et retraits de lignes) et on regarde si le widget lève de nouvelles erreurs non rattrapées ou se fige.",
   7: "On limite le widget au niveau d'accès « none » (aucune donnée) et on vérifie que Grist ne lui transmet rien.",
   8: "On joue, depuis l'intérieur du widget, ce que ferait du code étranger (une bibliothèque piégée) : lire la liste des tables, une table sans rapport avec le widget, les tables système.",
   9: "On joue ce que ferait ce code étranger pour obtenir un jeton d'accès, appeler directement l'API du document avec ce jeton, et l'essayer sur un autre document.",
@@ -59,6 +61,14 @@ function enClair(e) {
       return e.severite === 'critique'
         ? "Le texte piégé s'est exécuté dans le widget et a pu lire une autre table du document. Quiconque peut écrire dans le document peut donc faire agir du code avec les droits du widget."
         : "Le texte piégé s'est exécuté dans le widget, mais Grist a refusé qu'il lise une autre table. Le défaut est réel ; il deviendrait plus grave si l'accès accordé au widget était élargi.";
+    case 2:
+      return t === 'reussi'
+        ? "Avec des valeurs limites dans la table, le widget lève des erreurs non rattrapées ou se fige : quiconque peut écrire dans le document peut le faire tomber pour tous ceux qui l'ouvrent. Défaut mineur (pénalité faible)."
+        : "Le widget a reçu des valeurs limites (cellule de 1 Mo, texte de droite à gauche, caractère nul, vide, null, HTML, 5 000 lignes) sans erreur non rattrapée ni blocage. Ce n'est pas un essai de charge.";
+    case 6:
+      return t === 'reussi'
+        ? "Quand le document change beaucoup et vite, le widget lève de nouvelles erreurs non rattrapées ou se fige. Défaut mineur (pénalité faible) : un document très actif peut le faire tomber."
+        : "Après une rafale de changements, le widget n'a pas levé d'erreur nouvelle et son cadre répond. Ce n'est pas un essai de charge : ni fuite de mémoire ni boucle sans erreur ne sont mesurées.";
     case 3:
       return t === 'reussi'
         ? "En lisant des cellules piégées, le widget a modifié les objets de base de JavaScript : quiconque peut écrire dans le document peut changer le comportement du widget (pollution de prototype)."
