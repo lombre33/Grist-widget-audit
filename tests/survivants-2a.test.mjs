@@ -67,11 +67,13 @@ test('C03b : une destination qui ne se lit pas (URL invalide) n\'est pas un serv
   assert.deepEqual(analyserSortiesReseau(ctx).map((c) => c.titre), []);
 });
 
-test('C03b : les hôtes locaux ne sont pas des destinations, une IPv4 quelconque en est une', () => {
+test('C03b : les hôtes locaux ne sont pas des services externes (ils disent C-EXFIL-09, le poste local), une IPv4 quelconque en est un', () => {
   const ctx = { fichiers: [fichier('app.js', 'fetch("http://localhost:3000/a");\nfetch("http://127.0.0.1/b");\nfetch("https://widget.local/c");\nfetch("http://192.0.2.1/d");\n')], entrees: [] };
   const c = analyserSortiesReseau(ctx);
-  assert.equal(c.length, 1);
-  assert.match(c[0].titre, /192\.0\.2\.1/);
+  const externes = c.filter((x) => x.regle !== 'C-EXFIL-09');
+  assert.equal(externes.length, 1);
+  assert.match(externes[0].titre, /192\.0\.2\.1/);
+  assert.deepEqual(c.filter((x) => x.regle === 'C-EXFIL-09').map((x) => x.extrait), ['http://localhost:3000/a', 'http://127.0.0.1/b']);
 });
 
 // C05g ------------------------------------------------------------------------------------------------------------

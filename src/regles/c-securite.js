@@ -38,6 +38,13 @@ function hote(url) {
   try { return new URL(url, 'https://widget.local/').hostname; } catch { return null; }
 }
 const estLocal = (h) => !h || h === 'widget.local' || h === 'localhost' || h === '127.0.0.1';
+/** Une adresse écrite en entier (un schéma ou `//`) : relative, elle se lit contre le widget ; absolue, `localhost` désigne le poste de qui ouvre la page. */
+const estAbsolue = (url) => typeof url === 'string' && /^\s*(?:[a-z][a-z0-9+.-]*:|\/\/)/i.test(url);
+/** Le poste de qui ouvre le widget : `localhost`, le bouclage IPv4 (127.0.0.0/8) et IPv6, `0.0.0.0`. Un sous-domaine (`api.localhost`) reste jugé comme avant, un hôte nommé. */
+const estPosteLocal = (h) => typeof h === 'string' && /^(?:localhost|127(?:\.\d{1,3}){3}|\[::1?\]|0\.0\.0\.0)$/i.test(h);
+/** Des relais publics qui font passer une requête par un inconnu pour contourner CORS : domaine exact ou sous-domaine. */
+const PROXYS_CORS = ['corsproxy.io', 'allorigins.win', 'cors-anywhere.herokuapp.com', 'thingproxy.freeboard.io', 'cors.bridged.cc', 'crossorigin.me', 'yacdn.org', 'cors.eu.org', 'cors.sh'];
+const estProxyCors = (h) => typeof h === 'string' && PROXYS_CORS.some((d) => h === d || h.endsWith(`.${d}`));
 
 /** Mémorise un hôte externe réellement contacté, pour le contrôle croisé « documenté dans le README » de l'axe B (B-DOC-04). */
 function enregistrerDestination(ctx, h) {
@@ -74,6 +81,40 @@ function constatDocumentGrist({ unite, ligne, canal, h, document, cible }) {
   });
 }
 
+/**
+ * C-EXFIL-09 : le code appelle une adresse du poste de qui ouvre le widget (`http://localhost:11434/…`). Le plus souvent un reste de développement ; c'est aussi
+ * la manière dont un widget sonde les services locaux de l'agent. Jamais bloquant : un service local voulu (un modèle d'IA, un serveur MCP) s'écrit ainsi.
+ * Majeur seulement quand c'est du code qu'on charge de là, que tout programme qui écoute sur ce port peut remplacer.
+ */
+function constatPosteLocal({ unite, ligne, canal, h, cible, chargeDuCode }) {
+  return constat({
+    regle: 'C-EXFIL-09', axe: 'C', severite: chargeDuCode ? 'majeur' : 'mineur', bloquant: false, confiance: 'certain',
+    titre: `Appel vers un service du poste local (${h}) : ${canal}`,
+    fichier: unite.chemin, ligne, extrait: String(cible).slice(0, 200),
+    constat: `Le code appelle \`${String(cible).slice(0, 120)}\` (${canal}) : une adresse du poste de qui ouvre le widget (\`${h}\`), et non un serveur partagé.`,
+    impact: chargeDuCode
+      ? "Du code chargé depuis un serveur local s'exécute avec tous les privilèges du widget : quiconque contrôle ce port sur le poste de l'agent (un serveur de développement, un autre programme) contrôle le widget."
+      : "Chez chaque personne qui ouvre le widget, cet appel vise un service de son propre poste, non le vôtre : si rien n'écoute, l'appel échoue ; si quelque chose répond (un modèle d'IA local, une base, une interface d'administration), ses données entrent dans le widget. C'est le plus souvent un reste de développement, et c'est aussi ainsi qu'un widget sonde les services locaux de l'agent.",
+    remediation: "Retirer l'appel. Si un service local est voulu (un modèle d'IA ou un serveur MCP sur le poste), le dire dans le README : l'audit le signale, il ne le tient pas pour une fuite.",
+    referentiels: [REF_GUIDE, 'OWASP Top 10 A10:2021 — SSRF / flux sortants'],
+    preuve: { hote: h, canal, absolue: true },
+  });
+}
+
+/** C-EXFIL-10 : l'appel passe par un relais CORS public. Une information : l'appel est déjà signalé comme service externe (C-EXFIL-01). */
+function constatProxyCors({ unite, ligne, canal, h, cible }) {
+  return constat({
+    regle: 'C-EXFIL-10', axe: 'C', severite: 'info', bloquant: false, confiance: 'certain',
+    titre: `Appel par un relais CORS public : ${h}`,
+    fichier: unite.chemin, ligne, extrait: String(cible).slice(0, 200),
+    constat: `L'appel (${canal}) passe par \`${h}\`, un relais public qui contourne CORS : l'adresse réellement visée se lit dans la requête, et c'est le relais qui parle au service.`,
+    impact: "Un relais public voit tout ce qui passe (adresse, paramètres, réponse) et peut modifier la réponse que le widget reçoit : ce que le widget fait de cette réponse (affichage, `innerHTML`, `eval`) est alors à la merci d'un inconnu. Il peut aussi disparaître, ou être racheté.",
+    remediation: "Appeler le service directement s'il autorise CORS, ou héberger soi-même le relais ; documenter dans le README ce qui y transite.",
+    referentiels: [REF_GUIDE, 'OWASP Top 10 A10:2021 — SSRF / flux sortants'],
+    preuve: { hote: h, canal, relais: 'cors-public' },
+  });
+}
+
 /** Appels réseau sortants dans le code JavaScript exécuté. */
 export function analyserSortiesReseau(ctx) {
   const constats = [];
@@ -82,6 +123,11 @@ export function analyserSortiesReseau(ctx) {
   /** `protection` : pour un module chargé par son adresse, ce que `importsDistants` dit de l'empreinte qui le protège (fonction, calculée seulement si le constat est émis). */
   const signaler = ({ unite, ligne, canal, cible, dynamique, protection = null }) => {
     const h = hote(cible);
+    if (!dynamique && estPosteLocal(h) && estAbsolue(cible)) {   // une adresse locale écrite en entier : le poste de qui ouvre le widget, non le widget
+      const clePoste = `poste:${unite.chemin}:${ligne}:${canal}:${cible}`;
+      if (!vus.has(clePoste)) { vus.add(clePoste); constats.push(constatPosteLocal({ unite, ligne, canal, h, cible, chargeDuCode: CANAUX_DE_CODE.has(canal) || canal === 'importScripts()' })); }
+      return;
+    }
     if (estLocal(h) && !dynamique) return;                 // requête sur soi-même
     if (estGrist(h)) {                                     // API Grist : hors périmètre de ce constat, sauf un document précis écrit dans le code
       const document = documentGristVise(cible);
@@ -137,6 +183,7 @@ export function analyserSortiesReseau(ctx) {
       referentiels: [REF_GUIDE, 'RGPD art. 5 (minimisation)', 'OWASP Top 10 A10:2021 — SSRF / flux sortants'],
       ...(chargeDuCode && !dynamique ? { preuve: preuveDeChargement(cible) } : {}),
     }));
+    if (!dynamique && estProxyCors(h)) constats.push(constatProxyCors({ unite, ligne, canal, h, cible }));
   };
 
   pourChaqueUniteJs(ctx, { surfaceSeulement: true }, ({ ast, ligneDe, walk, unite }) => {
@@ -226,6 +273,10 @@ function signalerChargementExterne(ctx, f, e) {
   const cible = cibleReseau(urlDe(e.url, e.baseBrute, f.chemin));
   if (!cible) return constats;                                      // data:, blob:, about:, file: … : rien n'est chargé chez un tiers
   const h = cible.hostname;
+  if (estPosteLocal(h)) {                                           // `localhost` écrit en entier (ou une `<base>` qui y mène) : le poste de qui ouvre le widget
+    constats.push(constatPosteLocal({ unite: { chemin: f.chemin }, ligne: e.ligne, canal: `${e.type} de la page`, h, cible: e.balise ?? cible.href, chargeDuCode: Boolean(e.code) }));
+    return constats;
+  }
   if (estLocal(h)) return constats;                                 // relatif (widget.local) : pas une ressource tierce
   // Le code que sert un hôte Grist (`grist-plugin-api.js` compris, chargé depuis `docs.getgrist.com` comme le documente Grist) n'est pas un tiers : aucun constat.
   if (estGrist(h)) return constats;
@@ -379,6 +430,10 @@ export function analyserRessourcesExternes(ctx) {
       const cible = cibleReseau(urlDeCarte(e.url, e.baseBrute, f.chemin));
       if (!cible) continue;
       const h = cible.hostname;
+      if (estPosteLocal(h)) {
+        constats.push(constatPosteLocal({ unite: { chemin: f.chemin }, ligne: numeroLigne(f.contenu, e.index), canal: 'import map', h, cible: e.url, chargeDuCode: true }));
+        continue;
+      }
       if (estLocal(h) || estGrist(h)) continue;
       enregistrerDestination(ctx, h);
       constats.push(constat({
@@ -2251,6 +2306,11 @@ export function analyserScriptDynamique(ctx) {
 
       const { cible, dynamique } = destination(valeurNoeud);
       const h = hote(cible);
+      if (!dynamique && estPosteLocal(h) && estAbsolue(cible)) {
+        const clePoste = `poste:${unite.chemin}:${ligneDe(noeud)}:${nomVariable}`;
+        if (!vus.has(clePoste)) { vus.add(clePoste); constats.push(constatPosteLocal({ unite, ligne: ligneDe(noeud), canal: `${nomBalise} créé par le code`, h, cible, chargeDuCode: type === 'script' })); }
+        return;
+      }
       if (!dynamique && (estLocal(h) || estGrist(h))) return;
 
       const cle = `${unite.chemin}:${ligneDe(noeud)}:${nomVariable}`;
