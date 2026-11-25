@@ -353,7 +353,10 @@ async function npmAudit(racine) {
       fs.writeFileSync(path.join(npm.dossier, 'package.json'), JSON.stringify({ name: 'gwaudit-audit-isole', version: '0.0.0', private: true }));
     }
     const { stdout } = await npm.lancer(['audit', '--json', '--audit-level=info', '--registry', REGISTRE_NPM])
-      .catch((e) => ({ stdout: e.stdout || '' }));   // npm audit sort en code ≠ 0 dès qu'il trouve quelque chose
+      .catch((e) => {
+        if (e?.code === 'NPM_INTROUVABLE') throw e;   // npm n'a pas pu être lancé : un audit raté, qui dit pourquoi, non une sortie vide
+        return { stdout: e.stdout || '' };            // npm audit sort en code ≠ 0 dès qu'il trouve quelque chose
+      });
     return interpreterAudit(stdout);
   } catch (e) {
     return { erreur: String(e.message ?? e).slice(0, 200) };
