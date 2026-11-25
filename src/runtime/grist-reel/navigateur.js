@@ -103,6 +103,33 @@ async function entetesDe(reponse) {
   } catch { return null; }
 }
 
+/**
+ * Essai 14 : une pièce jointe HTML du document, servie par l'instance, s'exécute-t-elle sur l'origine de Grist ? Si oui, un widget qu'on y logerait lirait
+ * la page Grist qui l'encadre (`window.parent.document`) et en contournerait les niveaux d'accès. La charge ne fait que noter l'origine où elle s'exécute.
+ * Les en-têtes sont lus par une requête de l'outil ; le comportement, par un vrai navigateur muni de la session.
+ */
+export const PAGE_PIEGE_PIECE_JOINTE = '<!doctype html><meta charset="utf-8"><title>gwaudit</title><h1>gwaudit</h1><script>window.__gw_exec = location.origin;</script>';
+export async function jouerPieceJointe({ navigateur, base, cookies, docId, pieceId, delaiMs = 20_000 }) {
+  const url = `${base}/o/docs/api/docs/${docId}/attachments/${pieceId}/download`;
+  const sortie = { origineGrist: origineDe(base), statut: null, entetes: {}, telechargement: false, executeDans: null, affichee: false, erreur: null };
+  try {
+    const cookie = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
+    const r = await fetch(url, { headers: { cookie }, signal: AbortSignal.timeout(10_000) });
+    sortie.statut = r.status;
+    for (const k of ['content-type', 'content-disposition', 'content-security-policy', 'x-content-type-options']) { const v = r.headers.get(k); if (v) sortie.entetes[k] = v.slice(0, 300); }
+  } catch (e) { sortie.erreur = String(e?.message ?? e).slice(0, 200); return sortie; }
+  const contexte = await navigateur.newContext({ locale: 'fr-FR' });
+  try {
+    await contexte.addCookies(cookies.map((c) => ({ ...c, url: base })));
+    const page = await contexte.newPage();
+    page.on('download', (d) => { sortie.telechargement = true; d.cancel().catch(() => {}); });
+    try { await page.goto(url, { waitUntil: 'load', timeout: delaiMs }); sortie.affichee = true; }
+    catch (e) { if (/Download is starting/i.test(String(e?.message))) sortie.telechargement = true; else sortie.erreur = String(e?.message ?? e).slice(0, 200); }
+    if (sortie.affichee) { await page.waitForTimeout(1000); sortie.executeDans = await page.evaluate(() => (typeof window.__gw_exec === 'string' ? window.__gw_exec : null)).catch(() => null); }
+  } finally { await contexte.close().catch(() => {}); }
+  return sortie;
+}
+
 const hoteDe = (url) => { try { return new URL(url).hostname; } catch { return null; } };
 const origineDe = (url) => { try { return new URL(url).origin; } catch { return null; } };
 const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; return u.href; } catch { return url; } };
