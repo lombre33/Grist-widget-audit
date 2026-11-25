@@ -73,14 +73,27 @@ export const FORMATS = [
   { id: 'google', libelle: "clé d'API Google", indice: 'AIza', aleatoire: true, re: /\bAIza[0-9A-Za-z_-]{35}\b/g, publique: true },
   { id: 'stripe', libelle: 'clé publique Stripe', indice: 'pk_', aleatoire: true, re: /\bpk_(?:live|test)_[A-Za-z0-9]{16,512}\b/g, publique: true },
   { id: 'mapbox', libelle: 'jeton public Mapbox', indice: 'pk.eyJ', re: /\bpk\.eyJ[A-Za-z0-9_-]{10,16384}\.[A-Za-z0-9_-]{10,16384}\b/g, publique: true },
+  // Les clés des fournisseurs d'IA : ce qu'un balayage de dépôts publics cherche en premier (une clé volée se revend, ou se dépense). Chacune est un secret : un widget ne peut pas la détenir.
+  // `sk-ant-` : le type (`api03`, `admin01`, `oat01`) puis une longue suite à tirets et soulignés. Le dernier signe n'est jamais `\b` : la suite peut finir par `-` ou `_`.
+  { id: 'anthropic', libelle: "clé d'API Anthropic", indice: 'sk-ant-', aleatoire: true, re: /\bsk-ant-[a-z]{3,8}\d{2}-[A-Za-z0-9_-]{60,512}(?![A-Za-z0-9_-])/g },
+  // Les préfixes courts (`hf_`, `gsk_`, `r8_`) ouvrent aussi des identifiants de code : une suite de mots en casse mixte derrière eux (`hf_calculateTheTotalPrice…`) n'est pas une clé tirée au hasard.
+  { id: 'huggingface', libelle: 'jeton Hugging Face', indice: 'hf_', aleatoire: true, re: /\bhf_[A-Za-z0-9]{34}\b/g, valide: (t) => ressembleAuHasard(t.slice(3)) },
+  { id: 'groq', libelle: "clé d'API Groq", indice: 'gsk_', aleatoire: true, re: /\bgsk_[A-Za-z0-9]{52}\b/g, valide: (t) => ressembleAuHasard(t.slice(4)) },
+  { id: 'openrouter', libelle: "clé d'API OpenRouter", indice: 'sk-or-v1-', aleatoire: true, re: /\bsk-or-v1-[a-f0-9]{64}\b/g },
+  { id: 'xai', libelle: "clé d'API xAI", indice: 'xai-', aleatoire: true, re: /\bxai-[A-Za-z0-9]{80}\b/g },
+  { id: 'perplexity', libelle: "clé d'API Perplexity", indice: 'pplx-', aleatoire: true, re: /\bpplx-[A-Za-z0-9]{48}\b/g },
+  { id: 'replicate', libelle: "jeton Replicate", indice: 'r8_', aleatoire: true, re: /\br8_[A-Za-z0-9]{37}\b/g, valide: (t) => ressembleAuHasard(t.slice(3)) },
 ];
+
+/** Une suite tirée au hasard a au moins deux classes de caractères et n'est pas faite de mots (un identifiant en casse mixte, `calculateTheTotalPriceForTheCustomer`, l'est). */
+const ressembleAuHasard = (corps) => classesDe(corps) >= 2 && motsDeLaValeur(corps) === null;
 
 /**
  * Le début fixe d'une clé, celui qui dit son fournisseur, par opposition à ce que le fournisseur tire au hasard derrière lui : les
  * préfixes des formats ci-dessus, et ceux de clés que l'outil ne reconnaît pas encore comme un format (Stripe `sk_live_` et `sk_test_`,
  * Anthropic `sk-ant-`, Slack `xapp-`, les autres jetons GitHub). Ce qui les suit est jugé de la même façon, que la clé soit un format ou non.
  */
-const PREFIXE_DE_CLE = /^(?:AKIA|AIza|gh[pousr]_|github_pat_|xox[baprs]-|xapp-(?:\d+-)?|sk-(?:(?:proj|svcacct|admin)-|ant-(?:api\d+-)?)?|[sr]k_(?:live|test)_|pk_(?:live|test)_)/;
+const PREFIXE_DE_CLE = /^(?:AKIA|AIza|gh[pousr]_|github_pat_|xox[baprs]-|xapp-(?:\d+-)?|sk-(?:(?:proj|svcacct|admin)-|ant-(?:[a-z]+\d+-)?|or-v1-)?|[sr]k_(?:live|test)_|pk_(?:live|test)_|hf_|gsk_|xai-|pplx-|r8_)/;
 
 /**
  * Les valeurs d'un texte qui ont le format d'un fournisseur : `{ format, valeur, index, lu }`, dans l'ordre du texte. `lu` : ce que la valeur
@@ -420,6 +433,15 @@ export function masquerLesSecrets(texte, { code = true } = {}) {
       intervalles.push([debutDeValeur, debutDeValeur + valeur.length, masquer(valeur)]);
     }
   }
+  // `Authorization: 'Bearer <clé>'` : la clé d'un service dont le format n'est pas reconnu se masque comme le reste (même jugement que la règle, qui la signale).
+  if (code && /bearer|token/i.test(texte)) {
+    for (const m of texte.matchAll(PORTEUR_DANS_UN_TEXTE)) {
+      const valeur = m[1];
+      if (formatsDans(valeur).length || jugerValeur('authorization', valeur).verdict === 'aucun') continue;
+      const debut = m.index + m[0].length - valeur.length;
+      intervalles.push([debut, debut + valeur.length, masquer(valeur)]);
+    }
+  }
   if (!intervalles.length) return texte;
   intervalles.sort((a, b) => a[0] - b[0]);
   let sortie = '';
@@ -495,7 +517,7 @@ function constatDeNomValeur(f, ligne, forme, nomLu, valeur, jugement) {
 /* ------------------------------------------------------------------------------------------------------------------ */
 
 /** Un nom qui évoque un secret, où que ce soit dans un texte : le filtre qui évite de lire ce qui n'en parle pas. */
-const MOTIF_DE_SECRET = /secret|token|passw(?:or)?d|passphrase|mot[_-]?de[_-]?passe|api[_-]?key|(?:private|access|auth|master|signing|encryption)[_-]?key/i;
+const MOTIF_DE_SECRET = /secret|token|passw(?:or)?d|passphrase|mot[_-]?de[_-]?passe|api[_-]?key|(?:private|access|auth|master|signing|encryption)[_-]?key|authorization/i;
 const MOTIF_DE_SECRET_GLOBAL = new RegExp(MOTIF_DE_SECRET.source, 'gi');
 
 const VERROUS = /(^|\/)(package-lock\.json|yarn\.lock|pnpm-lock\.yaml)$/;
@@ -590,6 +612,15 @@ function nomDeMembre(noeud) {
 }
 
 /**
+ * Un en-tête qui porte une clé : `Authorization: 'Bearer <clé>'` (le schéma `Bearer` ou `Token`, puis la clé, d'au moins huit caractères sans blanc). Les mesures sont
+ * bornées : un blanc à la fois jusqu'à huit, une clé jusqu'à `APERCU`, de sorte que la lecture d'un texte de plusieurs Mio reste linéaire.
+ */
+const PORTEUR = /^(?:Bearer|Token)[ \t]{1,8}(\S{8,4096})$/i;
+/** Le même porteur, cherché dans un texte (un extrait de code) : la clé suit `Bearer` ou `Token`, de vingt caractères au moins, sans blanc ni guillemet. */
+const PORTEUR_DANS_UN_TEXTE = /\b(?:Bearer|Token)[ \t]{1,8}([A-Za-z0-9._~+/=-]{20,512})/gi;
+const estEnTeteDAutorisation = (nom) => typeof nom === 'string' && nom.length <= 32 && /^(?:proxy-)?authorization$/i.test(nom);
+
+/**
  * Chaque affectation d'un littéral à un nom : déclaration (`const apiKey = '…'`), propriété (`{ apiKey: '…' }`, clé
  * identifiant ou chaîne), affectation (`config.token = '…'`), valeur par défaut (`(token = '…') =>`), champ de classe. Ce
  * qui est dans une chaîne (le message d'erreur qui cite `token: 'ma-cle'`) n'est pas une affectation : il n'est pas dans
@@ -599,9 +630,17 @@ function affectationsDeCode(ast, walk) {
   const trouvees = [];
   // `nom` est `undefined` ou `null` quand l'arbre ne donne pas de nom lisible (un motif de déstructuration, une clé calculée) : `nomEvoqueUnSecret` dit non.
   const voir = (noeud, nom, valeur) => {
-    if (!nomEvoqueUnSecret(nom)) return;
-    const texte = chaineLitterale(valeur);
-    if (texte !== null) trouvees.push({ noeud, nom, valeur: texte });
+    // Le nom d'un en-tête d'autorisation n'évoque pas un secret : sa valeur, une fois le schéma (`Bearer`) ôté, en est un (la clé d'un service d'IA sans format reconnaissable).
+    const enTete = estEnTeteDAutorisation(nom);
+    if (!enTete && !nomEvoqueUnSecret(nom)) return;
+    let texte = chaineLitterale(valeur);
+    if (texte === null) return;
+    if (enTete) {
+      const porte = PORTEUR.exec(texte);
+      if (!porte) return;
+      texte = porte[1];
+    }
+    trouvees.push({ noeud, nom, valeur: texte });
   };
   walk.simple(ast, {
     VariableDeclarator(n) { voir(n, n.id.name, n.init); },

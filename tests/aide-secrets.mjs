@@ -31,6 +31,7 @@ export const PREFIXES_DE_CLE = [
   `xo${'xb-'}`, `xo${'xa-'}`, `xo${'xp-'}`, `xo${'xr-'}`, `xo${'xs-'}`, `xa${'pp-'}`, `xa${'pp-1-'}`,
   `sk${'-'}`, `sk${'-proj-'}`, `sk${'-svcacct-'}`, `sk${'-admin-'}`, `sk${'-ant-'}`, `sk${'-ant-api03-'}`,
   `sk${'_live_'}`, `sk${'_test_'}`, `rk${'_live_'}`, `rk${'_test_'}`, `pk${'_live_'}`, `pk${'_test_'}`,
+  `sk${'-or-v1-'}`, `hf${'_'}`, `gsk${'_'}`, `xai${'-'}`, `pplx${'-'}`, `r8${'_'}`,
 ];
 
 /** Les huit valeurs que la coordination a relevées comme de faux secrets critiques (v23) : chacune a la forme d'une clé et se voit fausse. */

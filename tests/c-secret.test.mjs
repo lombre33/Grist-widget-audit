@@ -43,7 +43,7 @@ const BASE32 = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const HEX = '0123456789abcdef';
 const generee = (n = 40) => tirer(n, ALNUM);
 
-/** Les sept formats de fournisseur qui sont des secrets (OpenAI sous ses deux formes : sans type et à type), assemblés à l'exécution. */
+/** Les formats de fournisseur qui sont des secrets (OpenAI sous ses deux formes : sans type et à type), assemblés à l'exécution. */
 const SECRETS = [
   { id: 'aws', libelle: "clé d'accès AWS", valeur: `AK${'IA'}${tirer(16, BASE32)}` },
   { id: 'github', libelle: 'jeton personnel GitHub', valeur: `gh${'p_'}${tirer(36, ALNUM)}` },
@@ -53,6 +53,14 @@ const SECRETS = [
   { id: 'slack', libelle: 'jeton Slack', valeur: `xo${'xb-'}1234567890-1234567890123-${tirer(24, ALNUM)}` },
   { id: 'pem', libelle: 'clé privée', valeur: `-----BEGIN RSA PRIVATE ${'KEY-----'}\\n${tirer(64, BASE64)}\\n-----END RSA PRIVATE KEY-----` },
   { id: 'jwt', libelle: 'jeton JWT', valeur: `eyJ${tirer(17, URL64)}.eyJ${tirer(40, URL64)}.${tirer(43, URL64)}` },
+  // Les clés des fournisseurs d'IA.
+  { id: 'anthropic', libelle: "clé d'API Anthropic", valeur: `sk${'-ant-api03-'}${tirer(93, URL64)}` },
+  { id: 'huggingface', libelle: 'jeton Hugging Face', valeur: `hf${'_'}${tirer(34, ALNUM)}` },
+  { id: 'groq', libelle: "clé d'API Groq", valeur: `gsk${'_'}${tirer(52, ALNUM)}` },
+  { id: 'openrouter', libelle: "clé d'API OpenRouter", valeur: `sk${'-or-v1-'}${tirer(64, HEX)}` },
+  { id: 'xai', libelle: "clé d'API xAI", valeur: `xai${'-'}${tirer(80, ALNUM)}` },
+  { id: 'perplexity', libelle: "clé d'API Perplexity", valeur: `pplx${'-'}${tirer(48, ALNUM)}` },
+  { id: 'replicate', libelle: 'jeton Replicate', valeur: `r8${'_'}${tirer(37, ALNUM)}` },
 ];
 const PUBLIQUES = [
   { id: 'google', libelle: "clé d'API Google", valeur: `AI${'za'}${tirer(35, URL64)}` },
@@ -627,8 +635,8 @@ test('les constats d\'un fichier sortent dans l\'ordre de ses lignes, le format 
 
 // --- Les mesures et les décisions, une à une ----------------------------------------------------------------------------------
 
-test('FORMATS : sept secrets et trois clés publiques, chacun avec son identifiant', () => {
-  assert.deepEqual(FORMATS.map((f) => `${f.id}${f.publique ? ' (publique)' : ''}`), ['aws', 'github', 'github-pat', 'openai', 'slack', 'pem', 'jwt', 'google (publique)', 'stripe (publique)', 'mapbox (publique)']);
+test('FORMATS : quatorze secrets et trois clés publiques, chacun avec son identifiant', () => {
+  assert.deepEqual(FORMATS.map((f) => `${f.id}${f.publique ? ' (publique)' : ''}`), ['aws', 'github', 'github-pat', 'openai', 'slack', 'pem', 'jwt', 'google (publique)', 'stripe (publique)', 'mapbox (publique)', 'anthropic', 'huggingface', 'groq', 'openrouter', 'xai', 'perplexity', 'replicate']);
   for (const { id, valeur } of [...SECRETS, ...PUBLIQUES]) assert.equal(formatsDans(`x ${valeur} y`).map((t) => t.format.id).join(), id, id);
 });
 

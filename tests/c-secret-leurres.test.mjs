@@ -187,14 +187,14 @@ test('un format de fournisseur dont la partie tirée au hasard se voit fausse n\
   assert.deepEqual(formatsDans(`AK${'IA'}${'X'.repeat(8)}${tirer(8, BASE32)}`).map((t) => t.format.id), ['aws']);
   assert.deepEqual(formatsDans(`gh${'p_'}${'x'.repeat(18)}${generee(18)}`).map((t) => t.format.id), ['github']);
   // Tous les formats dont le corps est tiré au hasard déclarent leur préfixe : un format qui l'oublierait ne verrait pas ses leurres.
-  assert.deepEqual(FORMATS.filter((f) => f.aleatoire).map((f) => f.id), ['aws', 'github', 'github-pat', 'openai', 'slack', 'google', 'stripe']);
+  assert.deepEqual(FORMATS.filter((f) => f.aleatoire).map((f) => f.id), ['aws', 'github', 'github-pat', 'openai', 'slack', 'google', 'stripe', 'anthropic', 'huggingface', 'groq', 'openrouter', 'xai', 'perplexity', 'replicate']);
   assert.deepEqual(FORMATS.filter((f) => !f.aleatoire).map((f) => f.id), ['pem', 'jwt', 'mapbox'], 'une clé privée, un JWT et un jeton Mapbox ont une structure, non un corps tiré au hasard');
   assert.ok(FORMATS.every((f) => typeof f.indice === 'string' && f.indice.length > 0), 'chaque format a son indice');
 });
 
 test('l\'indice d\'un format est ce que toute valeur du format contient : un texte qui ne le porte pas n\'est pas lu, un qui le porte l\'est', () => {
   for (const f of FORMATS) {
-    const exemples = { aws: `AK${'IA'}${tirer(16, BASE32)}`, github: `gh${'p_'}${generee(36)}`, 'github-pat': `github${'_pat_'}${generee(81)}`, openai: `sk${'-'}${generee(48)}`, slack: `xo${'xb-'}1234567890-${generee(24)}`, pem: `-----BEGIN PRIVATE ${'KEY-----'}\n${tirer(64, ALNUM)}`, jwt: `eyJ${tirer(17, ALNUM)}.eyJ${tirer(40, ALNUM)}.${tirer(43, ALNUM)}`, google: `AI${'za'}${tirer(35, ALNUM)}`, stripe: `pk${'_live_'}${generee(24)}`, mapbox: `pk.${'eyJ1Ijoi'}${tirer(30, ALNUM)}.${tirer(22, ALNUM)}` };
+    const exemples = { aws: `AK${'IA'}${tirer(16, BASE32)}`, github: `gh${'p_'}${generee(36)}`, 'github-pat': `github${'_pat_'}${generee(81)}`, openai: `sk${'-'}${generee(48)}`, slack: `xo${'xb-'}1234567890-${generee(24)}`, pem: `-----BEGIN PRIVATE ${'KEY-----'}\n${tirer(64, ALNUM)}`, jwt: `eyJ${tirer(17, ALNUM)}.eyJ${tirer(40, ALNUM)}.${tirer(43, ALNUM)}`, google: `AI${'za'}${tirer(35, ALNUM)}`, stripe: `pk${'_live_'}${generee(24)}`, mapbox: `pk.${'eyJ1Ijoi'}${tirer(30, ALNUM)}.${tirer(22, ALNUM)}`, anthropic: `sk${'-ant-api03-'}${tirer(93, `${ALNUM}_-`)}`, huggingface: `hf${'_'}${tirer(34, ALNUM)}`, groq: `gsk${'_'}${tirer(52, ALNUM)}`, openrouter: `sk${'-or-v1-'}${tirer(64, HEX)}`, xai: `xai${'-'}${tirer(80, ALNUM)}`, perplexity: `pplx${'-'}${tirer(48, ALNUM)}`, replicate: `r8${'_'}${tirer(37, ALNUM)}` };
     const valeur = exemples[f.id];
     assert.ok(valeur.includes(f.indice), `${f.id} : la valeur contient l'indice ${f.indice}`);
     assert.equal(formatsDans(valeur, [f]).length, 1, `${f.id} : reconnu`);
