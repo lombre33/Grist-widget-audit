@@ -22,6 +22,7 @@ const QUOI = {
   7: "On limite le widget au niveau d'accès « none » (aucune donnée) et on vérifie que Grist ne lui transmet rien.",
   8: "On joue, depuis l'intérieur du widget, ce que ferait du code étranger (une bibliothèque piégée) : lire la liste des tables, une table sans rapport avec le widget, les tables système.",
   9: "On joue ce que ferait ce code étranger pour obtenir un jeton d'accès, appeler directement l'API du document avec ce jeton, et l'essayer sur un autre document.",
+  10: "On joue ce que ferait ce code étranger pour modifier le document : ajouter des lignes, renommer ou supprimer une colonne, supprimer une table, créer une règle d'accès. L'audit relit ensuite le document pour voir ce qui a vraiment changé (sur des tables créées pour l'essai).",
   12: "On joue ce que ferait ce code étranger pour créer un webhook, une sortie permanente de données qui survivrait au retrait du widget.",
   21: "On sert à la même adresse chacune des bibliothèques du widget avec une ligne de plus, qui ne fait rien d'autre que se signaler, et on regarde si le navigateur l'exécute ou la refuse.",
   22: "On joue ce que ferait du code étranger dans le widget pour envoyer ce qu'il a lu vers l'extérieur : fetch, image, sendBeacon, WebSocket, balises, formulaire. Chaque tentative est interceptée ; on regarde lesquelles la politique de sécurité du widget laisse passer.",
@@ -61,6 +62,10 @@ function enClair(e) {
       return t === 'reussi'
         ? `Avec le niveau « ${e.niveau} », du code étranger dans le widget obtiendrait de Grist un jeton d'accès${e.ecriture ? ' avec écriture' : ''}, valable quelques minutes, et pourrait interroger directement l'API du document.${e.autreDocumentFerme ? " Grist refuse en revanche d'utiliser ce jeton sur un autre document." : ''} Mesure donnée à titre d'information, sans effet sur la note.`
         : "Du code piégé dans une bibliothèque ne pourrait pas se servir d'un jeton d'accès pour appeler l'API du document : un garde-fou l'a arrêté (nommé dans le détail).";
+    case 10:
+      return t === 'reussi'
+        ? `Avec le niveau « ${e.niveau} », du code étranger dans le widget pourrait modifier le document : ${(e.faits ?? []).join(', ')}. L'audit l'a constaté en relisant le document de test, pas sur la parole du widget. Mesure donnée à titre d'information, sans effet sur la note (le niveau demandé est déjà pesé par C-GRIST-03).`
+        : "Grist a refusé toute écriture à ce niveau : du code piégé dans une bibliothèque ne pourrait rien modifier dans le document.";
     case 12:
       return t === 'reussi'
         ? "Du code dans le widget a pu créer un webhook : il resterait en place après le retrait du widget et continuerait d'envoyer les modifications du document vers une adresse extérieure."

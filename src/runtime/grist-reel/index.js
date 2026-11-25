@@ -18,7 +18,7 @@ import { resoudreBibliotheques, alterer } from './bibliotheques.js';
 import { assurerGristDesktop, EPINGLE, InstallationImpossible } from './installateur.js';
 import { lancerInstance, InstanceImpossible } from './instance.js';
 import { creerClient } from './client.js';
-import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
+import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, verifierEcritures, HOTE_PUITS, HOTE_CANAUX, TABLES_SACRIFIEES } from './donnees.js';
 import { lancerChromium, jouerPhase } from './navigateur.js';
 import { evaluerEssais, constatIndisponible, ESSAIS_JOUES, ESSAIS_PAS_ENCORE } from './essais.js';
 import { bacASableChromium, resumerCauseErreur } from '../dynamique.js';
@@ -106,11 +106,18 @@ export async function auditGristReel(ctx, options = {}) {
       } else phases.alteration = { indisponible: "aucune des bibliothèques déclarées par le widget n'a pu être téléchargée (voir la liste des bibliothèques du rapport)" };
     }
 
-    // Essai 22 : par quelles voies du navigateur du code étranger dans le widget pourrait envoyer ce qu'il a lu ? Passe à part, au niveau que le widget demande.
+    // Dernière passe, au niveau que le widget demande : essai 22 (par quelles voies du navigateur du code étranger dans le widget pourrait envoyer ce
+    // qu'il a lu ?) puis essai 10 (qu'est-ce qu'il pourrait changer dans le document ?). Elle doit rester la dernière : l'écriture d'une règle d'accès
+    // modifie le document de test et fait recharger la page.
     if (obsNone.charge) {
       const niveau = phases.demande?.niveau ?? 'none';
-      journal(`  Phase ${phases.alteration ? 4 : 3} : les voies de sortie ouvertes à du code piégé dans le widget, au niveau « ${niveau} »…`);
-      phases.canaux = { niveau, obs: await jouerPhase({ ...commun, kit: undefined, canaux: { hote: HOTE_CANAUX, prefixe: jeu.prefixe } }) };
+      journal(`  Phase ${phases.alteration ? 4 : 3} : ce que du code piégé dans le widget pourrait envoyer et modifier, au niveau « ${niveau} »…`);
+      const obsFinale = await jouerPhase({ ...commun, kit: undefined, canaux: { hote: HOTE_CANAUX, prefixe: jeu.prefixe }, ecritures: TABLES_SACRIFIEES });
+      phases.canaux = { niveau, obs: obsFinale };
+      let serveur;
+      try { await new Promise((r) => setTimeout(r, 2500)); serveur = await verifierEcritures(client, doc); }
+      catch (e) { serveur = { erreur: resumerCauseErreur(e) }; }
+      phases.ecritures = { niveau, obs: obsFinale, serveur };
     }
 
     const { essais, constats } = evaluerEssais(phases, jeu);

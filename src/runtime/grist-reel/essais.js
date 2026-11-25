@@ -17,6 +17,8 @@
  * L'essai 21 (hors du catalogue de l'étude) répond à : si le CDN, ou quelqu'un qui en a pris le contrôle, sert un fichier modifié à la même
  * adresse, le widget l'exécute-t-il, ou une empreinte `integrity` l'arrête-t-elle ? Le fichier n'est modifié que par un marqueur inoffensif.
  *
+ * L'essai 10 (écritures) vise des tables sacrifiées, une par effet ; les effets sont relus côté serveur par l'audit (verifierEcritures).
+ *
  * L'essai 22 (hors du catalogue de l'étude) mesure les voies de sortie du navigateur que la politique de sécurité (CSP) du widget laisse ouvertes
  * à du code étranger : fetch, image, sendBeacon, WebSocket, balises, formulaire… Passe à part, vers un hôte factice distinct du puits.
  *
@@ -28,8 +30,8 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 7, 8, 9, 12, 13, 15, 16, 21, 22];
-export const ESSAIS_PAS_ENCORE = '2 à 6, 10, 11, 14, 17 à 20';
+export const ESSAIS_JOUES = [1, 7, 8, 9, 10, 12, 13, 15, 16, 21, 22];
+export const ESSAIS_PAS_ENCORE = '2 à 6, 11, 14, 17 à 20';
 
 /** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
 const CANAUX = [['fetch', 'fetch'], ['xhr', 'XMLHttpRequest'], ['image', 'image (balise img)'], ['beacon', 'sendBeacon'], ['websocket', 'WebSocket'], ['script', 'balise script'], ['iframe', 'cadre iframe'], ['feuille', 'feuille de style'], ['cssurl', 'image de fond CSS'], ['prefetch', 'préchargement (link prefetch)'], ['formulaire', 'formulaire envoyé']];
@@ -388,6 +390,40 @@ export function evaluerEssais(phases, jeu) {
         } else {
           essais.push(essai(22, titre, 'non_teste', `aucune voie n'a abouti et ${inconnus.length} sur ${CANAUX.length} n'ont donné ni requête vue ni blocage signalé (${inconnus.slice(0, 3).join(', ')}) : la mesure n'est pas fiable`, { niveau, etapes }));
         }
+      }
+    }
+  }
+
+  // --- 10. Écritures : ce que du code étranger dans le widget pourrait changer dans le document (effets relus côté serveur, jamais crus sur parole) ---
+  {
+    const w = phases.ecritures;
+    const titre = 'Dépendance piégée : écritures dans le document';
+    if (w) {
+      const niveau = w.niveau;
+      const k = w.obs?.ecritures ?? null;
+      const s = w.serveur ?? null;
+      const EFFETS = [['ajout', 'ajouter des lignes'], ['renom', 'renommer une colonne'], ['colonne', 'supprimer une colonne'], ['table', 'supprimer une table'], ['regle', "créer une règle d'accès"]];
+      const refusDe = (cle) => (k?.[cle]?.ok === false ? String(k[cle].erreur ?? '') : '');
+      const refuse = (cle) => /access not granted/i.test(refusDe(cle));
+      if (!w.obs?.charge) essais.push(essai(10, titre, 'non_teste', `le widget n'a pas été chargé pour cet essai (${resume(w.obs?.erreur)})`, { niveau }));
+      else if (!s || s.erreur) essais.push(essai(10, titre, 'non_teste', `l'état du document n'a pas pu être relu après l'essai${s?.erreur ? ` (${resume(s.erreur, 150)})` : ''}`, { niveau }));
+      else {
+        const etapes = EFFETS.map(([cle, libelle]) => ({ etape: libelle, ok: !!s[cle], ...(s[cle] ? {} : { barriere: refuse(cle) ? `refus de Grist au niveau « ${niveau} »` : (refusDe(cle) ? resume(refusDe(cle), 120) : 'aucun changement constaté dans le document') }) }));
+        const faits = EFFETS.filter(([cle]) => s[cle]).map(([, libelle]) => libelle);
+        if (faits.length) {
+          essais.push(essai(10, titre, 'reussi', `avec le niveau « ${niveau} », le code d'essai joué dans le widget a pu, d'après le document relu côté serveur : ${faits.join(' ; ')}`, { niveau, regle: 'D-REEL-10', severite: 'info', nature: 'rayon', etapes, faits }));
+          constats.push(constat({
+            regle: 'D-REEL-10', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            titre: `Avec le niveau « ${niveau} », du code étranger dans le widget pourrait modifier le document (${faits.join(', ')})`,
+            constat: `Du code exécuté dans le cadre du widget, comme le ferait une bibliothèque piégée, chargé par un vrai Grist (Grist Desktop, instance jetable) au niveau d'accès « ${niveau} », a pu : ${faits.join(' ; ')}. L'audit a relu le document de test côté serveur : ces effets y sont. Les essais visent des tables créées pour l'audit, jamais le document du widget.`,
+            impact: "Une bibliothèque compromise pourrait, avec le niveau accordé au widget, supprimer des tables, détruire des colonnes et modifier les règles d'accès du document (les fermer ou les ouvrir). Le niveau demandé est déjà pesé par C-GRIST-03 : cette mesure n'ajoute pas de pénalité. La reprise après de tels effets dépend de l'historique et des sauvegardes du document : elle n'est pas mesurée ici.",
+            remediation: "Ne demander que le niveau nécessaire (`read table` si le widget ne fait que lire) ; si `full` est indispensable, figer les bibliothèques (version et empreinte) ou les embarquer dans le dépôt, et sauvegarder régulièrement le document.",
+            referentiels: ['Principe du moindre privilège', 'OWASP Top 10 A08:2021 — Software and Data Integrity Failures'],
+            preuve: { niveau, etapes },
+          }));
+        } else if (k && !k.erreur && EFFETS.every(([cle]) => refuse(cle))) {
+          essais.push(essai(10, titre, 'bloque', `Grist a refusé au niveau « ${niveau} » toute écriture du code d'essai (ajout, renommage, suppression, règle d'accès) : le document n'a pas changé`, { niveau, barriere: "Grist (niveau d'accès)", etapes }));
+        } else essais.push(essai(10, titre, 'non_teste', `aucun changement dans le document, et Grist n'a pas signalé de refus pour chaque écriture${k?.erreur ? ` (${resume(k.erreur, 120)})` : ''} : l'essai ne prouve rien`, { niveau, etapes }));
       }
     }
   }

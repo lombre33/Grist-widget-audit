@@ -123,3 +123,28 @@ export async function kitCanaux(p) {
   await new Promise((r) => setTimeout(r, 800));
   return { tentatives, violations, reseau };
 }
+
+/**
+ * Les écritures : ce que du code étranger dans le cadre du widget pourrait changer dans le document avec le niveau d'accès accordé. Chaque
+ * effet vise sa propre table sacrifiée (voir TABLES_SACRIFIEES dans donnees.js) ; l'audit vérifie ensuite côté serveur ce qui a changé, il ne
+ * croit pas ce que cette fonction rapporte. L'écriture d'une règle d'accès est la dernière : Grist recharge alors la page, le cadre disparaît et
+ * `evaluate` échoue : c'est attendu.
+ *
+ * Fonction autonome : Playwright la sérialise, elle ne peut rien utiliser qui soit défini hors d'elle.
+ * @param {{ajout: string, renom: string, colonne: string, table: string, regle: string}} p identifiants des tables sacrifiées
+ */
+export async function kitEcritures(p) {
+  const court = (m) => String((m && m.message) || m).replace(/\s+/g, ' ').slice(0, 200);
+  const sortie = { grist: !!(window.grist && window.grist.docApi) };
+  if (!sortie.grist) return sortie;
+  const agir = async (actions) => {
+    try { await Promise.race([window.grist.docApi.applyUserActions(actions), new Promise((_, rejet) => setTimeout(() => rejet(new Error('délai dépassé')), 8000))]); return { ok: true }; }
+    catch (e) { return { ok: false, erreur: court(e) }; }
+  };
+  sortie.ajout = await agir([['AddRecord', p.ajout, null, { Valeur: 'ajout-audit', Autre: 'x' }]]);
+  sortie.renom = await agir([['RenameColumn', p.renom, 'Valeur', 'ValeurRenommee']]);
+  sortie.colonne = await agir([['RemoveColumn', p.colonne, 'Autre']]);
+  sortie.table = await agir([['RemoveTable', p.table]]);
+  sortie.regle = await agir([['AddRecord', '_grist_ACLResources', -1, { tableId: p.regle, colIds: '*' }], ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: '', permissionsText: '-R', rulePos: 100 }]]);
+  return sortie;
+}

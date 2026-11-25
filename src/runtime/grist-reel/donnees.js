@@ -20,6 +20,12 @@ export const HOTE_PUITS = 'puits.gwaudit.invalid';
 /** Hôte factice des essais de canaux de sortie (essai 22) : distinct du puits, pour que ces requêtes ne se mêlent jamais à celles de l'essai 1 ou 13. */
 export const HOTE_CANAUX = 'canaux.gwaudit.invalid';
 
+/**
+ * Les tables sacrifiées de l'essai 10 (écritures destructrices) : une par effet à mesurer, pour que l'audit vérifie chaque effet côté serveur, sans
+ * croire ce que le widget rapporte. Chacune a deux colonnes (`Valeur`, `Autre`) et une ligne ; la table `regle` reçoit une règle d'accès.
+ */
+export const TABLES_SACRIFIEES = { ajout: 'GwauditEcrAjout', renom: 'GwauditEcrRenom', colonne: 'GwauditEcrColonne', table: 'GwauditEcrTable', regle: 'GwauditEcrRegle' };
+
 /** Un identifiant Grist valide à partir d'un nom de colonne ou de table (Grist retire le `_` initial et les caractères hors [A-Za-z0-9_]). */
 function idGrist(nom, parDefaut) {
   const propre = String(nom).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+/, '');
@@ -105,6 +111,11 @@ export async function creerDocument(client, jeu) {
   await client.creerTable(docId, jeu.appat.id, jeu.appat.colonnes);
   await client.ajouterLignes(docId, jeu.appat.id, jeu.appat.libelles.map((l) => ({ Libelle: l })));
 
+  for (const id of Object.values(TABLES_SACRIFIEES)) {
+    await client.creerTable(docId, id, [{ id: 'Valeur', type: 'Text' }, { id: 'Autre', type: 'Text' }]);
+    await client.ajouterLignes(docId, id, [{ Valeur: 'a', Autre: 'b' }]);
+  }
+
   const t = await client.sql(docId, 'select id from _grist_Tables where tableId = ?', [jeu.table.id]);
   const tableRef = t.records[0].fields.id;
   const cols = await client.sql(docId, 'select id, colId from _grist_Tables_column where parentId = ?', [tableRef]);
@@ -163,4 +174,26 @@ export function proposerCorrespondance(declarees, doc, jeu) {
     mapping[nom] = (typeof d === 'object' && d.allowMultiple) ? [ref] : ref;
   }
   return Object.keys(mapping).length ? mapping : null;
+}
+
+/**
+ * Ce que l'écriture du widget a réellement changé dans le document, lu par l'audit côté serveur (jamais d'après ce que le widget rapporte).
+ * À appeler après la passe des écritures (voir kit.js, kitEcritures). Chaque valeur : true = l'effet est dans le document, false = non.
+ * @returns {Promise<{ajout: boolean, renom: boolean, colonne: boolean, table: boolean, regle: boolean}>}
+ */
+export async function verifierEcritures(client, doc) {
+  const lire = async (requete, args = []) => (await client.sql(doc.docId, requete, args)).records.map((r) => r.fields);
+  const T = TABLES_SACRIFIEES;
+  const colonnes = async (tableId) => (await lire('select c.colId from _grist_Tables_column c join _grist_Tables t on c.parentId = t.id where t.tableId = ?', [tableId])).map((x) => x.colId);
+  const tables = (await lire('select tableId from _grist_Tables')).map((x) => x.tableId);
+  const lignes = (await lire(`select count(*) as n from "${T.ajout}"`))[0]?.n;
+  const colRenom = await colonnes(T.renom); const colColonne = await colonnes(T.colonne);
+  const regles = await lire('select r.permissionsText as p from _grist_ACLRules r join _grist_ACLResources res on r.resource = res.id where res.tableId = ?', [T.regle]);
+  return {
+    ajout: lignes === 2,
+    renom: colRenom.includes('ValeurRenommee') && !colRenom.includes('Valeur'),
+    colonne: colColonne.includes('Valeur') && !colColonne.includes('Autre'),
+    table: !tables.includes(T.table),
+    regle: regles.some((r) => r.p === '-R'),
+  };
 }

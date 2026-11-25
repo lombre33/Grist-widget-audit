@@ -112,7 +112,7 @@ test('bout en bout : à « full » du code étranger lit tout le document et obt
   assert.equal(e(9).resultat, 'reussi', e(9).detail);
   assert.equal(e(9).autreDocumentFerme, true, "le jeton n'a pas ouvert l'autre document de l'instance");
   assert.equal(e(12).resultat, 'bloque', e(12).detail);
-  assert.deepEqual(full.constats.map((c) => c.regle).sort(), ['D-REEL-08', 'D-REEL-09', 'D-REEL-22']);
+  assert.deepEqual(full.constats.map((c) => c.regle).sort(), ['D-REEL-08', 'D-REEL-09', 'D-REEL-10', 'D-REEL-22']);
   assert.ok(full.constats.every((c) => c.severite === 'info'), 'rien de ce qui précède ne pèse sur la note');
 
   const lecture = await auditGristReel(construireContexte(path.join(RACINE, 'tests/fixtures/widget-grist-reel-sain')), {});
