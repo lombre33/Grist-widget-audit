@@ -22,6 +22,11 @@
  * L'essai 22 (hors du catalogue de l'étude) mesure les voies de sortie du navigateur que la politique de sécurité (CSP) du widget laisse ouvertes
  * à du code étranger : fetch, image, sendBeacon, WebSocket, balises, formulaire… Passe à part, vers un hôte factice distinct du puits.
  *
+ * Les essais 2 et 6 (robustesse) chargent le widget avec, dans sa table, des valeurs limites (cellule de 1 Mo, texte de droite à gauche, caractère nul, émoji composé,
+ * vide, null, HTML, pourcentage mal formé, colonne « Any » avec liste, erreur et dates invalides, 5 000 lignes), puis lui envoient une rafale de changements. Ils comptent les
+ * erreurs non rattrapées du widget (celles dont la pile passe par son origine, et qu'il n'avait pas dans les autres passes) et regardent si son cadre répond encore (10 s).
+ * Ce n'est pas un essai de charge : ni fuite de mémoire ni boucle sans erreur ne sont mesurées. Un constat mineur, jamais bloquant.
+ *
  * L'essai 14 dépose dans le document de test une pièce jointe HTML (qui ne fait que noter l'origine où elle s'exécute) et la charge dans le navigateur, avec la
  * session : si Grist la servait en page, sur son origine, un widget logé là lirait la page Grist qui l'encadre et contournerait les niveaux d'accès. Mesure de
  * Grist, pas du widget (l'audit sert toujours le widget sur une autre origine) : jamais de pénalité.
@@ -41,8 +46,8 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 3, 4, 5, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
-export const ESSAIS_PAS_ENCORE = '2, 6, 11';
+export const ESSAIS_JOUES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
+export const ESSAIS_PAS_ENCORE = '11';
 
 /** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
 const CANAUX = [['fetch', 'fetch'], ['xhr', 'XMLHttpRequest'], ['image', 'image (balise img)'], ['beacon', 'sendBeacon'], ['websocket', 'WebSocket'], ['script', 'balise script'], ['iframe', 'cadre iframe'], ['feuille', 'feuille de style'], ['cssurl', 'image de fond CSS'], ['prefetch', 'préchargement (link prefetch)'], ['formulaire', 'formulaire envoyé']];
@@ -649,6 +654,68 @@ export function evaluerEssais(phases, jeu) {
           }));
         } else {
           essais.push(essai(24, titre, 'rien_observe', `le widget n'a écrit dans le document à aucun moment de son chargement${refusees.length ? ` (${refusees.length} tentative(s) d'écriture refusée(s) par Grist au niveau « ${niveau} »)` : ''}`, { niveau }));
+        }
+      }
+    }
+  }
+
+  // --- 2 et 6. Robustesse : valeurs limites dans la table (2), puis rafale de changements (6) ; erreurs non rattrapées du widget et cadre figé ---
+  {
+    const r = phases.robustesse;
+    const t2 = 'Valeurs limites dans la table : le widget tient-il ?';
+    const t6 = 'Rafale de changements : le widget tient-il ?';
+    if (r) {
+      const niveau = r.niveau;
+      const o = r.obs;
+      const rb = o?.robustesse;
+      // Les erreurs que le widget lève déjà dans les autres passes (sans valeur limite) ne sont pas celles de cet essai.
+      const connus = new Set([phases.demande?.obs ?? phases.none, phases.alteration?.obs].filter(Boolean).flatMap((x) => (x.erreursWidget?.distinctes ?? []).map((d) => d.message)));
+      const liste = (ds) => ds.slice(0, 3).map((d) => `« ${resume(d.message, 100)} » (${d.n} fois)`).join(' ; ');
+      const non = (raison) => { essais.push(essai(2, t2, 'non_teste', raison, { niveau }), essai(6, t6, 'non_teste', raison, { niveau })); };
+      if (r.indisponible) non(r.indisponible);
+      else if (!o?.charge) non(`le widget n'a pas été chargé pour cet essai (${resume(o?.erreur)})`);
+      else if (!o.canariRecu) non(`aucune donnée du document n'est arrivée au widget au niveau « ${niveau} » : aucune valeur limite ne lui a été présentée`);
+      else if (!rb?.apresChargement) non("la réponse du widget n'a pas pu être mesurée");
+      else {
+        const ch = rb.apresChargement;
+        const figeCharge = ch.reponseMs === null;
+        const nouvellesCharge = ch.distinctes.filter((d) => !connus.has(d.message));
+        // Essai 2
+        if (figeCharge || nouvellesCharge.length) {
+          const faits = [...(nouvellesCharge.length ? [`${nouvellesCharge.reduce((n, d) => n + d.n, 0)} erreur(s) non rattrapée(s) : ${liste(nouvellesCharge)}`] : []), ...(figeCharge ? ["son cadre ne répondait plus au bout de 10 s"] : [])];
+          essais.push(essai(2, t2, 'reussi', `avec des valeurs limites dans la table (${r.lignes} lignes), le widget : ${faits.join(' ; ')}`, { niveau, regle: 'D-REEL-02', severite: 'mineur', nature: 'comportement', erreurs: nouvellesCharge.slice(0, 5), fige: figeCharge }));
+          constats.push(constat({
+            regle: 'D-REEL-02', axe: 'D', severite: 'mineur', bloquant: false, confiance: 'prouve',
+            titre: figeCharge ? 'Le widget se fige avec des valeurs limites dans la table' : 'Le widget lève des erreurs non rattrapées avec des valeurs limites dans la table',
+            constat: `Dans un vrai Grist (Grist Desktop, instance jetable), au niveau d'accès « ${niveau} », la table du widget a reçu ${r.lignes} lignes aux valeurs limites (cellule de 1 Mo, texte de droite à gauche, caractère nul, émoji composé, vide, null, HTML, pourcentage mal formé, et pour un widget qui lit toute la table : liste, erreur, date invalide). Le widget : ${faits.join(' ; ')}. Les autres passes, sans ces valeurs, n'ont pas produit ces erreurs.`,
+            impact: "Une personne qui peut écrire dans le document peut y poser de telles valeurs : le widget s'arrête de s'afficher ou se fige pour tous ceux qui ouvrent le document (déni de service du widget). Les erreurs de bibliothèques tierces ne sont pas attribuées au widget : seules celles dont la pile passe par son code le sont.",
+            remediation: "Traiter chaque valeur comme non fiable : tester `null`, le texte vide, les types inattendus (liste, erreur) avant de s'en servir, entourer le décodage et l'analyse (`decodeURIComponent`, `JSON.parse`, dates) de `try/catch`, limiter ce qui est affiché d'une cellule très longue.",
+            referentiels: ['CWE-248 (Uncaught Exception)', 'CWE-20 (Improper Input Validation)'],
+            preuve: { niveau, lignes: r.lignes, erreurs: nouvellesCharge.slice(0, 5), fige: figeCharge },
+          }));
+        } else essais.push(essai(2, t2, 'rien_observe', `le widget a reçu ${r.lignes} lignes aux valeurs limites (cellule de 1 Mo, texte de droite à gauche, caractère nul, vide, null, HTML, pourcentage mal formé) sans erreur non rattrapée ni blocage ; il ne s'agit pas d'un essai de charge`, { niveau }));
+        // Essai 6
+        if (rb.rafaleErreur) essais.push(essai(6, t6, 'non_teste', `la rafale n'a pas pu être envoyée au document (${resume(rb.rafaleErreur, 150)})`, { niveau }));
+        else if (figeCharge) essais.push(essai(6, t6, 'non_teste', "le cadre du widget était déjà figé avant la rafale (voir l'essai 2) : elle n'aurait rien appris", { niveau }));
+        else if (!rb.apresRafale) essais.push(essai(6, t6, 'non_teste', "la réponse du widget après la rafale n'a pas pu être mesurée", { niveau }));
+        else {
+          const ap = rb.apresRafale;
+          const dejaVus = new Set(ch.distinctes.map((d) => d.message));
+          const nouvelles = ap.distinctes.filter((d) => !connus.has(d.message) && !dejaVus.has(d.message));
+          const figeRafale = ap.reponseMs === null;
+          if (figeRafale || nouvelles.length) {
+            const faits = [...(nouvelles.length ? [`${nouvelles.reduce((n, d) => n + d.n, 0)} erreur(s) non rattrapée(s) nouvelle(s) : ${liste(nouvelles)}`] : []), ...(figeRafale ? ["son cadre ne répondait plus au bout de 10 s"] : [])];
+            essais.push(essai(6, t6, 'reussi', `après une rafale de changements du document (30 lots de 50 mises à jour, puis des ajouts et retraits de lignes), le widget : ${faits.join(' ; ')}`, { niveau, regle: 'D-REEL-06', severite: 'mineur', nature: 'comportement', erreurs: nouvelles.slice(0, 5), fige: figeRafale }));
+            constats.push(constat({
+              regle: 'D-REEL-06', axe: 'D', severite: 'mineur', bloquant: false, confiance: 'prouve',
+              titre: figeRafale ? 'Le widget se fige quand le document change beaucoup et vite' : 'Le widget lève des erreurs non rattrapées quand le document change beaucoup et vite',
+              constat: `Dans un vrai Grist (Grist Desktop, instance jetable), au niveau d'accès « ${niveau} », le document a reçu une rafale de changements (30 lots de 50 mises à jour envoyés ensemble, puis dix ajouts et retraits de lignes). Le widget : ${faits.join(' ; ')}. Ces erreurs n'existaient pas avant la rafale.`,
+              impact: "Un document très actif (import, formules, plusieurs personnes qui saisissent) peut faire tomber ou figer le widget. Ce n'est pas un essai de charge : ni fuite de mémoire ni boucle sans erreur ne sont mesurées.",
+              remediation: "Rendre le traitement d'une mise à jour réentrant et rapide : ne pas accumuler d'écouteurs ni de minuteries à chaque mise à jour, regrouper les mises à jour fréquentes (anti-rebond), rattraper les erreurs de chaque rappel.",
+              referentiels: ['CWE-248 (Uncaught Exception)', 'CWE-400 (Uncontrolled Resource Consumption)'],
+              preuve: { niveau, erreurs: nouvelles.slice(0, 5), fige: figeRafale },
+            }));
+          } else essais.push(essai(6, t6, 'rien_observe', 'après une rafale de changements du document (30 lots de 50 mises à jour, puis des ajouts et retraits de lignes), le widget n\'a levé aucune erreur nouvelle non rattrapée et son cadre répond ; ce n\'est pas un essai de charge (ni fuite de mémoire ni boucle sans erreur mesurées)', { niveau }));
         }
       }
     }

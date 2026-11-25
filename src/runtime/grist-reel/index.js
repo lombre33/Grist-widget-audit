@@ -18,7 +18,7 @@ import { resoudreBibliotheques, alterer } from './bibliotheques.js';
 import { assurerGristDesktop, EPINGLE, InstallationImpossible } from './installateur.js';
 import { lancerInstance, InstanceImpossible } from './instance.js';
 import { creerClient } from './client.js';
-import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, verifierEcritures, ajouterDonneesHostiles, HOTE_PUITS, HOTE_CANAUX, HOTE_MESSAGES, CLES_POLLUTION, TABLES_SACRIFIEES } from './donnees.js';
+import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, verifierEcritures, ajouterDonneesHostiles, ajouterDonneesLimites, retirerDonneesLimites, rafaleDeChangements, HOTE_PUITS, HOTE_CANAUX, HOTE_MESSAGES, CLES_POLLUTION, TABLES_SACRIFIEES } from './donnees.js';
 import { lancerChromium, jouerPhase, jouerPieceJointe, PAGE_PIEGE_PIECE_JOINTE } from './navigateur.js';
 import { evaluerEssais, constatIndisponible, ESSAIS_JOUES, ESSAIS_PAS_ENCORE } from './essais.js';
 import { bacASableChromium, resumerCauseErreur } from '../dynamique.js';
@@ -130,6 +130,20 @@ export async function auditGristReel(ctx, options = {}) {
         const pieceId = await client.televerser(doc.docId, 'gwaudit-piege.html', 'text/html', PAGE_PIEGE_PIECE_JOINTE);
         phases.pieceJointe = await jouerPieceJointe({ navigateur, base: instance.base, cookies: client.cookiesNavigateur(), docId: doc.docId, pieceId });
       } catch (e) { phases.pieceJointe = { depotImpossible: resumerCauseErreur(e) }; }
+    }
+
+    // Essais 2 et 6 : des valeurs limites dans la table (1 Mo, droite à gauche, nul, listes, erreurs, 5 000 lignes), puis une rafale de changements, le widget étant chargé au niveau qu'il demande.
+    // Les lignes et la colonne ajoutées sont retirées ensuite : la dernière passe retrouve la table telle que les autres essais l'ont connue.
+    if (obsNone.charge) {
+      const niveau = phases.demande?.niveau ?? 'none';
+      journal(`  Phase ${++numero} : valeurs limites dans la table, puis une rafale de changements, au niveau « ${niveau} »…`);
+      let limites = null;
+      try { limites = await ajouterDonneesLimites(client, doc, jeu); if (!limites) phases.robustesse = { indisponible: "la table de test n'a aucune colonne texte où poser les valeurs limites" }; }
+      catch (e) { phases.robustesse = { indisponible: `Grist a refusé les valeurs limites (${resumerCauseErreur(e)})` }; }
+      if (limites) {
+        try { phases.robustesse = { niveau, lignes: limites.lignes, obs: await jouerPhase({ ...commun, kit: undefined, delaiMs: 90_000, robustesse: { rafale: () => rafaleDeChangements(client, doc, jeu) } }) }; }
+        finally { await retirerDonneesLimites(client, doc, jeu, limites).catch((e) => journal(`  Valeurs limites non retirées (${resumerCauseErreur(e)}) : la dernière passe les verra.`)); }
+      }
     }
 
     // Dernière passe, au niveau que le widget demande : essai 3 (des données hostiles font-elles ajouter une clé aux prototypes du widget ?), essai 4 (des messages forgés par un cadre voisin), essai 20 (l'API de l'instance appelée avec la session), essais 17 et 18 (quels droits du navigateur Grist donne au cadre), essai 22 (par quelles voies du
