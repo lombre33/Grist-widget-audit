@@ -451,6 +451,25 @@ qui n'a pas pu être lu (option, registre injoignable, paquet hors registre
 public) est écrit « non mesuré ». Complété par la vérification de la licence du dépôt — condition
 de fait pour qu'un fork par l'équipe Grist.Gouv soit juridiquement possible.
 
+Paquets inventés, tout neufs, ou déjà connus pour nuire (E-DEP-08 à E-DEP-10, E-VULN-03, E-VULN-04). Un assistant
+d'IA recommande de temps en temps un paquet qui n'existe pas, et rien n'empêche quelqu'un de publier ce nom
+ensuite (« slopsquatting ») ; les vers npm, eux, déposent des versions piégées que l'on retire au bout de
+quelques jours. Les dates du registre npm (lu comme pour E-DEP-07, même coupure `--sans-reseau`) disent
+donc trois choses : le registre ne connaît pas le nom (E-DEP-08, majeur et jamais bloquant, mineur pour un
+nom à portée qui peut être privé ; un registre qui répond « introuvable » à tout n'est pas cru, un paquet
+témoin est demandé), le paquet a été créé il y a moins de 90 jours (E-DEP-09, mineur à vérifier), la version
+verrouillée ou figée dans l'adresse a été publiée il y a moins de 7 jours (E-DEP-10, mineur à vérifier). Ces
+trois constats portent sur les dépendances de production du `package.json` et sur les bibliothèques
+chargées de loin sous un nom npm (esm.sh, unpkg, jsDelivr/npm, Skypack, jspm) ; pas sur cdnjs, `gh/` ni `jsr/`,
+dont les noms ne sont pas ceux de npm. OSV.dev (https://osv.dev), base ouverte qui réunit les avis de GitHub
+et les paquets signalés malveillants, est interrogé pour ce que `npm audit` ne voit pas : les bibliothèques
+chargées de loin dont le nom et la version exacte se lisent dans l'adresse (E-VULN-03, de la gravité
+publiée ; critique et bloquant pour critical et high, comme `npm audit`) et, parmi les paquets verrouillés,
+ceux que la base signale malveillants (E-VULN-04, critique bloquant) ; les avis ordinaires des paquets
+verrouillés restent à `npm audit`. Les bibliothèques embarquées ne sont pas interrogées : leur nom, lu
+dans un en-tête, n'est pas certain, et une version mal identifiée donnerait un faux avis. OSV qui ne répond
+pas est écrit « non mesuré » dans E-DEP-07, jamais « aucun avis ».
+
 Ce que `npm install` lance et d'où il télécharge (E-INSTALL, E-VERROU) : quiconque
 installe un dépôt exécute les scripts d'installation du dépôt et de ses dépendances,
 canal des vers qui se propagent de paquet en paquet, et le fichier de verrouillage dit

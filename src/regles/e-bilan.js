@@ -14,12 +14,20 @@
  */
 import { constat } from '../moteur/modele.js';
 import { estDuRegistre, interrogerRegistre, resumerPublications, MAX_INTERROGEES, SEUIL_ANCIENNETE_MOIS } from './e-registre.js';
+import { constatsPaquetsSuspects, estVersionExacte } from './e-paquets.js';
+import { paquetNpmDeAdresse } from '../moteur/bibliotheque.js';
+import { interrogerOsv, constatsOsv, cleDe, MAX_PAQUETS as MAX_OSV } from './e-osv.js';
+import { REGISTRE_NPM } from './npm-isole.js';
 
 /** Bornes d'un rapport lisible et d'un verrou hostile : un nom ou une version est coupé, les listes sont bornées (le total exact est gardé). */
 const LONGUEUR_MAX = 100;
 const MAX_DEPENDANCES = 200;
 const MAX_DEPRECIEES = 100;
 const MAX_NOMMEES = 8;
+/** Les bibliothèques chargées de loin (esm.sh, unpkg…) dont le nom est lu au registre, en plus des dépendances de production. */
+const MAX_DISTANTES = 15;
+/** Un paquet qui existe, interrogé quand le registre répond « introuvable » à tout : si lui aussi est introuvable, le registre n'est pas cru (E-DEP-08). */
+const CANARI = 'lodash';
 
 const court = (valeur) => String(valeur ?? '').slice(0, LONGUEUR_MAX);
 const nombre = (n, un, plusieurs) => `${n} ${n > 1 ? plusieurs : un}`;
@@ -71,9 +79,10 @@ const enumerer = (noms) => noms.slice(0, MAX_NOMMEES).join(', ') + (noms.length 
  * @param {Array} constatsE les constats de l'axe E déjà produits (CDN : E-DEP-01, embarquées : E-DEP-02, `npm audit` : E-VULN-*)
  * @param {{reseau?: boolean}} [options] `reseau: false` (`--sans-reseau`) : le registre npm n'est pas interrogé
  * @param {(noms: string[]) => Promise<Map>} [lire] la lecture du registre ; les essais en fournissent une sans réseau
- * @returns {Promise<Array>} un constat E-DEP-07, ou rien quand le widget n'a aucune dépendance
+ * @param {typeof interrogerOsv} [osv] la lecture d'OSV.dev (`e-osv.js`) ; les essais en fournissent une sans réseau
+ * @returns {Promise<Array>} le constat E-DEP-07 puis, selon ce que le registre dit des noms réclamés, E-DEP-08, E-DEP-09 et E-DEP-10 (`e-paquets.js`) ; rien quand le widget n'a aucune dépendance
  */
-export async function bilanDependances(ctx, constatsE, options = {}, lire = interrogerRegistre) {
+export async function bilanDependances(ctx, constatsE, options = {}, lire = interrogerRegistre, osv = interrogerOsv) {
   const paquet = objetDe(ctx.paquet);
   const specifications = { ...objetDe(paquet.optionalDependencies), ...objetDe(paquet.dependencies) };
   const production = Object.keys(specifications);
@@ -87,7 +96,15 @@ export async function bilanDependances(ctx, constatsE, options = {}, lire = inte
   // Le registre : les premières dépendances de production qui s'y lisent, à moins que l'utilisateur ne l'ait coupé (`--sans-reseau`).
   const aInterroger = production.filter((nom) => estDuRegistre(nom, specifications[nom])).slice(0, MAX_INTERROGEES);
   const registre = options.reseau === false ? 'option' : aInterroger.length ? 'interroge' : 'sans-objet';
-  const lus = registre === 'interroge' ? await lire(aInterroger) : new Map();
+  // Les bibliothèques chargées de loin dont le nom est celui d'un paquet npm (E-DEP-01) se lisent au même registre, pour E-DEP-08 à E-DEP-10.
+  const distants = [];
+  for (const c of distantes) {
+    const p = c.preuve?.adresse ? paquetNpmDeAdresse(c.preuve.adresse) : null;
+    if (p && estDuRegistre(p.nom, p.version ?? '*')) distants.push({ nom: p.nom, version: p.version, hote: court(c.preuve.adresse.split('/')[2]), fichier: c.fichier, ligne: c.ligne });
+  }
+  const nomsDistants = [...new Set(distants.map((d) => d.nom))].filter((nom) => !aInterroger.includes(nom)).slice(0, MAX_DISTANTES);
+  const aLire = [...aInterroger, ...nomsDistants];
+  const lus = options.reseau !== false && aLire.length ? await lire(aLire) : new Map();
 
   const verrou = lireVerrou(ctx);
   const audit = etatDeLAudit(constatsE);
@@ -151,23 +168,56 @@ export async function bilanDependances(ctx, constatsE, options = {}, lire = inte
       + `. ${nonLues ? `${nonLues} non mesurée(s) (registre injoignable, paquet introuvable, hors registre public ou au-delà des ${MAX_INTERROGEES} premières). ` : ''}Une date de publication est un indice de maintenance, non une preuve.${PERIMETRE}`;
   const maintenance = [maintenanceNpm, regularite].filter(Boolean).join(' ');
 
+  // Paquets inventés ou tout neufs (E-DEP-08 à E-DEP-10) : ce que le registre dit des noms réclamés par le widget ; rien quand `--sans-reseau` a coupé le registre.
+  const candidats = [
+    ...aInterroger.map((nom) => ({ nom, version: versionVerrouillee(nom) ?? (estVersionExacte(specifications[nom]) ? specifications[nom] : null), origine: 'package.json', fichier: 'package.json' })),
+    ...distants.filter((d) => aInterroger.includes(d.nom) || nomsDistants.includes(d.nom)).map((d) => ({ ...d, origine: `chargé depuis ${d.hote}` })),
+  ];
+  const trouves = [...lus.values()];
+  let registreFiable = trouves.some((r) => r.time);
+  if (!registreFiable && trouves.some((r) => r.erreur === 'introuvable')) registreFiable = Boolean((await lire([CANARI])).get(CANARI)?.time);
+  const suspects = lus.size ? constatsPaquetsSuspects({ candidats, lus, registreFiable }) : [];
+
+  // OSV.dev : les bibliothèques chargées de loin dont le nom ET la version exacte se lisent dans l'adresse (une version mal identifiée donnerait un faux avis),
+  // et les paquets verrouillés du registre (pour les paquets malveillants ; leurs avis ordinaires restent à `npm audit`).
+  const pourOsv = new Map();
+  for (const d of distants) if (estVersionExacte(d.version)) pourOsv.set(cleDe(d.nom, d.version), { nom: d.nom, version: d.version, origine: 'distante', hote: d.hote, fichier: d.fichier, ligne: d.ligne });
+  for (const [chemin, p] of Object.entries(verrou.paquets ?? {})) {
+    const i = chemin.lastIndexOf('node_modules/');
+    if (i < 0 || !p || p.link || (p.resolved !== undefined && !String(p.resolved).startsWith(REGISTRE_NPM))) continue;   // une adresse git, un dossier, un autre registre : le nom et la version ne désignent pas le paquet public
+    const nom = typeof p.name === 'string' ? p.name : chemin.slice(i + 'node_modules/'.length);
+    if (!estDuRegistre(nom, p.version ?? '*') || !estVersionExacte(p.version) || pourOsv.size >= MAX_OSV) continue;
+    if (!pourOsv.has(cleDe(nom, p.version))) pourOsv.set(cleDe(nom, p.version), { nom, version: p.version, origine: 'verrou' });
+  }
+  const etatOsv = !pourOsv.size ? 'sans-objet' : options.reseau === false ? 'option' : null;
+  const reponseOsv = etatOsv ? { erreur: null, lus: new Map() } : await osv([...pourOsv.values()].map(({ nom, version }) => ({ nom, version })));
+  const osvEtat = etatOsv ?? reponseOsv.erreur ?? 'interroge';
+  const constatsDeOsv = osvEtat === 'interroge' ? constatsOsv([...pourOsv.values()], reponseOsv.lus) : [];
+  const osvDistantes = osvEtat === 'interroge' ? [...pourOsv.values()].filter((q) => q.origine === 'distante') : [];
+
   const sureteNpm = !directes ? null
     : audit === 'aucun-avis' ? "`npm audit` ne remonte aucun avis publié sur les paquets verrouillés à la date de l'audit (E-VULN-02) : présumés sûrs au sens des avis connus, non relus."
     : audit === 'avis' ? `\`npm audit\` remonte des avis sur ${enumerer([...avis.keys()].map(court))} (E-VULN-01) ; aucun autre paquet verrouillé n'en porte.`
     : `non établie, ${RAISON_SURETE[audit]}.`;
-  const sureteHorsNpm = horsNpm ? `${nombre(horsNpm, 'bibliothèque embarquée ou distante', 'bibliothèques embarquées ou distantes')} ${horsNpm > 1 ? 'ne sont vues' : "n'est vue"} par aucune base d'avis : sûreté non vérifiée.` : null;
+  const nonVues = horsNpm - osvDistantes.length;
+  const sureteHorsNpm = nonVues > 0 ? `${nombre(nonVues, 'bibliothèque embarquée ou distante', 'bibliothèques embarquées ou distantes')} ${nonVues > 1 ? 'ne sont vues' : "n'est vue"} par aucune base d'avis : sûreté non vérifiée.` : null;
+  const nbVerrou = [...pourOsv.values()].filter((q) => q.origine === 'verrou').length;
+  const sureteOsv = osvEtat === 'sans-objet' ? null
+    : osvEtat === 'option' ? "OSV.dev n'a pas été interrogé : audit lancé avec --sans-reseau."
+    : osvEtat === 'interroge' ? `OSV.dev interrogé sur ${nombre(osvDistantes.length, 'bibliothèque chargée de loin', 'bibliothèques chargées de loin')} et ${nombre(nbVerrou, 'paquet verrouillé', 'paquets verrouillés')} : ${nombre(constatsDeOsv.filter((c) => c.regle === 'E-VULN-03').length, 'avis', 'avis')}, ${nombre(constatsDeOsv.filter((c) => c.regle === 'E-VULN-04').length, 'paquet malveillant', 'paquets malveillants')} (E-VULN-03, E-VULN-04).`
+    : `OSV.dev n'a pas répondu (${osvEtat}) : sûreté non mesurée pour les bibliothèques chargées de loin et pour les paquets malveillants.`;
 
   return [constat({
     regle: 'E-DEP-07', axe: 'E', severite: 'info', confiance: 'certain',
     titre: `Bilan des dépendances : maintenance et sûreté (${nombre(directes + horsNpm, 'dépendance', 'dépendances')})`,
-    constat: `Dépendances présentes : ${inventaire}. Maintenance : ${maintenance} Sûreté : ${[sureteNpm, sureteHorsNpm].filter(Boolean).join(' ')}`,
+    constat: `Dépendances présentes : ${inventaire}. Maintenance : ${maintenance} Sûreté : ${[sureteNpm, sureteOsv, sureteHorsNpm].filter(Boolean).join(' ')}`,
     impact: "Information seule : aucun effet sur la note ni sur le verdict. Elle dit ce qui a été mesuré et ce qui ne l'a pas été ; « présumée sûre » ne veut pas dire sûre, et ce qui n'est pas mesuré n'est ni maintenu ni sûr.",
     remediation: "Pour la maintenance et la sûreté mesurées, relancer sans --sans-reseau depuis un poste qui atteint registry.npmjs.org. Pour une dépendance non interrogée (développement, transitive, embarquée, distante), relever à la main la date de sa dernière version (`npm view <paquet> time`) et tenir une liste de version et d'origine pour les bibliothèques embarquées.",
     referentiels: ['OWASP Top 10 A06:2021 — Composants vulnérables et obsolètes', 'ANSSI — Maîtrise du code tiers'],
     preuve: {
-      verrou: verrou.etat, audit, registre, regulariteMesuree: mesurees.length, seuilAncienneteMois: SEUIL_ANCIENNETE_MOIS,
+      verrou: verrou.etat, audit, registre, osv: { etat: osvEtat, interroges: pourOsv.size }, regulariteMesuree: mesurees.length, seuilAncienneteMois: SEUIL_ANCIENNETE_MOIS,
       depreciees: depreciees?.slice(0, MAX_DEPRECIEES) ?? null, deprecieesTotal: depreciees?.length ?? null,
       dependances: dependances.slice(0, MAX_DEPENDANCES), dependancesTotal: dependances.length,
     },
-  })];
+  }), ...suspects, ...constatsDeOsv];
 }

@@ -11,7 +11,7 @@
  *   --grist-reel         joue en plus le widget contre un vrai Grist (Grist Desktop, installé et lancé tout seul
  *                        dans un profil jetable) : XSS avec le niveau d'accès réel, sorties de données mesurées par
  *                        canaris, navigation et fenêtres (voir README § Essais contre un Grist réel)
- *   --sans-reseau        n'interroge pas le registre npm (npm audit, dates de publication, axe E) : fonctionne hors-ligne
+ *   --sans-reseau        n'interroge ni le registre npm ni OSV.dev (npm audit, dates de publication, avis connus, axe E) : fonctionne hors-ligne
  *   --sortie <dossier>   dossier de sortie des rapports (défaut : ./rapport-<nom>)
  *   --json               écrit aussi rapport.json
  *   --sans-html          n'écrit pas rapport.html (écrit par défaut)

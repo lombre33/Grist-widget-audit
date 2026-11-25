@@ -564,7 +564,12 @@ maximal), embarquées dans le dépôt (risque maîtrisé), de développement
 | E-VERROU-02 | Paquet du registre sans `integrity` dans le `package-lock.json` | mineur |
 | E-VULN-00/01/02 | `npm audit` sur les dépendances verrouillées — **tu ne peux pas l'exécuter** ; voir section 6 |
 | E-VULN-OPTION | `npm audit` non lancé à la demande de l'utilisateur (`--sans-reseau`) sur un dépôt qui verrouille ses dépendances : une absence de mesure, non de vulnérabilité ; le verdict ne peut pas être « CONFORME » | info ; axe E mesuré en partie |
-| E-DEP-07 | Bilan des dépendances, quand le widget en a au moins une (npm, embarquée, distante) : une seule information qui dit, pour la maintenance et pour la sûreté, ce qui est mesuré et ce qui ne l'est pas. Maintenance : le drapeau « déprécié » du verrou npm, et, quand l'outil a pu interroger le registre npm, la date de dernière publication (récente jusqu'à 24 mois) et le retard de version majeure des 25 premières dépendances directes de production ; sinon « non mesurée ». Sûreté : l'état de `npm audit` (E-VULN-*), les bibliothèques embarquées ou distantes restant non vérifiées | info ; ni pénalité, ni mesure partielle, ni plafond |
+| E-DEP-07 | Bilan des dépendances, quand le widget en a au moins une (npm, embarquée, distante) : une seule information qui dit, pour la maintenance et pour la sûreté, ce qui est mesuré et ce qui ne l'est pas. Maintenance : le drapeau « déprécié » du verrou npm, et, quand l'outil a pu interroger le registre npm, la date de dernière publication (récente jusqu'à 24 mois) et le retard de version majeure des 25 premières dépendances directes de production ; sinon « non mesurée ». Sûreté : l'état de `npm audit` (E-VULN-*), les bibliothèques embarquées restant non vérifiées ; OSV.dev (E-VULN-03, E-VULN-04) pour celles chargées de loin à version exacte et pour les paquets malveillants parmi les paquets verrouillés, « non mesurée » s'il ne répond pas | info ; ni pénalité, ni mesure partielle, ni plafond |
+| E-DEP-08 | Paquet que le registre npm ne connaît pas (404), parmi les dépendances de production du `package.json` et les bibliothèques chargées de loin sous un nom npm (esm.sh, unpkg, jsDelivr/npm, Skypack, jspm ; ni `gh/`, `jsr/`, ni cdnjs). Un registre qui répond « introuvable » à tout n'est pas cru (un paquet témoin est demandé). Un nom `@portée/…` peut être privé | **majeur** probable (nom sans portée) ; mineur à vérifier (nom à portée) ; jamais bloquant ; coupé par `--sans-reseau` |
+| E-DEP-09 | Paquet créé il y a moins de 90 jours (date de création du registre) : aucun recul, légitime ou piégé, l'outil ne tranche pas | mineur, à vérifier ; coupé par `--sans-reseau` |
+| E-DEP-10 | Version verrouillée (ou figée dans l'adresse de chargement) publiée il y a moins de 7 jours : la fenêtre des versions piégées avant retrait. Une plage sans verrou n'a pas de version datée : rien | mineur, à vérifier ; coupé par `--sans-reseau` |
+| E-VULN-03 | Bibliothèque chargée de loin dont le nom ET la version exacte se lisent dans l'adresse, et qu'OSV.dev (https://osv.dev) donne avec un avis publié. Gravité publiée par la base : critical ou high → **critique, BLOQUANT** (comme `npm audit`), moderate → majeur, low ou inconnue → mineur. Les bibliothèques embarquées (nom non certain) et les paquets verrouillés (déjà à `npm audit`) n'y sont pas | critique bloquant, majeur ou mineur ; coupé par `--sans-reseau` |
+| E-VULN-04 | Paquet, verrouillé ou chargé de loin, que OSV.dev signale malveillant (avis `MAL-…`) à cette version exacte | **critique, BLOQUANT** ; coupé par `--sans-reseau` |
 | E-LIC-01 | Aucun fichier de licence à la racine : `LICENSE`, `LICENCE`, `COPYING` ou `UNLICENSE` (extension de texte facultative), `LICENSE-MIT`, `LICENSE_APACHE`, `COPYING-GPL`…, ou un fichier sous `LICENSES/` | **majeur, BLOQUANT** |
 | E-LIC-02 | Licence présente : type reconnu (MIT/Apache 2.0/EUPL/BSD) → info ; GPL/AGPL → info avec réserve (effet contaminant à vérifier) ; LGPL → info avec réserve (copyleft faible, à vérifier) ; non identifiée, ou texte que tu n'as pas pu lire (trop gros, binaire) → mineur |
 
@@ -632,6 +637,15 @@ vulnérabilité. Deux cas :
   mentionne-le avec la confiance `à_vérifier` et la mention explicite
   « connaissance générale du modèle, non vérifiée à la date de cet audit,
   à confirmer par un `npm audit` réel ».
+
+Pour **E-DEP-08, E-DEP-09, E-DEP-10, E-VULN-03 et E-VULN-04** : ils lisent le
+registre npm et OSV.dev à la date de l'audit, ce que tu ne peux pas faire. Ne
+dis jamais qu'un paquet « existe » ni « n'existe pas » d'après ta mémoire : un
+paquet récent t'est inconnu, un paquet connu de toi a pu être retiré. Si tu
+reconnais un nom qui ressemble à un paquet célèbre ou qu'un assistant d'IA
+inventerait, dis-le à la confiance `à_vérifier`, sans sévérité plus haute que
+mineur, avec la mention « connaissance générale du modèle, non vérifiée au
+registre ».
 
 Pour **E-DEP-07** (bilan des dépendances) : ne dis jamais qu'une dépendance est
 « maintenue » ni « sûre ». Tu ne peux pas interroger le registre : dis la

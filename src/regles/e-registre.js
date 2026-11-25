@@ -11,6 +11,10 @@ import { creerNpmIsole, REGISTRE_NPM } from './npm-isole.js';
 export const SEUIL_ANCIENNETE_MOIS = 24;
 /** Les dépendances directes de production interrogées, dans l'ordre du `package.json` : borne le nombre d'appels et la durée d'un audit. */
 export const MAX_INTERROGEES = 25;
+/** Un paquet créé il y a moins de jours que cela n'a pas de recul (E-DEP-09) ; une version publiée il y a moins de jours que cela n'a pas été relue par la communauté (E-DEP-10). */
+export const SEUIL_CREATION_JOURS = 90;
+export const SEUIL_VERSION_JOURS = 7;
+const JOUR_EN_MS = 24 * 3600 * 1000;
 const PAR_LOT = 5;
 const DELAI_PAR_APPEL = 20_000;
 const MOIS_EN_MS = 30.44 * 24 * 3600 * 1000;
@@ -76,4 +80,17 @@ export function resumerPublications({ time, latest }, versionVerrouillee, mainte
     ageMois,
     retardMajeur: v1 !== null && v2 !== null ? Math.max(0, v1 - v2) : null,
   };
+}
+
+/** La date où le paquet a été créé (la première publication), et son ancienneté en jours ; `null` quand le registre ne la dit pas. */
+export function creationDuPaquet({ time }, maintenant = Date.now()) {
+  const t = Date.parse(time.created);
+  return Number.isFinite(t) ? { date: new Date(t).toISOString().slice(0, 10), ageJours: Math.max(0, Math.floor((maintenant - t) / JOUR_EN_MS)) } : null;
+}
+
+/** La date où cette version exacte a été publiée, et son ancienneté en jours ; `null` quand le registre ne date pas cette version. */
+export function publicationDeVersion({ time }, version, maintenant = Date.now()) {
+  if (typeof version !== 'string' || version === 'created' || version === 'modified' || !Object.hasOwn(time, version)) return null;
+  const t = Date.parse(time[version]);
+  return Number.isFinite(t) ? { date: new Date(t).toISOString().slice(0, 10), ageJours: Math.max(0, Math.floor((maintenant - t) / JOUR_EN_MS)) } : null;
 }

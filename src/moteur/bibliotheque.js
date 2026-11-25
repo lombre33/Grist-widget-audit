@@ -67,6 +67,19 @@ export function bibliothequeDeAdresse(adresse) {
   };
 }
 
+/**
+ * Le paquet npm qu'une adresse désigne, quand son nom est celui du registre npm (esm.sh, unpkg, jsDelivr/npm, Skypack, jspm). Ni `gh/…` et `jsr/…` (autres registres),
+ * ni cdnjs (dont les noms de bibliothèque ne sont pas ceux de npm) : on n'interroge le registre npm que pour un nom dont on est certain.
+ * @returns {?{nom: string, version: ?string}}
+ */
+export function paquetNpmDeAdresse(adresse) {
+  const b = bibliothequeDeAdresse(adresse);
+  if (!b || b.nom.length >= BORNE_NOM || /^(?:gh|jsr)\//.test(b.nom)) return null;   // un nom coupé par la borne n'est plus un nom
+  let hote;
+  try { hote = new URL(adresse).hostname.toLowerCase(); } catch { return null; }
+  return HOTES_NPM.has(hote) ? { nom: b.nom, version: b.version } : null;
+}
+
 /** Ce qu'un constat de chargement garde dans sa preuve : l'adresse, et la bibliothèque quand elle se lit. */
 export function preuveDeChargement(adresse) {
   const b = bibliothequeDeAdresse(adresse);
