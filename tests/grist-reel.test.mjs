@@ -9,7 +9,9 @@ import { fileURLToPath } from 'node:url';
 import './aide-chromium.mjs';
 import { verifierIsolation, construireEnvironnement, InstanceImpossible } from '../src/runtime/grist-reel/instance.js';
 import { construireJeu, trouverCanari, HOTE_PUITS } from '../src/runtime/grist-reel/donnees.js';
-import { choisirAsset, assurerGristDesktop, EPINGLE, InstallationImpossible, dossierCache } from '../src/runtime/grist-reel/installateur.js';
+import { choisirAsset, assurerGristDesktop, EPINGLE, InstallationImpossible, dossierCache, telecharger } from '../src/runtime/grist-reel/installateur.js';
+import http from 'node:http';
+import crypto from 'node:crypto';
 import { evaluerEssais } from '../src/runtime/grist-reel/essais.js';
 import { choisirNiveau } from '../src/runtime/grist-reel/index.js';
 import { htmlGristReel, markdownGristReel } from '../src/rapport/grist-reel.js';
@@ -50,6 +52,29 @@ test("installateur : un Grist Desktop imposé est pris tel quel, ou refusé s'il
   } finally { fs.rmSync(fichier, { force: true }); }
 });
 
+test("téléchargement : l'empreinte est celle des octets reçus, et une ligne qui se tait est abandonnée au lieu d'attendre sans fin", async () => {
+  const contenu = crypto.randomBytes(200_000);
+  const serveur = http.createServer((req, res) => {
+    if (req.url === '/complet') { res.writeHead(200, { 'content-length': contenu.length }); res.end(contenu); return; }
+    res.writeHead(200, { 'content-length': contenu.length + 1000 }); res.write(contenu.subarray(0, 1000)); // puis plus rien
+  });
+  await new Promise((r) => serveur.listen(0, '127.0.0.1', r));
+  const dossier = fs.mkdtempSync(path.join(os.tmpdir(), 'gw-dl-'));
+  const base = `http://127.0.0.1:${serveur.address().port}`;
+  try {
+    const empreinte = await telecharger(`${base}/complet`, path.join(dossier, 'a'), { taille: contenu.length }, () => {}, 2000);
+    assert.equal(empreinte, crypto.createHash('sha256').update(contenu).digest('hex'));
+    const debut = Date.now();
+    await assert.rejects(telecharger(`${base}/muet`, path.join(dossier, 'b'), { taille: contenu.length }, () => {}, 400), /aucune donnée reçue/);
+    assert.ok(Date.now() - debut < 5000, "l'abandon vient du délai d'inactivité, pas d'un blocage");
+  } finally { serveur.closeAllConnections(); await new Promise((r) => serveur.close(r)); fs.rmSync(dossier, { recursive: true, force: true }); }
+});
+
+test("lanceurs de l'interface : Grist Desktop est rangé dans le dossier de l'outil, pas sur C:", () => {
+  assert.match(fs.readFileSync(path.join(RACINE, 'lancer-interface.cmd'), 'utf8'), /set "GWAUDIT_CACHE=%~dp0\.tmp-cache"/);
+  assert.match(fs.readFileSync(path.join(RACINE, 'lancer-interface.sh'), 'utf8'), /GWAUDIT_CACHE="\$PWD\/\.tmp-cache"[\s\S]*export TMPDIR GWAUDIT_CACHE/);
+});
+
 test('données : canaris uniques par audit, charge XSS observable dans le cadre du widget, canari retrouvé même encodé', () => {
   const a = construireJeu(undefined, 'aaaa1111'); const b = construireJeu(undefined, 'bbbb2222');
   assert.notEqual(a.prefixe, b.prefixe);
@@ -83,6 +108,15 @@ test("essais : sans donnée arrivée au widget, l'exfiltration et la XSS sont «
   assert.equal(par(r, 1).resultat, 'non_teste');
   assert.equal(par(r, 13).resultat, 'non_teste');
   assert.equal(par(r, 7).resultat, 'bloque');
+  assert.equal(r.constats.length, 0);
+});
+
+test("essais : un widget qui n'échange rien avec Grist est « non testé » et la raison nomme la ressource introuvable", () => {
+  const muet = obs({ appelsRpc: [], canariRecu: false, introuvables: [{ chemin: '/grist-plugin-api.js', statut: 404 }] });
+  const r = evaluerEssais({ none: muet, demande: { niveau: 'read table', obs: muet } }, jeu);
+  assert.equal(par(r, 7).resultat, 'non_teste');
+  assert.match(par(r, 7).detail, /\/grist-plugin-api\.js \(404\)/);
+  assert.match(par(r, 1).detail, /\/grist-plugin-api\.js \(404\)/);
   assert.equal(r.constats.length, 0);
 });
 

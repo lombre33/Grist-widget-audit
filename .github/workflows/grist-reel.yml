@@ -1,6 +1,7 @@
 # Éprouve le mode --grist-reel de bout en bout sur les deux systèmes où il doit marcher :
 # téléchargement épinglé de Grist Desktop (empreinte SHA-256 vérifiée), extraction, lancement d'une instance
-# jetable, widget défaillant puis widget sain joués dans un vrai Chromium, profil jetable supprimé.
+# jetable, widget défaillant puis widget sain joués dans un vrai Chromium, profil jetable supprimé ;
+# et l'interface web (case « Grist réel », lancement d'un audit en sous-processus).
 #
 #   - « Run workflow » (workflow_dispatch) : joue le test sur la branche choisie ;
 #   - push sur dev/grist-reel : idem, pour voir le résultat avant la fusion.
@@ -50,4 +51,4 @@ jobs:
       - name: Essais contre un Grist réel (téléchargement, lancement, widgets de test)
         env:
           GWAUDIT_GRIST_REEL_E2E: '1'
-        run: node --test tests/grist-reel.test.mjs
+        run: node --test tests/grist-reel.test.mjs tests/interface.test.mjs

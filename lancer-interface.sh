@@ -1,6 +1,6 @@
 #!/bin/sh
 # Lanceur de l'interface web gwaudit (Linux, macOS) : ouvre le navigateur par défaut.
-# Tout reste dans le dossier de l'outil : rapports ici, fichiers temporaires dans .tmp-travail.
+# Tout reste dans le dossier de l'outil : rapports ici, fichiers temporaires dans .tmp-travail, Grist Desktop dans .tmp-cache.
 cd "$(dirname "$0")" || exit 1
 
 command -v node >/dev/null 2>&1 || { echo "Node.js est introuvable : l'installer (version 20 ou plus) puis relancer." >&2; exit 1; }
@@ -8,7 +8,9 @@ command -v node >/dev/null 2>&1 || { echo "Node.js est introuvable : l'installer
 
 mkdir -p .tmp-travail
 TMPDIR="$PWD/.tmp-travail"
-export TMPDIR
+# Grist Desktop (essais contre un Grist réel) : téléchargé une seule fois, rangé ici.
+GWAUDIT_CACHE="$PWD/.tmp-cache"
+export TMPDIR GWAUDIT_CACHE
 
 URL="http://127.0.0.1:4317"
 echo "Interface gwaudit : $URL"

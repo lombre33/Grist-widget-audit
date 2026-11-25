@@ -43,6 +43,13 @@ const TAILLE_MAX_CORPS_REQUETE = 10_000;
 
 /** Au-delà, l'audit lancé depuis l'interface est tué : un déclencheur HTTP est plus exposé à l'abus qu'une commande tapée à la main. */
 const DELAI_GLOBAL_INTERFACE_MS = 5 * 60 * 1000;
+/** Avec les essais « Grist réel » : le premier lancement télécharge Grist Desktop (environ 320 Mo) avant de jouer le widget. */
+const DELAI_GLOBAL_INTERFACE_GRIST_REEL_MS = 20 * 60 * 1000;
+
+/** Les arguments de la CLI pour un audit lancé depuis l'interface ; `--grist-reel` seulement si la case a été cochée (booléen vrai, jamais un texte). */
+export function argumentsAudit(cible, dossierSortie, { gristReel = false } = {}) {
+  return [cible, '--json', '--sortie', dossierSortie, ...(gristReel === true ? ['--grist-reel'] : [])];
+}
 
 /** Au-delà, les audits terminés les plus anciens sont purgés (mémoire ET dossier de sortie) : un serveur local qu'on laisse tourner longtemps ne doit pas croître sans borne. */
 const MAX_AUDITS_CONSERVES = 50;
@@ -99,12 +106,12 @@ function tuerArbreProcessus(enfant) {
 }
 
 /** Lance un audit en sous-processus et renvoie immédiatement son état (rempli au fil de l'exécution). */
-function lancerAudit(cible) {
+function lancerAudit(cible, { gristReel = false } = {}) {
   const id = crypto.randomUUID();
   const dossierSortie = path.resolve(`./rapport-interface/${id}`);
   fs.mkdirSync(dossierSortie, { recursive: true });
 
-  const etat = { id, cible, statut: 'en-cours', lignes: [], codeSortie: null, dossierSortie, clientsSse: new Set() };
+  const etat = { id, cible, gristReel: gristReel === true, statut: 'en-cours', lignes: [], codeSortie: null, dossierSortie, clientsSse: new Set() };
   audits.set(id, etat);
   purgerAnciensAudits();
 
@@ -115,7 +122,7 @@ function lancerAudit(cible) {
     // jamais interpolée dans une chaîne de commande — aucune injection
     // possible quel que soit son contenu. `detached` sur POSIX seulement :
     // voir tuerArbreProcessus() ci-dessus.
-    enfant = spawn(process.execPath, [BIN_GWAUDIT, cible, '--json', '--sortie', dossierSortie], {
+    enfant = spawn(process.execPath, [BIN_GWAUDIT, ...argumentsAudit(cible, dossierSortie, { gristReel })], {
       stdio: ['ignore', 'pipe', 'pipe'],
       detached: process.platform !== 'win32',
     });
@@ -131,7 +138,7 @@ function lancerAudit(cible) {
     etat.lignes.push(texte);
     diffuser(etat, 'ligne', { texte });
     tuerArbreProcessus(enfant);
-  }, DELAI_GLOBAL_INTERFACE_MS);
+  }, etat.gristReel ? DELAI_GLOBAL_INTERFACE_GRIST_REEL_MS : DELAI_GLOBAL_INTERFACE_MS);
 
   const suivreFlux = (flux) => {
     let reste = '';
@@ -220,6 +227,8 @@ const PAGE_ACCUEIL = `<!doctype html>
   button { margin-top: .8rem; padding: .6rem 1.2rem; font-size: 1rem; cursor: pointer; }
   .erreur { color: #b00020; margin-top: .6rem; }
   p.aide { color: #555; font-size: .9rem; }
+  label.option { display: block; margin-top: .8rem; cursor: pointer; }
+  p.aide-option { margin: .2rem 0 0 1.5rem; color: #555; font-size: .85rem; }
 </style>
 </head>
 <body>
@@ -227,6 +236,8 @@ const PAGE_ACCUEIL = `<!doctype html>
 <p class="aide">Lien du dépôt à auditer (GitHub, GitLab… — <code>https://</code> ou <code>git@</code>).</p>
 <form id="form-audit">
   <input type="url" id="cible" name="cible" placeholder="https://github.com/…/mon-widget" required>
+  <label class="option"><input type="checkbox" id="grist-reel" name="grist-reel"> Ajouter les essais contre un Grist réel</label>
+  <p class="aide-option">S'ajoute à l'audit classique, dans le même rapport. Lance un Grist Desktop jetable sur cette machine (téléchargé au premier lancement, environ 320 Mo) : compter une à deux minutes de plus.</p>
   <button type="submit">Lancer l'audit</button>
 </form>
 <div id="erreur" class="erreur" hidden></div>
@@ -237,7 +248,7 @@ document.getElementById('form-audit').addEventListener('submit', async (ev) => {
   const zoneErreur = document.getElementById('erreur');
   zoneErreur.hidden = true;
   try {
-    const rep = await fetch('/audits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cible }) });
+    const rep = await fetch('/audits', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ cible, gristReel: document.getElementById('grist-reel').checked }) });
     const corps = await rep.json();
     if (!rep.ok) throw new Error(corps.erreur || 'Erreur inattendue.');
     window.location.href = '/audits/' + corps.id;
@@ -263,6 +274,7 @@ function pageSuivi(etat) {
   pre { background: #f4f4f4; padding: 1rem; white-space: pre-wrap; word-break: break-word; max-height: 60vh; overflow-y: auto; }
   a.bouton { display: inline-block; margin-top: 1rem; margin-right: .6rem; padding: .6rem 1.2rem; background: #1a1a1a; color: #fff; text-decoration: none; }
   a.bouton.secondaire { background: #fff; color: #1a1a1a; border: 1px solid #1a1a1a; }
+  p.aide { color: #555; font-size: .9rem; }
   a.lien-retour { display: inline-block; margin-bottom: 1rem; color: #555; text-decoration: none; font-size: .9rem; }
   a.lien-retour:hover { text-decoration: underline; }
 </style>
@@ -270,7 +282,7 @@ function pageSuivi(etat) {
 <body>
 <a class="lien-retour" href="/">← Nouvel audit</a>
 <h1>Audit de <span id="cible">${echapperHtml(etat.cible)}</span></h1>
-<p id="statut">En cours…</p>
+${etat.gristReel ? '<p class="aide">Avec les essais contre un Grist réel (Grist Desktop jetable).</p>\n' : ''}<p id="statut">En cours…</p>
 <pre id="journal" aria-live="polite"></pre>
 <div id="actions"></div>
 <script>
@@ -527,7 +539,7 @@ export function demarrerInterface({ port = 4317, hote = process.env.GWAUDIT_INTE
           return;
         }
         let etat;
-        try { etat = lancerAudit(cible); }
+        try { etat = lancerAudit(cible, { gristReel: corps?.gristReel === true }); }
         catch (e) {
           auditEnCours = false;
           res.writeHead(500, { 'Content-Type': 'application/json; charset=utf-8' });

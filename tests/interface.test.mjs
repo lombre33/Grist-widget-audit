@@ -1,7 +1,7 @@
 import { test, before, after } from 'node:test';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
-import { demarrerInterface, nomFichierSuggere } from '../src/interface/serveur.js';
+import { demarrerInterface, nomFichierSuggere, argumentsAudit } from '../src/interface/serveur.js';
 
 test('nomFichierSuggere dérive un nom de fichier lisible et sûr depuis une URL de dépôt', () => {
   assert.equal(nomFichierSuggere('https://github.com/lombre33/mon-widget.git', 'md'), 'gwaudit-mon-widget.md');
@@ -117,4 +117,47 @@ test('un deuxième audit refusé (409) tant que le premier tourne encore', async
   });
   assert.equal(rep2.status, 409);
   await p1; // laisse le premier se terminer avant que le hook after() ne ferme le serveur
+});
+
+// --- Case « Ajouter les essais contre un Grist réel » ---
+
+test("le formulaire propose la case « Grist réel », décochée par défaut, et l'envoie avec la cible", async () => {
+  const corps = await (await fetch(`${base}/`)).text();
+  const case_ = corps.match(/<input type="checkbox" id="grist-reel"[^>]*>/);
+  assert.ok(case_, 'la case est dans le formulaire');
+  assert.ok(!/checked/.test(case_[0]), 'décochée par défaut : un audit classique reste un audit classique');
+  assert.ok(corps.includes("gristReel: document.getElementById('grist-reel').checked"), 'la case est envoyée avec la cible');
+});
+
+test("argumentsAudit : --grist-reel seulement si la case est cochée (booléen vrai), jamais pour un texte ou un nombre", () => {
+  assert.deepEqual(argumentsAudit('https://x.invalid/w', '/s'), ['https://x.invalid/w', '--json', '--sortie', '/s']);
+  assert.deepEqual(argumentsAudit('https://x.invalid/w', '/s', { gristReel: true }), ['https://x.invalid/w', '--json', '--sortie', '/s', '--grist-reel']);
+  for (const faux of [false, undefined, 'true', 1, 'on', null]) {
+    assert.ok(!argumentsAudit('https://x.invalid/w', '/s', { gristReel: faux }).includes('--grist-reel'), `gristReel=${JSON.stringify(faux)}`);
+  }
+});
+
+async function lancerEtAttendreLaFin(corps) {
+  // Un audit lancé par un test précédent peut tourner encore (un seul à la fois, 409) : on attend son tour.
+  let rep; const attente = Date.now() + 20_000;
+  do {
+    rep = await fetch(`${base}/audits`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(corps) });
+    if (rep.status === 409) await new Promise((r) => setTimeout(r, 300));
+  } while (rep.status === 409 && Date.now() < attente);
+  assert.equal(rep.status, 200);
+  const { id } = await rep.json();
+  const page = await (await fetch(`${base}/audits/${id}`)).text();
+  const sse = await fetch(`${base}/audits/${id}/evenements`);
+  const lecteur = sse.body.getReader(); const decodeur = new TextDecoder();
+  let brut = ''; const limite = Date.now() + 15_000;
+  while (!/event: fin/.test(brut) && Date.now() < limite) { const { value, done } = await lecteur.read(); if (done) break; brut += decodeur.decode(value, { stream: true }); }
+  return { page, brut };
+}
+
+test("la page de suivi dit que les essais « Grist réel » sont inclus, seulement quand la case était cochée", async () => {
+  const avec = await lancerEtAttendreLaFin({ cible: 'https://localhost/avec-grist-reel.git', gristReel: true });
+  assert.ok(avec.page.includes('Avec les essais contre un Grist réel'));
+  const sans = await lancerEtAttendreLaFin({ cible: 'https://localhost/sans-grist-reel.git', gristReel: 'true' });
+  assert.ok(!sans.page.includes('Avec les essais contre un Grist réel'), "un texte « true » n'est pas la case cochée");
+  assert.match(sans.brut, /event: fin/);
 });

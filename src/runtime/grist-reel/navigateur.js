@@ -77,7 +77,7 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
   const obs = {
     charge: false, appelsRpc: [], configure: null, canariRecu: false, texteDuCadre: '',
     xss: { executions: 0, lu: null, refus: null, erreur: null },
-    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [],
+    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [],
     consoles: [], erreursPage: [], erreur: null,
   };
   const origineGrist = origineDe(base);
@@ -135,6 +135,8 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
       obs.consoles.push({ type: m.type(), texte: t });
       if (/Unsafe (JavaScript )?attempt to initiate navigation/i.test(t)) obs.navigationsRefusees.push(t.slice(0, 300));
     });
+    // Ressources du widget que son propre serveur n'a pas trouvées (ex. `/grist-plugin-api.js` demandé à la racine) : la raison la plus courante d'un widget qui n'échange rien avec Grist.
+    page.on('response', (r) => { try { if (r.status() >= 400 && origineDe(r.url()) === origineWidget && obs.introuvables.length < 10) obs.introuvables.push({ chemin: new URL(r.url()).pathname.slice(0, 120), statut: r.status() }); } catch { /* réponse sans adresse exploitable */ } });
     page.on('pageerror', (e) => obs.erreursPage.push(String(e?.message ?? e).slice(0, 500)));
 
     const travail = (async () => {

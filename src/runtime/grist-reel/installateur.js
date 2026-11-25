@@ -54,25 +54,41 @@ export async function empreinteDe(fichier) {
   return h.digest('hex');
 }
 
-async function telecharger(url, destination, asset, journal) {
-  const reponse = await fetch(url, { redirect: 'follow' });
-  if (!reponse.ok || !reponse.body) throw new Error(`réponse ${reponse.status} de ${new URL(url).host}`);
-  const h = crypto.createHash('sha256');
-  const total = Number(reponse.headers.get('content-length')) || asset.taille;
-  let recu = 0; let palier = 0;
-  await pipeline(
-    Readable.fromWeb(reponse.body),
-    async function* (source) {
-      for await (const morceau of source) {
-        h.update(morceau); recu += morceau.length;
-        const pct = Math.floor((recu / total) * 10);
-        if (pct > palier) { palier = pct; journal(`  ${pct * 10} % (${Math.round(recu / 1048576)} Mo)`); }
-        yield morceau;
-      }
-    },
-    fs.createWriteStream(destination),
-  );
-  return h.digest('hex');
+/** Au bout de ce temps sans recevoir un seul octet, le téléchargement est abandonné (ligne coupée, proxy muet) au lieu d'attendre sans fin. */
+const INACTIVITE_MAX_MS = 60_000;
+
+/** Télécharge `url` vers `destination` et rend l'empreinte SHA-256 de ce qui a été reçu. Exporté pour les tests. */
+export async function telecharger(url, destination, asset, journal, inactiviteMs = INACTIVITE_MAX_MS) {
+  const arret = new AbortController();
+  let minuteur;
+  const armer = () => { clearTimeout(minuteur); minuteur = setTimeout(() => arret.abort(new Error(`aucune donnée reçue depuis ${Math.round(inactiviteMs / 1000)} s`)), inactiviteMs); };
+  armer();
+  try {
+    const reponse = await fetch(url, { redirect: 'follow', signal: arret.signal });
+    if (!reponse.ok || !reponse.body) throw new Error(`réponse ${reponse.status} de ${new URL(url).host}`);
+    const h = crypto.createHash('sha256');
+    const total = Number(reponse.headers.get('content-length')) || asset.taille;
+    let recu = 0; let palier = 0;
+    await pipeline(
+      Readable.fromWeb(reponse.body),
+      async function* (source) {
+        for await (const morceau of source) {
+          armer();
+          h.update(morceau); recu += morceau.length;
+          const pct = Math.floor((recu / total) * 10);
+          if (pct > palier) { palier = pct; journal(`  ${pct * 10} % (${Math.round(recu / 1048576)} Mo)`); }
+          yield morceau;
+        }
+      },
+      fs.createWriteStream(destination),
+      { signal: arret.signal },
+    );
+    return h.digest('hex');
+  } catch (e) {
+    throw arret.signal.aborted ? (arret.signal.reason instanceof Error ? arret.signal.reason : e) : e;
+  } finally {
+    clearTimeout(minuteur);
+  }
 }
 
 function extraire(asset, archive, dossier) {

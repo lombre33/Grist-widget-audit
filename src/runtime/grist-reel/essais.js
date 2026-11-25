@@ -25,6 +25,13 @@ const phasesChargees = (phases) => [phases.none, phases.demande?.obs].filter((o)
 
 function essai(id, titre, resultat, detail, extra = {}) { return { id, titre, resultat, detail, ...extra }; }
 
+/** Quand le widget n'a rien échangé avec Grist : ce que le navigateur a vu qui peut l'expliquer (ressource du widget introuvable, erreur de page), pour que « non testé » dise pourquoi. */
+function indiceSansEchange(obs) {
+  if (obs?.introuvables?.length) return ` ; ressource(s) du widget introuvable(s) sur son serveur : ${obs.introuvables.slice(0, 3).map((r) => `${r.chemin} (${r.statut})`).join(', ')}`;
+  if (obs?.erreursPage?.length) return ` ; erreur de page : ${resume(obs.erreursPage[0], 150)}`;
+  return '';
+}
+
 /**
  * @param {{none: object|null, demande: {niveau: string, obs: object}|null}} phases
  * @param {object} jeu
@@ -43,7 +50,7 @@ export function evaluerEssais(phases, jeu) {
     const d = phases.demande;
     if (!d) essais.push(essai(1, titre, 'non_teste', aucunePage ? raisonPage : "le widget ne demande aucun accès aux données : aucune valeur de cellule ne lui est présentée"));
     else if (!d.obs.charge) essais.push(essai(1, titre, 'non_teste', `le widget n'a pas été chargé au niveau « ${d.niveau} » (${resume(d.obs.erreur)})`, { niveau: d.niveau }));
-    else if (!d.obs.canariRecu) essais.push(essai(1, titre, 'non_teste', `Grist n'a transmis aucune donnée du document au widget au niveau « ${d.niveau} » (le widget n'a peut-être pas appelé grist.ready, ou attend une correspondance de colonnes que l'audit n'a pas su établir) : la charge ne lui a pas été présentée`, { niveau: d.niveau }));
+    else if (!d.obs.canariRecu) essais.push(essai(1, titre, 'non_teste', `Grist n'a transmis aucune donnée du document au widget au niveau « ${d.niveau} » (le widget n'a peut-être pas appelé grist.ready, ou attend une correspondance de colonnes que l'audit n'a pas su établir)${d.obs.appelsRpc.length ? '' : indiceSansEchange(d.obs)} : la charge ne lui a pas été présentée`, { niveau: d.niveau }));
     else if (!d.obs.xss.executions) essais.push(essai(1, titre, 'rien_observe', "la charge n'a pas été exécutée : valeur affichée en texte ou échappée, absente de l'écran du widget, ou refusée par sa politique de sécurité", { niveau: d.niveau }));
     else {
       const x = d.obs.xss;
@@ -97,7 +104,7 @@ export function evaluerEssais(phases, jeu) {
       }));
     } else if (a.appelsRpc.length) {
       essais.push(essai(7, titre, 'bloque', "Grist n'a transmis aucune donnée du document au widget au niveau « none »", { niveau: 'none', barriere: 'Grist (niveau d\'accès)' }));
-    } else essais.push(essai(7, titre, 'non_teste', "le widget n'a eu aucun échange avec Grist pendant l'essai (grist.ready non appelé ?)", { niveau: 'none' }));
+    } else essais.push(essai(7, titre, 'non_teste', `le widget n'a eu aucun échange avec Grist pendant l'essai (grist.ready non appelé)${indiceSansEchange(a)}`, { niveau: 'none' }));
   }
 
   // --- 13. Exfiltration mesurée : un canari du document arrive-t-il à l'extérieur ? ---

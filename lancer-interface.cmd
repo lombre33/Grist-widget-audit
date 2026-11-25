@@ -1,7 +1,7 @@
 @echo off
 setlocal
 rem Lanceur de l'interface web gwaudit (Windows) : double-clic, le navigateur s'ouvre tout seul.
-rem Tout reste sur le disque de l'outil : rapports dans ce dossier, fichiers temporaires dans .tmp-travail.
+rem Tout reste sur le disque de l'outil : rapports dans ce dossier, fichiers temporaires dans .tmp-travail, Grist Desktop dans .tmp-cache.
 
 if "%~1"=="--ouvrir" goto ouvrir
 
@@ -14,6 +14,8 @@ if not exist "node_modules\acorn\package.json" goto sansdependances
 if not exist ".tmp-travail" mkdir ".tmp-travail"
 set "TEMP=%~dp0.tmp-travail"
 set "TMP=%~dp0.tmp-travail"
+rem Grist Desktop (essais contre un Grist reel) : telecharge une seule fois, range ici et non sur C:.
+set "GWAUDIT_CACHE=%~dp0.tmp-cache"
 
 echo Interface gwaudit : http://127.0.0.1:4317
 echo Fermer cette fenetre (ou Ctrl+C) arrete le serveur.

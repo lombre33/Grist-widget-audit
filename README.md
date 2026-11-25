@@ -206,7 +206,11 @@ représentatives, pas à retirer cette vérification.
 
 `--interface` lance une interface minimale au lieu d'un audit direct : un
 formulaire (lien du dépôt à auditer), le suivi en direct de l'audit, puis
-la page de rapport une fois terminé.
+la page de rapport une fois terminé. La case « Ajouter les essais contre un
+Grist réel » (décochée par défaut) ajoute `--grist-reel` à l'audit classique,
+dans le même rapport : voir [Essais contre un Grist réel](#essais-contre-un-grist-réel).
+Le premier audit coché télécharge Grist Desktop (environ 320 Mo) ; le délai
+global de l'interface passe alors de 5 à 20 minutes.
 
 ```bash
 node bin/gwaudit.js --interface          # http://127.0.0.1:4317
@@ -216,8 +220,9 @@ node bin/gwaudit.js --interface --port 8080
 Sous Windows, un double-clic sur `lancer-interface.cmd` (à la racine) fait la
 même chose : il démarre l'interface et ouvre le navigateur par défaut. Il
 garde aussi tout le travail sur le disque de l'outil : les rapports vont dans
-ce dossier et les fichiers temporaires dans `.tmp-travail`, au lieu du
-dossier temporaire de `C:`. `lancer-interface.sh` est l'équivalent pour Linux
+ce dossier, les fichiers temporaires dans `.tmp-travail` et Grist Desktop
+(téléchargé pour les essais contre un Grist réel) dans `.tmp-cache`, au lieu
+des dossiers de `C:`. `lancer-interface.sh` est l'équivalent pour Linux
 et macOS.
 
 Cette interface ne réimplémente rien : elle pilote `gwaudit` lui-même en
@@ -271,6 +276,7 @@ Ce qui est joué (numéros du catalogue de l'étude) : le widget chargé au nive
 À savoir :
 - Windows : une fenêtre de Grist Desktop peut apparaître quelques secondes pendant l'audit. Aucun droit d'administrateur, aucune installation système.
 - Derrière un proxy d'entreprise, le téléchargement peut échouer : le message donne l'adresse du fichier et le dossier où le déposer à la main (il est vérifié comme un fichier téléchargé). `GWAUDIT_GRIST_DESKTOP=<exécutable>` impose un Grist Desktop déjà installé (seule voie sur macOS, où rien n'est épinglé).
+- Windows : garder le dossier de l'outil à un chemin court (moins de 50 caractères, par exemple `D:\Grist-widget-audit`) : Grist Desktop contient des chemins de 155 caractères, rangés dans `.tmp-cache` sous l'interface web.
 - Linux sans écran : `xvfb` est nécessaire (`apt install xvfb`).
 - Le résultat vaut pour la version de Grist Desktop testée, pas pour l'instance où le widget sera installé si elle diffère.
 - Test de bout en bout : `GWAUDIT_GRIST_REEL_E2E=1 node --test tests/grist-reel.test.mjs`.
