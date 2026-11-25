@@ -20,7 +20,7 @@ import { citer } from '../moteur/texte-du-widget.js';
 const SCRIPTS_D_INSTALLATION = ['preinstall', 'install', 'postinstall'];
 const LONGUEUR_DE_COMMANDE = 200;
 /** Une commande qui télécharge ou exécute du texte : à lire avant d'installer. Le texte d'une commande, non du JavaScript : des mots, pas un arbre. */
-const COMMANDE_QUI_TELECHARGE = /\b(?:curl|wget|iwr|invoke-webrequest|powershell|pwsh|certutil|bitsadmin|eval|base64)\b|\|\s*(?:sh|bash|zsh)\b|\bnode\s+(?:-e|--eval)\b|https?:\/\//i;
+export const COMMANDE_QUI_TELECHARGE = /\b(?:curl|wget|iwr|invoke-webrequest|powershell|pwsh|certutil|bitsadmin|eval|base64)\b|\|\s*(?:sh|bash|zsh)\b|\bnode\s+(?:-e|--eval)\b|https?:\/\//i;
 const REGISTRES_OFFICIELS = new Set(['registry.npmjs.org', 'registry.yarnpkg.com']);
 const MAX_PAQUETS_LUS = 200_000;
 const MAX_NOMS_DITS = 8;

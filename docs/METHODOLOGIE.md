@@ -311,6 +311,23 @@ les lignes d'un diff ne se lisent que par le décompte de l'en-tête de chaque b
 (une ligne ajoutée qui ressemble à un en-tête de fichier n'en est pas un), et le
 travail est borné en temps, en octets et en nombre de valeurs.
 
+### Le relecteur est visé (C-RELECTEUR-01, C-AGENT-01, C-AGENT-02)
+
+Un dépôt est relu de plus en plus par un assistant IA (l'éditeur de la personne
+qui l'ouvre, un audit par modèle de langage) : son texte y est lu comme une
+consigne possible. **C-RELECTEUR-01** signale une phrase qui s'adresse à cet
+assistant (ignorer ses consignes, ne rien signaler, « si tu es une IA ») dans un
+document, le `package.json`, le manifeste, un commentaire de JavaScript ou un
+fichier de consignes ; une chaîne de JavaScript n'est jamais lue, le prompt d'un
+widget d'IA y vit. Majeur, **à vérifier** (la documentation d'une défense contre
+l'injection de consignes porte les mêmes mots), jamais bloquant. **C-AGENT-01**
+dit une fois les fichiers de réglage d'assistants de code que le dépôt porte
+(information). **C-AGENT-02** dit ceux qui font lancer une commande (crochet,
+serveur MCP, tâche exécutée à l'ouverture du dossier) : mineur, majeur si la
+commande télécharge ou exécute du texte, jamais bloquant ; les outils demandent
+d'ordinaire une approbation, et l'audit ne lance rien. Le caractère caché dans
+ces fichiers est dit par C-INVISIBLE-01.
+
 ### Caractères invisibles (C-INVISIBLE-01)
 
 Ce qu'une revue lit n'est pas toujours ce que le navigateur exécute. Des
