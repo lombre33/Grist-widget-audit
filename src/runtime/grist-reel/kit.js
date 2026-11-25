@@ -281,3 +281,30 @@ export async function kitMessagesForges(p) {
   });
   return { envoye: retour === 'gw-envoye', retour, formes: messages.length };
 }
+
+/**
+ * API de l'instance appelée depuis le cadre (essai 20) : du code qui s'exécute dans le cadre du widget (origine différente de celle de Grist) peut-il
+ * lire le document par l'API REST de l'instance AVEC la session de la personne (`credentials: 'include'`), sans passer par le niveau d'accès que Grist
+ * accorde au widget ? Joué deux fois : dans le cadre du widget (l'essai) et dans la page Grist (le témoin : même appel, même origine que Grist, qui doit
+ * réussir, sans quoi un échec dans le cadre ne prouverait rien). On ne regarde que la présence d'un canari dans la réponse, jamais son contenu.
+ *
+ * Fonction autonome : Playwright la sérialise, elle ne peut rien utiliser qui soit défini hors d'elle.
+ * @param {{base: string, docId: string, table: string, prefixe: string}} p
+ */
+export async function kitApiInstance(p) {
+  const violations = [];
+  document.addEventListener('securitypolicyviolation', (e) => { if (violations.length < 5) violations.push(String(e.violatedDirective)); });
+  const lire = async (chemin) => {
+    try {
+      const r = await Promise.race([fetch(p.base + chemin, { credentials: 'include' }), new Promise((_, rejet) => setTimeout(() => rejet(new Error('délai dépassé')), 6000))]);
+      const texte = await r.text();
+      return { statut: r.status, canari: texte.includes(p.prefixe) };
+    } catch (e) { return { erreur: String((e && e.message) || e).slice(0, 100) }; }
+  };
+  const sortie = {};
+  sortie.records = await lire(`/api/docs/${p.docId}/tables/${p.table}/records`);
+  sortie.sql = await lire(`/api/docs/${p.docId}/sql?q=${encodeURIComponent(`select GwauditCanari from ${p.table}`)}`);
+  await new Promise((r) => setTimeout(r, 200));
+  sortie.violations = violations;
+  return sortie;
+}

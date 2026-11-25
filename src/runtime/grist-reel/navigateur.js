@@ -22,7 +22,7 @@ import {
 } from '../dynamique.js';
 import { estGrist } from '../../contexte/hotes-grist.js';
 import { trouverCanari } from './donnees.js';
-import { kitDependancePiegee, kitCanaux, kitEcritures, kitDroits, kitPollution, kitStockage, kitMessagesForges, poserSurfaceDeClic } from './kit.js';
+import { kitDependancePiegee, kitCanaux, kitEcritures, kitDroits, kitPollution, kitStockage, kitMessagesForges, kitApiInstance, poserSurfaceDeClic } from './kit.js';
 
 const ICI = path.dirname(fileURLToPath(import.meta.url));
 const RACINE_OUTIL = path.resolve(ICI, '../../..');
@@ -109,6 +109,7 @@ const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; retur
  * @param {object} p.jeu           voir donnees.js
  * @param {boolean} [p.lireMarqueurs]  lit dans le cadre du widget les marqueurs que posent les bibliothèques altérées (voir `alterer` dans bibliotheques.js)
  * @param {object} [p.canaux]     paramètres du kit des canaux de sortie (voir kitCanaux) : s'il est fourni, il est joué dans le cadre du widget
+ * @param {{docId: string, table: string}} [p.apiInstance]  joue l'essai 20 (voir kitApiInstance) : l'API de l'instance appelée avec la session, depuis le cadre du widget puis, comme témoin, depuis la page Grist
  * @param {object} [p.messages]  `{hote, marqueur}` : joue l'essai 4 (voir kitMessagesForges), des messages forgés envoyés au widget par un cadre voisin
  * @param {boolean} [p.stockage]  lit dans le cadre ce que le widget a gardé dans le navigateur, et ses cookies (voir kitStockage), avant les autres kits
  * @param {object} [p.pollution]  clés cherchées dans `Object.prototype` (voir kitPollution) : si fourni, joué dans le cadre du widget ; les lignes hostiles doivent être déjà dans la table (voir `ajouterDonneesHostiles`)
@@ -117,11 +118,11 @@ const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; retur
  * @param {object} [p.kit]         paramètres du kit de la dépendance piégée (voir kit.js) : s'il est fourni, il est joué dans le cadre du widget
  * @param {number} [p.delaiMs]
  */
-export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, canaux, ecritures, droits, pollution, stockage, messages, lireMarqueurs, delaiMs = 45_000 }) {
+export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, canaux, ecritures, droits, pollution, stockage, messages, apiInstance, lireMarqueurs, delaiMs = 45_000 }) {
   const obs = {
     charge: false, appelsRpc: [], configure: null, canariRecu: false, texteDuCadre: '',
     xss: { executions: 0, lu: null, refus: null, erreur: null },
-    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null, droits: null, pollution: null, stockage: null, messages: null, hostileRecu: false,
+    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null, droits: null, pollution: null, stockage: null, messages: null, apiInstance: null, hostileRecu: false,
     consoles: [], erreursPage: [], erreur: null,
   };
   const origineGrist = origineDe(base);
@@ -237,6 +238,12 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
       if (stockage && cadre) obs.stockage = await jouerStockage(contexte, cadre, origineWidget, jeu).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       if (droits && cadre) obs.droits = await jouerDroits(page, cadre, jeu.prefixe).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       if (pollution && cadre) obs.pollution = await cadre.evaluate(kitPollution, pollution).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
+      if (apiInstance && cadre) {
+        const parametres = { base, docId: apiInstance.docId, table: apiInstance.table, prefixe: jeu.prefixe };
+        const temoin = await page.evaluate(kitApiInstance, parametres).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
+        const widget = await cadre.evaluate(kitApiInstance, parametres).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
+        obs.apiInstance = { temoin, widget };
+      }
       if (messages && cadre) {
         const avant = obs.requetesExternes.length;
         const envoi = await page.evaluate(kitMessagesForges, messages).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));

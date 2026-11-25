@@ -30,8 +30,8 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 3, 4, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 21, 22, 23, 24];
-export const ESSAIS_PAS_ENCORE = '2, 5, 6, 11, 14, 19, 20';
+export const ESSAIS_JOUES = [1, 3, 4, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 20, 21, 22, 23, 24];
+export const ESSAIS_PAS_ENCORE = '2, 5, 6, 11, 14, 19';
 
 /** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
 const CANAUX = [['fetch', 'fetch'], ['xhr', 'XMLHttpRequest'], ['image', 'image (balise img)'], ['beacon', 'sendBeacon'], ['websocket', 'WebSocket'], ['script', 'balise script'], ['iframe', 'cadre iframe'], ['feuille', 'feuille de style'], ['cssurl', 'image de fond CSS'], ['prefetch', 'préchargement (link prefetch)'], ['formulaire', 'formulaire envoyé']];
@@ -451,6 +451,43 @@ export function evaluerEssais(phases, jeu) {
         essais.push(essai(4, titre, 'rien_observe', `quatre formes de message forgé (texte brut, objet, objet imbriqué, JSON), reçues par le widget (${m.forgeRecu}), n'ont déclenché ni exécution de code ni appel réseau`, { niveau }));
       } else {
         essais.push(essai(4, titre, 'non_teste', m.cadreIllisible ? "le cadre du widget n'a pas pu être relu après l'envoi des messages" : "les messages forgés ne sont pas arrivés jusqu'au widget (aucun message d'origine « null » vu dans son cadre) : l'essai ne prouve rien", { niveau }));
+      }
+    }
+  }
+
+  // --- 20. API de l'instance appelée depuis le cadre du widget, avec la session de la personne (même passe que l'essai 22) ---
+  {
+    const c = phases.canaux;
+    const titre = "API de l'instance appelée depuis le widget avec la session de la personne";
+    if (c) {
+      const niveau = c.niveau;
+      const o = c.obs;
+      const a = o?.apiInstance ?? null;
+      const w = a?.widget ?? null;
+      const t = a?.temoin ?? null;
+      const chemins = [['records', 'lecture des lignes de la table'], ['sql', 'requête SQL sur le document']];
+      const lit = (x) => !!x && !x.erreur && x.statut === 200 && x.canari;
+      if (!o?.charge) essais.push(essai(20, titre, 'non_teste', `le widget n'a pas été chargé pour cet essai (${resume(o?.erreur)})`, { niveau }));
+      else if (!w || w.erreur || !t || t.erreur) essais.push(essai(20, titre, 'non_teste', `l'essai n'a pas pu être joué dans le cadre du widget et dans la page Grist${w?.erreur || t?.erreur ? ` (${resume(w?.erreur ?? t?.erreur, 150)})` : ''}`, { niveau }));
+      else if (!chemins.some(([cle]) => lit(t[cle]))) essais.push(essai(20, titre, 'non_teste', "le même appel fait depuis la page Grist (le témoin) n'a pas pu lire le document : un échec depuis le widget ne prouverait rien", { niveau }));
+      else {
+        const lus = chemins.filter(([cle]) => lit(w[cle])).map(([, libelle]) => libelle);
+        const csp = (w.violations ?? []).length > 0;
+        const etapes = chemins.map(([cle, libelle]) => ({ etape: `${libelle} avec la session, depuis le cadre du widget`, ok: lit(w[cle]), ...(lit(w[cle]) ? {} : { barriere: csp ? `politique de sécurité (CSP) du widget : ${resume(w.violations[0], 40)}` : (w[cle]?.erreur ? 'refus du navigateur (CORS : Grist ne répond pas aux autres origines avec la session)' : `réponse ${w[cle]?.statut ?? '?'} sans les données`) }) }));
+        if (lus.length) {
+          essais.push(essai(20, titre, 'reussi', `le cadre du widget a pu lire le document par l'API de l'instance avec la session de la personne : ${lus.join(' ; ')}, quel que soit son niveau d'accès (« ${niveau} »)`, { niveau, regle: 'D-REEL-20', severite: 'info', etapes }));
+          constats.push(constat({
+            regle: 'D-REEL-20', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            titre: "Un widget peut appeler l'API de l'instance Grist avec la session de la personne",
+            constat: `Depuis le cadre du widget (origine différente de celle de Grist), un appel à l'API REST de l'instance de test avec la session de la personne a lu le document : ${lus.join(' ; ')}. Le niveau d'accès accordé au widget (« ${niveau} ») n'a donc pas borné ce que son code peut lire.`,
+            impact: "Le niveau d'accès (none, read table, full) ne protège plus rien : tout code du widget lit et écrit comme la personne connectée. Ce n'est pas un défaut du widget mais de Grist ou de son déploiement (cookie de session, en-têtes CORS) : à signaler à l'éditeur ou à l'administrateur de l'instance, avec la version testée.",
+            remediation: "Aucune action sur le widget. Côté instance : cookie de session `SameSite=Lax` ou `Strict`, aucune origine de widget dans les origines de confiance (CORS), widgets hébergés sur un site différent de celui de Grist.",
+            referentiels: ['CWE-346', 'CWE-1021', 'OWASP Top 10 A01:2021 — Broken Access Control'],
+            preuve: { niveau, etapes },
+          }));
+        } else {
+          essais.push(essai(20, titre, 'bloque', `le cadre du widget n'a pas pu lire le document par l'API de l'instance avec la session de la personne (le même appel depuis la page Grist y arrive) : ${csp ? 'politique de sécurité (CSP) du widget' : 'Grist ne répond pas aux autres origines avec la session (CORS)'}`, { niveau, barriere: csp ? 'politique de sécurité (CSP) du widget' : 'CORS de Grist (la session ne sert pas à une autre origine)', etapes }));
+        }
       }
     }
   }
