@@ -83,11 +83,12 @@ export async function auditGristReel(ctx, options = {}) {
     const obsNone = await jouerPhase(commun);
 
     const phases = { none: obsNone, demande: null };
+    let mapping; let numero = 2;
     if (obsNone.charge) {
       const { niveau, parDefaut } = choisirNiveau(obsNone.configure);
       resume.niveauParDefaut = parDefaut;
       if (niveau) {
-        const mapping = proposerCorrespondance(obsNone.configure?.columns, doc, jeu);
+        mapping = proposerCorrespondance(obsNone.configure?.columns, doc, jeu);
         resume.correspondanceColonnes = mapping ? Object.keys(mapping) : null;
         journal(`  Phase 2 : le widget au niveau « ${niveau} »${parDefaut ? ' (niveau usuel, le widget n\'en déclare pas)' : ' (celui qu\'il demande)'}…`);
         await reglerSection(client, doc, section, { url: urlWidget, access: niveau, columnsMapping: mapping ?? undefined });
@@ -100,10 +101,26 @@ export async function auditGristReel(ctx, options = {}) {
       const fichiers = bibliotheques.resume.chargees;
       if (fichiers.length) {
         const niveau = phases.demande?.niveau ?? 'none';
-        journal(`  Phase 3 : les bibliothèques du widget, modifiées à la source, au niveau « ${niveau} »…`);
+        journal(`  Phase ${++numero} : les bibliothèques du widget, modifiées à la source, au niveau « ${niveau} »…`);
         const { servies: alterees, marqueurs } = alterer(bibliotheques.servies);
         phases.alteration = { niveau, marqueurs, fichiers, obs: await jouerPhase({ ...commun, kit: undefined, servies: alterees, lireMarqueurs: true }) };
       } else phases.alteration = { indisponible: "aucune des bibliothèques déclarées par le widget n'a pu être téléchargée (voir la liste des bibliothèques du rapport)" };
+    }
+
+    // Essai 5 : l'adresse du widget affirme `access=full&readonly=false`, ce que Grist n'a pas accordé. Le widget règle-t-il sa conduite sur l'adresse plutôt que sur ce que Grist lui accorde ?
+    // Grist ajoute ensuite ses propres paramètres (`access=<niveau réel>`), sans retirer les faux : un widget qui lit le premier `access` lit le faux. La section est remise à son adresse d'origine ensuite.
+    if (obsNone.charge) {
+      const niveau = phases.demande?.niveau ?? 'none';
+      if (niveau === 'full') phases.forgee = { niveau, sansObjet: true };
+      else {
+        journal(`  Phase ${++numero} : le widget appelé avec une adresse qui affirme un accès « full », au niveau « ${niveau} »…`);
+        const reference = [phases.demande?.obs ?? phases.none, phases.alteration?.obs].filter((o) => o?.charge);
+        try {
+          await reglerSection(client, doc, section, { url: `${urlWidget}${urlWidget.includes('?') ? '&' : '?'}access=full&readonly=false`, access: niveau, columnsMapping: mapping });
+          phases.forgee = { niveau, reference, obs: await jouerPhase({ ...commun, kit: undefined }) };
+        } catch (e) { journal(`  Adresse forgée non jouée (${resumerCauseErreur(e)}) : l'essai 5 ne sera pas joué.`); }
+        await reglerSection(client, doc, section, { url: urlWidget, access: niveau, columnsMapping: mapping });
+      }
     }
 
     // Dernière passe, au niveau que le widget demande : essai 3 (des données hostiles font-elles ajouter une clé aux prototypes du widget ?), essai 4 (des messages forgés par un cadre voisin), essai 20 (l'API de l'instance appelée avec la session), essais 17 et 18 (quels droits du navigateur Grist donne au cadre), essai 22 (par quelles voies du
@@ -111,7 +128,7 @@ export async function auditGristReel(ctx, options = {}) {
     // modifie le document de test et fait recharger la page.
     if (obsNone.charge) {
       const niveau = phases.demande?.niveau ?? 'none';
-      journal(`  Phase ${phases.alteration ? 4 : 3} : ce que du code piégé dans le widget pourrait envoyer et modifier, au niveau « ${niveau} »…`);
+      journal(`  Phase ${++numero} : ce que du code piégé dans le widget pourrait envoyer et modifier, au niveau « ${niveau} »…`);
       // Essai 3 : les lignes hostiles sont ajoutées à la table avant que le widget ne se charge, pour qu'il les reçoive comme toute autre donnée.
       let hostiles = 0;
       try { hostiles = await ajouterDonneesHostiles(client, doc, jeu); } catch (e) { journal(`  Lignes hostiles non ajoutées (${resumerCauseErreur(e)}) : l'essai 3 ne sera pas joué.`); }
