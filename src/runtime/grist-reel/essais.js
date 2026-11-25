@@ -30,7 +30,7 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 3, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 21, 22, 23];
+export const ESSAIS_JOUES = [1, 3, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 21, 22, 23, 24];
 export const ESSAIS_PAS_ENCORE = '2, 4 à 6, 11, 14, 19, 20';
 
 /** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
@@ -537,6 +537,38 @@ export function evaluerEssais(phases, jeu) {
           essais.push(essai(23, titre, 'non_teste', "le stockage du navigateur n'a pas pu être lu dans le cadre du widget (localStorage, sessionStorage et IndexedDB inaccessibles)", { niveau, etapes }));
         } else {
           essais.push(essai(23, titre, 'rien_observe', `aucune donnée du document n'a été retrouvée dans le stockage du navigateur du widget${usage.length ? ` (stockage utilisé : ${usage.join(', ')})` : ' (stockage vide)'}.${cookiesTexte}`, { niveau, etapes, usage }));
+        }
+      }
+    }
+  }
+
+  // --- 24. Écritures du widget lui-même, au chargement, sans que personne n'ait rien fait (le journal des appels à Grist le dit) ---
+  {
+    const d = phases.demande;
+    const titre = 'Le widget écrit-il dans le document sans qu\'on le lui demande ?';
+    if (d) {
+      const niveau = d.niveau;
+      const o = d.obs;
+      if (!o?.charge) essais.push(essai(24, titre, 'non_teste', `le widget n'a pas été chargé pour cet essai (${resume(o?.erreur)})`, { niveau }));
+      else if (!o.appelsRpc?.length) essais.push(essai(24, titre, 'non_teste', "le widget n'a rien échangé avec Grist pendant l'essai : ses écritures éventuelles n'ont pas pu être vues", { niveau }));
+      else {
+        const ecritures = o.appelsRpc.filter((a) => a.methode === 'applyUserActions' && /GristDocAPI/.test(a.interface ?? ''));
+        const acceptees = ecritures.filter((a) => a.issue === 'accepte');
+        const refusees = ecritures.filter((a) => a.issue === 'refuse');
+        const actions = [...new Set(acceptees.flatMap((a) => [...String(a.args ?? '').matchAll(/\["([A-Z][A-Za-z]+)",/g)].map((m) => m[1])))].slice(0, 6);
+        if (acceptees.length) {
+          essais.push(essai(24, titre, 'reussi', `le widget a écrit dans le document dès son chargement, sans clic ni saisie : ${acceptees.length} appel(s) accepté(s) par Grist${actions.length ? ` (${actions.join(', ')})` : ''}`, { niveau, regle: 'D-REEL-24', severite: 'info', nature: 'comportement', appels: acceptees.length, actions }));
+          constats.push(constat({
+            regle: 'D-REEL-24', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            titre: "Le widget modifie le document dès son chargement, sans action de la personne",
+            constat: `Dans un vrai Grist (Grist Desktop, instance jetable), au niveau d'accès « ${niveau} », le widget a appelé \`applyUserActions\` ${acceptees.length} fois pendant son chargement${actions.length ? ` (${actions.join(', ')})` : ''}, sans que l'audit clique ni saisisse quoi que ce soit ; Grist a accepté ces écritures.`,
+            impact: "Un widget qui écrit tout seul modifie des données que la personne n'a pas touchées (et remplit l'historique du document). Parfois voulu (initialiser une colonne), parfois une boucle ou une erreur. Information sur le comportement, sans pénalité.",
+            remediation: "N'écrire que sur une action de la personne (clic, saisie) ; si une initialisation est nécessaire, la documenter et la faire une seule fois, en vérifiant que la donnée n'existe pas déjà.",
+            referentiels: ['Principe de moindre surprise'],
+            preuve: { niveau, appels: acceptees.length, actions, exemple: String(acceptees[0].args ?? '').slice(0, 200) },
+          }));
+        } else {
+          essais.push(essai(24, titre, 'rien_observe', `le widget n'a écrit dans le document à aucun moment de son chargement${refusees.length ? ` (${refusees.length} tentative(s) d'écriture refusée(s) par Grist au niveau « ${niveau} »)` : ''}`, { niveau }));
         }
       }
     }
