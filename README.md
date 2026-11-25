@@ -226,6 +226,9 @@ La sonde qui prouve qu'une valeur de cellule peut s'exécuter comme du code
 (constat `D-XSS-01`) est toujours ajoutée, dans sa propre colonne, quel que
 soit le scénario fourni : la personnaliser sert à tester avec des données
 représentatives, pas à retirer cette vérification.
+Une batterie de 19 charges d'attaque (`D-XSS-02`, `D-XSS-03`) est ensuite jouée sur une page à part : elle essaie les contextes
+que la charge simple ne couvre pas (attribut, lien `javascript:`, Markdown, gabarit…) par les cellules, les noms de colonnes,
+les options du widget, l'adresse et un message ; un scénario avec les colonnes du widget l'aide à les atteindre.
 
 ## Interface web locale
 

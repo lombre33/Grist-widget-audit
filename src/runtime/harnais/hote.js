@@ -145,6 +145,7 @@ export function creerHoteGrist(iframe, doc, reglage = {}) {
         mappingsChange: false,
         theme: { appearance: 'light', name: 'GristLight', colors: {} },
         settings: { accessLevel: niveauAccorde, linking: { asTarget: null, asSource: false } },
+        ...(doc.options ? { options: doc.options } : {}),   // les options du widget : `grist.onOptions` les reçoit avec les réglages (la batterie d'attaque en remplit)
         fromReady: true,
       });
     },

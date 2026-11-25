@@ -49,6 +49,11 @@ test("une injection + l'écriture dans le document (accès full) : C-CHAINE-04 ;
   assert.deepEqual(chainesDAttaque([c('D-XSS-01', { confiance: 'prouve' }), c('C-GRIST-03', { severite: 'mineur' })], ctx('full')), [], "C-GRIST-03 mineur : aucune écriture détectée");
 });
 
+test("D-XSS-02 (batterie jouée en Chromium) est une porte d'injection, sauf quand seule l'adresse du widget l'a ouverte (mineur)", () => {
+  assert.deepEqual(regles(chainesDAttaque([c('D-XSS-02', { severite: 'critique', bloquant: true, confiance: 'prouve' }), c('C-PM-01')], ctx())), ['C-CHAINE-02']);
+  assert.deepEqual(chainesDAttaque([c('D-XSS-02', { severite: 'mineur', confiance: 'prouve' }), c('C-PM-01')], ctx()), []);
+});
+
 test("le texte d'une chaîne ne reprend ni le titre ni l'extrait du widget, et cite un nom de fichier hostile en extrait de code", () => {
   const hostile = c('C-XSS-01', { titre: '<img src=x onerror=alert(1)> `titre`', extrait: '<script>boom</script>', fichier: 'a`\u{1b}[31m.js' });
   const [chaine] = chainesDAttaque([hostile, c('C-PM-01')], ctx());

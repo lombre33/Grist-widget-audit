@@ -396,6 +396,21 @@ lui-même. Concrètement :
   avec un document minimal — quelques colonnes, dont une valeur contient une
   charge de test XSS — et journalise chaque appel reçu.
 
+- Une fois le scénario fini et ses constats faits, une **batterie de charges d'attaque** est jouée sur une page à part du même
+  Chromium, sous la même neutralisation du réseau (D-XSS-02, D-XSS-03). La sonde de D-XSS-01 n'essaie qu'une charge, la balise
+  `<img onerror>`, dans une cellule ; la batterie en essaie 19, une par contexte où une valeur peut atterrir (texte HTML, valeur
+  d'attribut entre guillemets ou apostrophes, fermeture d'une balise, lien `javascript:`, Markdown, chaîne de code, gabarit, entités
+  décodées deux fois), par cinq entrées : valeur de cellule, nom de colonne, options du widget, adresse (paramètres et ancre), message
+  d'un cadre voisin (jamais de l'hôte : un widget qui ne croit que son parent refuse le message). Chaque charge, si elle s'exécute,
+  pose un bit dans une variable de la page hôte : la preuve est l'exécution, comme pour D-XSS-01. Les charges qui attendent un geste
+  (survol, focus, clic) sont déclenchées sur les seuls éléments qui portent une charge de l'audit, jamais sur le code du widget, et le
+  constat dit si la charge s'est exécutée à l'affichage ou après le geste simulé. Une exécution par une cellule, un nom de colonne ou une
+  option est critique et bloquante (une autre personne que celle qui ouvre le widget peut la provoquer) ; par un message seul, majeure ;
+  par l'adresse seule, mineure (seule la personne qui installe le widget la choisit). Une batterie sans exécution est une information
+  (D-XSS-03) qui dit ce qui a été joué : ce n'est pas une preuve d'absence, le widget peut n'afficher que d'autres colonnes ou lire d'autres
+  clés d'options que celles essayées (un scénario avec ses colonnes, `--scenario`, aide la batterie à les atteindre). Ce que la batterie
+  provoque (une requête déclenchée par un clic sur une charge) n'entre pas dans les constats réseau du scénario.
+
 Ce n'est **pas** une instance Grist : pas de moteur de calcul, pas de vraie
 authentification, pas de vrai stockage, pas de vraie UI de mappage de
 colonnes. C'est un partenaire RPC protocolairement exact. Ce choix permet

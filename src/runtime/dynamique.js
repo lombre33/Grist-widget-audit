@@ -36,6 +36,7 @@ import { demarrerServeur } from './serveur.js';
 import { constat } from '../moteur/modele.js';
 import { analyserAccesAppat } from '../regles/d-perimetre.js';
 import { estGrist, documentGristVise } from '../contexte/hotes-grist.js';
+import { jouerBatterie, constatsBatterie } from './batterie-attaque.js';
 
 // `new URL(import.meta.url).pathname` casse sur Windows : un chemin
 // `file:///D:/...` donne un pathname `/D:/...` (barre oblique de tête que
@@ -774,6 +775,11 @@ export async function auditDynamique(ctx, options = {}) {
     constats.push(...constatsConsole(brut.consoles, brut.erreursPage, brut.requetes.length));
     constats.push(...constatsNegociationAcces(brut.journalHote));
     constats.push(...analyserAccesAppat(brut.journalHote, ctx));
+
+    // La batterie de charges d'attaque (D-XSS-02/03) : une page à part, une fois le scénario et ses constats faits, jamais quand le widget n'a pas été chargé ou a bloqué le navigateur.
+    if (!delaiDepasse && !brut.erreurHote && brut.journalHote) {
+      constats.push(...constatsBatterie(await jouerBatterie({ contexte, origine, urlWidget: `${origine}/widget/${entree}`, document: documentDeTest(options.scenario), brut })));
+    }
 
   } catch (e) {
     // Filet générique : n'importe quelle erreur inattendue de l'axe D

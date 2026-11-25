@@ -35,7 +35,7 @@ const lieu = (e) => (e.fichier ? ` (${citer(`${e.fichier}${e.ligne ? `:${e.ligne
  */
 export function chainesDAttaque(constats, ctx) {
   const acces = accesDemande(ctx);
-  const injection = premier(constats, (c) => INJECTION.has(c.regle));
+  const injection = premier(constats, (c) => INJECTION.has(c.regle) || (c.regle === 'D-XSS-02' && c.severite !== 'mineur'));   // D-XSS-02 par la seule adresse (mineur) n'est pas une porte qu'un autre peut ouvrir
   const message = premier(constats, (c) => c.regle === 'C-PM-01');
   const sortie = premier(constats, (c) => SORTIE.has(c.regle));
   const codeDistant = premier(constats, (c) => c.severite === 'critique' && (c.regle === 'E-DEP-01' || c.regle === 'C-EXFIL-03'));
