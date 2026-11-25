@@ -125,7 +125,9 @@ test('un dépôt hostile ne lance rien par la lecture de son historique : ni con
     const programme = path.join(parent, 'piege.cjs');
     fs.writeFileSync(programme, `require('node:fs').appendFileSync(${JSON.stringify(marque)}, 'lancé\\n'); process.stdin.resume(); process.stdin.on('end', () => process.exit(0));`);
     const commande = `"${process.execPath.split(path.sep).join('/')}" "${programme.split(path.sep).join('/')}"`;
-    fs.appendFileSync(path.join(racine, '.git', 'config'), `[diff "piege"]\n\ttextconv = ${commande}\n[log]\n\tshowSignature = true\n[gpg]\n\tprogram = ${commande}\n`);
+    // Dans un fichier de configuration de git, un guillemet délimite : pour que le shell reçoive les guillemets (un chemin avec une espace, « Program Files »), on les échappe.
+    const valeur = commande.replaceAll('"', '\\"');
+    fs.appendFileSync(path.join(racine, '.git', 'config'), `[diff "piege"]\n\ttextconv = ${valeur}\n[log]\n\tshowSignature = true\n[gpg]\n\tprogram = ${valeur}\n`);
     // Le piège existe : le git de l'utilisateur, lancé sans précaution, l'exécute.
     execFileSync('git', ['-C', racine, 'log', '-p', '-U0', '--all'], { stdio: 'ignore' });
     assert.ok(fs.existsSync(marque), 'le piège se déclenche avec un git sans précaution');
