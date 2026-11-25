@@ -31,6 +31,7 @@ const NON_CONCLUANT = "Impossible de conclure : l'essai n'a pas pu être joué (
 function enClair(e) {
   const t = e.resultat;
   if (t === 'non_teste') {
+    if (e.bibliothequesManquantes) return "Impossible de conclure : des bibliothèques du widget n'ont pas pu être chargées, son code n'a pas été joué en entier (raison dans le détail). Ce n'est pas la même chose que « tout va bien ».";
     if (e.id === 1) return "Impossible de conclure : le piège n'a pas pu être présenté au widget (raison dans le détail). Ce n'est pas la même chose que « tout va bien ».";
     if (e.id === 7) return "Impossible de conclure : le widget n'a rien échangé avec Grist pendant l'essai (raison dans le détail).";
     if (e.id === 13) return "Impossible de conclure : aucune donnée du document n'est arrivée au widget, une fuite ne pouvait donc ni se produire ni être mesurée. Ce n'est pas la même chose que « aucune fuite ».";
@@ -103,6 +104,30 @@ const nonJoues = (r) => `Ce rapport ne couvre pas tout : ${ESSAIS_DU_CATALOGUE -
 
 const COMMENT_LIRE = "Comment lire : « Bien » veut dire que l'essai n'a rien révélé d'anormal, ou que Grist ou le navigateur l'a arrêté (aucune pénalité). « Pas bien » veut dire qu'un effet a été observé : il devient un constat noté (règle D-REEL-NN). « Pas testé » veut dire que l'essai n'a pas pu être joué : aucune conclusion, ni dans un sens ni dans l'autre. Un « Bien » ne prouve pas que le widget est sûr : il dit seulement que cet essai-là n'a rien trouvé.";
 
+const BIBLIOTHEQUES_AFFICHEES = 40;
+const INTRO_BIBLIOTHEQUES = "L'audit a téléchargé lui-même ces fichiers (le navigateur reste coupé d'Internet) et les a servis au widget pour qu'il s'affiche pour de vrai. L'empreinte SHA-256 permet de vérifier plus tard que c'est le même code.";
+const kilo = (octets) => `${Math.max(1, Math.round(octets / 1024))} Ko`;
+
+function htmlBibliotheques(b) {
+  if (!b || (!b.chargees?.length && !b.refusees?.length)) return '';
+  const lignes = [
+    ...b.chargees.slice(0, BIBLIOTHEQUES_AFFICHEES).map((f) => `<li><code>${esc(f.url)}</code> — ${kilo(f.taille)}, SHA-256 <code title="${esc(f.sha256)}">${esc(f.sha256.slice(0, 16))}…</code></li>`),
+    ...(b.chargees.length > BIBLIOTHEQUES_AFFICHEES ? [`<li>… et ${b.chargees.length - BIBLIOTHEQUES_AFFICHEES} autre(s) fichier(s)</li>`] : []),
+    ...b.refusees.slice(0, 20).map((f) => `<li><code>${esc(f.url)}</code> — non téléchargé : ${esc(f.raison)}</li>`),
+  ];
+  return `<details class="reel-bibliotheques"><summary>Bibliothèques du widget jouées : ${b.chargees.length} fichier(s)${b.refusees.length ? `, ${b.refusees.length} non téléchargé(s)` : ''}</summary><p class="reel-contexte">${esc(INTRO_BIBLIOTHEQUES)}</p><ul>${lignes.join('')}</ul></details>`;
+}
+
+function markdownBibliotheques(b) {
+  if (!b || (!b.chargees?.length && !b.refusees?.length)) return [];
+  return [
+    `**Bibliothèques du widget jouées : ${b.chargees.length} fichier(s)${b.refusees.length ? `, ${b.refusees.length} non téléchargé(s)` : ''}.** ${INTRO_BIBLIOTHEQUES}`, '',
+    ...b.chargees.slice(0, BIBLIOTHEQUES_AFFICHEES).map((f) => `- \`${f.url}\` — ${kilo(f.taille)}, SHA-256 \`${f.sha256}\``),
+    ...(b.chargees.length > BIBLIOTHEQUES_AFFICHEES ? [`- … et ${b.chargees.length - BIBLIOTHEQUES_AFFICHEES} autre(s) fichier(s)`] : []),
+    ...b.refusees.slice(0, 20).map((f) => `- \`${f.url}\` — non téléchargé : ${f.raison}`), '',
+  ];
+}
+
 export function htmlGristReel(r) {
   if (!r) return '';
   if (!r.execute) {
@@ -132,6 +157,7 @@ export function htmlGristReel(r) {
     <ul class="reel-liste">
       ${cartes.join('\n      ')}
     </ul>
+    ${htmlBibliotheques(r.bibliotheques)}
     <p class="reel-contexte">${esc(bandeau(r))}</p>
     <p class="reel-contexte">${esc(COMMENT_LIRE)} ${esc(nonJoues(r))}</p>
   </section>`;
@@ -162,6 +188,8 @@ export const cssGristReel = `
 .reel-detail{color:var(--text-2); font-size:12.5px;}
 .reel-brut{color:var(--text-muted);}
 .reel-contexte{color:var(--text-2); font-size:12.5px;}
+.reel-bibliotheques{margin:10px 0; font-size:12.5px; color:var(--text-2);}
+.reel-bibliotheques ul{margin:6px 0; padding-left:20px; word-break:break-all;}
 `;
 
 export function markdownGristReel(r) {
@@ -179,6 +207,6 @@ export function markdownGristReel(r) {
     const suite = e.etapes?.length ? ` Étapes : ${e.etapes.map((s) => `${s.ok ? 'franchie' : 'arrêtée'} (${s.etape}${s.barriere ? ` — ${s.barriere}` : ''})`).join(' ; ')}.` : '';
     l.push(`| ${v.symbole} **${v.mot}** — ${md(v.precision)} | ${e.id}. ${md(e.titre)} — niveau ${md(e.niveau ?? 'tous')} | ${md(enClair(e))} | ${md(e.detail + (e.barriere ? ` (barrière : ${e.barriere})` : '') + (e.regle ? ` [${e.regle}]` : '') + suite)} (résultat : ${LIBELLE[e.resultat]}) |`);
   }
-  l.push('', bandeau(r), '', `${COMMENT_LIRE} ${nonJoues(r)}`, '');
+  l.push('', ...markdownBibliotheques(r.bibliotheques), bandeau(r), '', `${COMMENT_LIRE} ${nonJoues(r)}`, '');
   return l;
 }

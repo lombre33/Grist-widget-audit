@@ -61,6 +61,7 @@ function sondeInitiale({ prefixe, valeurs }) {
 
 const hoteDe = (url) => { try { return new URL(url).hostname; } catch { return null; } };
 const origineDe = (url) => { try { return new URL(url).origin; } catch { return null; } };
+const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; return u.href; } catch { return url; } };
 
 /**
  * @param {object} p
@@ -69,14 +70,15 @@ const origineDe = (url) => { try { return new URL(url).origin; } catch { return 
  * @param {Array<{name: string, value: string}>} p.cookies  session de l'utilisateur par défaut
  * @param {string} p.chemin        chemin de la page du document
  * @param {string} p.origineWidget origine du serveur du widget
+ * @param {Map<string, object>} [p.servies]  bibliothèques du widget téléchargées par l'outil (voir bibliotheques.js), servies à la place de l'Internet coupé
  * @param {object} p.jeu           voir donnees.js
  * @param {number} [p.delaiMs]
  */
-export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, delaiMs = 45_000 }) {
+export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, delaiMs = 45_000 }) {
   const obs = {
     charge: false, appelsRpc: [], configure: null, canariRecu: false, texteDuCadre: '',
     xss: { executions: 0, lu: null, refus: null, erreur: null },
-    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [],
+    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [],
     consoles: [], erreursPage: [], erreur: null,
   };
   const origineGrist = origineDe(base);
@@ -103,6 +105,15 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
         } catch { return route.fulfill({ path: API_LOCALE, contentType: 'text/javascript' }); }
       }
       if (o === origineGrist || o === origineWidget) return route.continue();
+      // Une bibliothèque que le widget déclare et que l'outil a téléchargée avant les essais : servie telle quelle, rien n'a quitté la machine pendant l'essai.
+      const servie = req.method() === 'GET' ? servies?.get(urlSansAncre(url)) : null;
+      if (servie) {
+        obs.bibliothequesServies += 1;
+        const cors = { 'access-control-allow-origin': '*', 'cache-control': 'no-store' };
+        return route.fulfill(servie.status === 200
+          ? { status: 200, contentType: servie.type, body: servie.corps, headers: cors }
+          : { status: servie.status, headers: { ...cors, location: servie.location } });
+      }
       let provenance = 'grist';
       try {
         const f = req.frame();
@@ -110,6 +121,7 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
         else if (f !== page.mainFrame()) provenance = 'widget';
       } catch { provenance = 'inconnue'; }
       const corps = req.method() !== 'GET' ? (req.postData() ?? '').slice(0, 2000) : null;
+      if (req.resourceType() === 'script' && provenance === 'widget' && obs.dependancesNonResolues.length < 20) obs.dependancesNonResolues.push({ url: url.slice(0, 300), hote: hoteDe(url) });
       const enregistrement = {
         url: url.slice(0, 2000), methode: req.method(), hote: hoteDe(url), type: req.resourceType(), provenance,
         canari: trouverCanari(`${url} ${corps ?? ''}`, jeu),

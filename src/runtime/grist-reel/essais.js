@@ -174,6 +174,17 @@ export function evaluerEssais(phases, jeu) {
     } else essais.push(essai(16, titre, 'rien_observe', 'aucune fenêtre, boîte de dialogue ni téléchargement pendant les phases jouées'));
   }
 
+  // Des bibliothèques du widget n'ont pas pu être chargées (adresse calculée à l'exécution, refus de l'outil, hors ligne) : leur code n'a pas été joué.
+  // Un « rien observé » ne prouverait alors rien, il devient « non testé » (un effet observé, ou une barrière, reste vrai).
+  const manquantes = [...new Map(chargees.flatMap((o) => o.dependancesNonResolues ?? []).map((d) => [d.url, d])).values()];
+  if (manquantes.length) {
+    const hotes = [...new Set(manquantes.map((d) => d.hote).filter(Boolean))].slice(0, 3).join(', ');
+    essais.forEach((e, i) => {
+      if (e.resultat !== 'rien_observe') return;
+      essais[i] = essai(e.id, e.titre, 'non_teste', `${manquantes.length} bibliothèque(s) du widget n'ont pas pu être chargées pendant l'essai (${hotes}) : leur code n'a pas été joué, « rien observé » ne prouverait rien`, { ...(e.niveau ? { niveau: e.niveau } : {}), bibliothequesManquantes: manquantes.length });
+    });
+  }
+
   essais.sort((a, b) => a.id - b.id);
   return { essais, constats, niveauDemande };
 }

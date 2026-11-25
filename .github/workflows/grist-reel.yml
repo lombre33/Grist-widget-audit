@@ -47,4 +47,5 @@ jobs:
       - name: Essais contre un Grist réel (téléchargement, lancement, widgets de test)
         env:
           GWAUDIT_GRIST_REEL_E2E: '1'
-        run: node --test tests/grist-reel.test.mjs tests/interface.test.mjs tests/api-grist-partout.test.mjs tests/grist-reel-rapport.test.mjs
+          GWAUDIT_RESEAU_REEL: '1'
+        run: node --test tests/grist-reel.test.mjs tests/interface.test.mjs tests/api-grist-partout.test.mjs tests/grist-reel-rapport.test.mjs tests/grist-reel-bibliotheques.test.mjs

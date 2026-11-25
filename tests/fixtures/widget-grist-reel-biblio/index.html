@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Widget de test (bibliothèque déclarée)</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+</head>
+<body>
+<h1>Contacts</h1>
+<p id="etat">Bibliothèque non chargée.</p>
+<ul id="liste"></ul>
+<script type="module">
+  grist.ready({ requiredAccess: 'read table', columns: ['Nom', 'Email'] });
+  grist.onRecords(function (records) {
+    var liste = document.getElementById('liste');
+    liste.textContent = '';
+    records.forEach(function (r) {
+      var li = document.createElement('li');
+      li.textContent = r.Nom + ' — ' + r.Email;
+      liste.appendChild(li);
+    });
+  });
+  // Une bibliothèque déclarée par adresse littérale (comme un import depuis esm.sh) : l'audit la télécharge avant les essais.
+  import('https://bibliotheque.exemple.test/lib.mjs').then(function (m) { document.getElementById('etat').textContent = m.etat; });
+</script>
+</body>
+</html>

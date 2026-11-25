@@ -14,6 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { demarrerServeur } from '../serveur.js';
+import { resoudreBibliotheques } from './bibliotheques.js';
 import { assurerGristDesktop, EPINGLE, InstallationImpossible } from './installateur.js';
 import { lancerInstance, InstanceImpossible } from './instance.js';
 import { creerClient } from './client.js';
@@ -67,7 +68,12 @@ export async function auditGristReel(ctx, options = {}) {
     const section = await creerSectionCustom(client, doc);
     const urlWidget = `${serveur.origine}/widget/${entree}`;
     navigateur = await lancerChromium(chromium);
-    const commun = { navigateur, base: instance.base, cookies: client.cookiesNavigateur(), chemin: section.chemin, origineWidget: serveur.origine, jeu };
+    // Les bibliothèques que le widget déclare (esm.sh, CDN…) sont téléchargées par l'outil et servies au navigateur, qui reste coupé d'Internet.
+    let bibliotheques = null;
+    try { bibliotheques = await (options.resoudreBibliotheques ?? resoudreBibliotheques)(ctx, { journal }); }
+    catch (e) { journal(`  Bibliothèques du widget : non téléchargées (${resumerCauseErreur(e)}).`); }
+    resume.bibliotheques = bibliotheques?.resume ?? null;
+    const commun = { navigateur, base: instance.base, cookies: client.cookiesNavigateur(), chemin: section.chemin, origineWidget: serveur.origine, jeu, servies: bibliotheques?.servies };
 
     journal('  Phase 1 : le widget chargé dans Grist au niveau « none »…');
     await reglerSection(client, doc, section, { url: urlWidget, access: 'none' });
@@ -92,7 +98,7 @@ export async function auditGristReel(ctx, options = {}) {
       colonnesRenommees: jeu.colonnesRenommees,
       phases: [['none', phases.none], ...(phases.demande ? [[phases.demande.niveau, phases.demande.obs]] : [])].map(([niveau, o]) => ({
         niveau, charge: o.charge, appelsRpc: o.appelsRpc.length, appelsRefuses: o.appelsRpc.filter((a) => a.issue === 'refuse').length,
-        donneesArrivees: o.canariRecu, requetesExternes: o.requetesExternes.length, erreur: o.erreur,
+        donneesArrivees: o.canariRecu, requetesExternes: o.requetesExternes.length, bibliothequesServies: o.bibliothequesServies, bibliothequesManquantes: o.dependancesNonResolues.length, erreur: o.erreur,
       })),
     });
     return { constats, resume };
