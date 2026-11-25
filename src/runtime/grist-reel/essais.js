@@ -14,6 +14,9 @@
  * Numéros : ceux du catalogue de l'étude (essai 1 = XSS, 7 = niveau none, 8 = lecture hors périmètre, 9 = jeton d'accès et
  * appels directs, 12 = persistance par webhook, 13 = exfiltration mesurée, 15 = navigation du cadre parent, 16 = fenêtres).
  *
+ * L'essai 21 (hors du catalogue de l'étude) répond à : si le CDN, ou quelqu'un qui en a pris le contrôle, sert un fichier modifié à la même
+ * adresse, le widget l'exécute-t-il, ou une empreinte `integrity` l'arrête-t-elle ? Le fichier n'est modifié que par un marqueur inoffensif.
+ *
  * Les essais 8, 9 et 12 sont ceux de la « dépendance piégée » : du code étranger joué DANS le cadre du widget (voir kit.js) montre ce
  * qu'une bibliothèque compromise obtiendrait avec le niveau d'accès réellement accordé. Ils mesurent un rayon d'action, pas un défaut
  * prouvé du widget : leurs constats sont d'information (sans effet sur la note ; le niveau demandé est déjà pesé par C-GRIST-03),
@@ -22,7 +25,7 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 7, 8, 9, 12, 13, 15, 16];
+export const ESSAIS_JOUES = [1, 7, 8, 9, 12, 13, 15, 16, 21];
 export const ESSAIS_PAS_ENCORE = '2 à 6, 10, 11, 14, 17 à 20';
 
 const resume = (texte, n = 300) => String(texte ?? '').replace(/\s+/g, ' ').slice(0, n);
@@ -288,6 +291,54 @@ export function evaluerEssais(phases, jeu) {
         } else if (csp) {
           essais.push(essai(12, titre12, 'bloque', `la création du webhook a été arrêtée par la politique de sécurité (CSP) du widget`, { niveau, barriere: 'politique de sécurité (CSP) du widget' }));
         } else essais.push(essai(12, titre12, 'non_teste', `la création du webhook n'a pas abouti sans refus identifié (${w ? `réponse ${w.statut ?? ''} ${resume(w.erreurGrist ?? w.erreur, 100)}` : 'aucune réponse'})`, { niveau }));
+      }
+    }
+  }
+
+  // --- 21. Altération d'une bibliothèque servie à la même adresse : le navigateur l'exécute-t-il ? ---
+  {
+    const a = phases.alteration;
+    const titre = "Bibliothèque modifiée à la source, servie à la même adresse";
+    if (a) {
+      const niveau = a.niveau;
+      const refuseesPar = (obs) => (obs?.consoles ?? []).filter((c) => /integrity|digest/i.test(c.texte)).map((c) => (c.texte.match(/resource '([^']+)'/) ?? [])[1]).filter(Boolean);
+      const dejaRefusees = new Set(chargees.flatMap((o) => refuseesPar(o)));
+      const refusees = new Set(refuseesPar(a.obs));
+      const fichiers = new Map((a.fichiers ?? []).map((f) => [f.url, f]));
+      if (a.indisponible) essais.push(essai(21, titre, 'non_teste', a.indisponible, { niveau }));
+      else if (!a.obs?.charge) essais.push(essai(21, titre, 'non_teste', `le widget n'a pas été chargé avec les bibliothèques modifiées (${resume(a.obs?.erreur)})`, { niveau }));
+      else {
+        const executees = (a.obs.alteration?.executees ?? []).map((id) => a.marqueurs?.get(id)).filter(Boolean);
+        const protegeesExecutees = executees.filter((u) => fichiers.get(u)?.protegee);
+        const refuseesPourLaModification = [...fichiers.keys()].filter((u) => refusees.has(u) && !dejaRefusees.has(u));
+        const liste = (urls) => urls.slice(0, 3).map((u) => resume(u, 100)).join(', ') + (urls.length > 3 ? ` et ${urls.length - 3} autre(s)` : '');
+        if (protegeesExecutees.length) {
+          essais.push(essai(21, titre, 'reussi', `${liste(protegeesExecutees)} : le fichier modifié a été exécuté alors que l'analyse du code le croit protégé par une empreinte (integrity)`, { niveau, regle: 'D-REEL-21', severite: 'critique', fichiers: protegeesExecutees.length }));
+          constats.push(constat({
+            regle: 'D-REEL-21', axe: 'D', severite: 'critique', bloquant: true, confiance: 'prouve',
+            titre: "Une bibliothèque modifiée à la source est exécutée malgré l'empreinte (integrity) déclarée",
+            constat: `Le fichier ${resume(protegeesExecutees[0], 200)}${protegeesExecutees.length > 1 ? ` (et ${protegeesExecutees.length - 1} autre(s))` : ''}, servi à la même adresse avec une ligne de plus (un marqueur inoffensif, qui ne lit ni n'envoie rien), a été exécuté par le widget chargé dans un vrai Grist (niveau « ${niveau} »), alors que l'analyse du code le croit protégé par une empreinte. L'empreinte déclarée ne joue donc pas son rôle dans ce navigateur.`,
+            impact: "Un fichier modifié par le CDN, ou par quiconque en prend le contrôle, s'exécuterait dans le widget avec ses droits : voir les essais 8 et 9 pour ce que cela donne avec le niveau d'accès accordé.",
+            remediation: "Vérifier la forme de l'empreinte (algorithme `sha384`, valeur en base64, `crossorigin=\"anonymous\"`) et, pour un module, la clé `integrity` de l'import map ; à défaut, embarquer la bibliothèque dans le dépôt (`vendor/`).",
+            referentiels: ['OWASP Top 10 A08:2021 — Software and Data Integrity Failures', 'CWE-353'],
+            preuve: { niveau, fichiers: protegeesExecutees.slice(0, 5) },
+          }));
+        } else if (executees.length) {
+          essais.push(essai(21, titre, 'reussi', `${liste(executees)} : le fichier modifié a été exécuté, rien n'a vérifié son contenu (aucune empreinte déclarée)`, { niveau, regle: 'D-REEL-21', severite: 'info', nature: 'confirmation', fichiers: executees.length }));
+          constats.push(constat({
+            regle: 'D-REEL-21', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            titre: "Une bibliothèque modifiée à la source serait exécutée par le widget (aucune empreinte)",
+            constat: `Le fichier ${resume(executees[0], 200)}${executees.length > 1 ? ` (et ${executees.length - 1} autre(s))` : ''}, servi à la même adresse avec une ligne de plus (un marqueur inoffensif, qui ne lit ni n'envoie rien), a été exécuté par le widget chargé dans un vrai Grist (niveau « ${niveau} »). L'analyse du code ne lui reconnaissait aucune empreinte : l'essai le confirme.`,
+            impact: "Confirme E-DEP-01, déjà noté : ce qu'un CDN compromis servirait s'exécuterait dans le widget avec ses droits (voir les essais 8 et 9). Cette mesure n'ajoute pas de pénalité.",
+            remediation: "Embarquer la bibliothèque dans le dépôt (`vendor/`), ou la figer par version et empreinte (`integrity`, ou clé `integrity` de l'import map).",
+            referentiels: ['OWASP Top 10 A08:2021 — Software and Data Integrity Failures', 'CWE-353'],
+            preuve: { niveau, fichiers: executees.slice(0, 5) },
+          }));
+        } else if (refuseesPourLaModification.length) {
+          essais.push(essai(21, titre, 'bloque', `${liste(refuseesPourLaModification)} : le navigateur a refusé le fichier modifié (l'empreinte ne correspond plus)`, { niveau, barriere: "empreinte d'intégrité (integrity) vérifiée par le navigateur" }));
+        } else {
+          essais.push(essai(21, titre, 'non_teste', `aucun des ${fichiers.size} fichier(s) modifié(s) n'a été exécuté et aucun refus d'empreinte n'a été vu : la bibliothèque n'a pas été demandée par le widget, ou elle a échoué pour une autre raison${dejaRefusees.size ? " (une empreinte refuse déjà le fichier non modifié : elle ne correspond pas à ce que le serveur sert)" : ''}`, { niveau }));
+        }
       }
     }
   }

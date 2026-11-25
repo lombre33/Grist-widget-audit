@@ -14,7 +14,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { demarrerServeur } from '../serveur.js';
-import { resoudreBibliotheques } from './bibliotheques.js';
+import { resoudreBibliotheques, alterer } from './bibliotheques.js';
 import { assurerGristDesktop, EPINGLE, InstallationImpossible } from './installateur.js';
 import { lancerInstance, InstanceImpossible } from './instance.js';
 import { creerClient } from './client.js';
@@ -93,6 +93,17 @@ export async function auditGristReel(ctx, options = {}) {
         await reglerSection(client, doc, section, { url: urlWidget, access: niveau, columnsMapping: mapping ?? undefined });
         phases.demande = { niveau, obs: await jouerPhase(commun) };
       }
+    }
+
+    // Essai d'altération (essai 21) : les mêmes bibliothèques, modifiées, servies à la même adresse que ce que le widget déclare.
+    if (obsNone.charge && bibliotheques?.resume.declarees) {
+      const fichiers = bibliotheques.resume.chargees;
+      if (fichiers.length) {
+        const niveau = phases.demande?.niveau ?? 'none';
+        journal(`  Phase 3 : les bibliothèques du widget, modifiées à la source, au niveau « ${niveau} »…`);
+        const { servies: alterees, marqueurs } = alterer(bibliotheques.servies);
+        phases.alteration = { niveau, marqueurs, fichiers, obs: await jouerPhase({ ...commun, kit: undefined, servies: alterees, lireMarqueurs: true }) };
+      } else phases.alteration = { indisponible: "aucune des bibliothèques déclarées par le widget n'a pu être téléchargée (voir la liste des bibliothèques du rapport)" };
     }
 
     const { essais, constats } = evaluerEssais(phases, jeu);

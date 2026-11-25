@@ -74,14 +74,15 @@ const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; retur
  * @param {string} p.origineWidget origine du serveur du widget
  * @param {Map<string, object>} [p.servies]  bibliothèques du widget téléchargées par l'outil (voir bibliotheques.js), servies à la place de l'Internet coupé
  * @param {object} p.jeu           voir donnees.js
+ * @param {boolean} [p.lireMarqueurs]  lit dans le cadre du widget les marqueurs que posent les bibliothèques altérées (voir `alterer` dans bibliotheques.js)
  * @param {object} [p.kit]         paramètres du kit de la dépendance piégée (voir kit.js) : s'il est fourni, il est joué dans le cadre du widget
  * @param {number} [p.delaiMs]
  */
-export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, delaiMs = 45_000 }) {
+export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, lireMarqueurs, delaiMs = 45_000 }) {
   const obs = {
     charge: false, appelsRpc: [], configure: null, canariRecu: false, texteDuCadre: '',
     xss: { executions: 0, lu: null, refus: null, erreur: null },
-    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null,
+    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null,
     consoles: [], erreursPage: [], erreur: null,
   };
   const origineGrist = origineDe(base);
@@ -189,6 +190,7 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
         obs.texteDuCadre = dansCadre.texte.slice(0, 500);
         obs.xss = { executions: dansCadre.xss, lu: dansCadre.lu, refus: dansCadre.refus, erreur: dansCadre.erreur };
       }
+      if (lireMarqueurs && cadre) obs.alteration = { executees: await cadre.evaluate(() => (Array.isArray(globalThis.__gw_altere) ? globalThis.__gw_altere.slice(0, 300).map(String) : [])).catch(() => []) };
       if (kit && cadre) obs.kit = await cadre.evaluate(kitDependancePiegee, kit).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       try { if (origineDe(page.url()) !== origineGrist) obs.navigations.push({ url: page.url().slice(0, 500) }); } catch { /* page fermée */ }
     })();

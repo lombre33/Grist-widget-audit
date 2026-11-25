@@ -41,14 +41,18 @@ async function refus(url, lookup) {
   return null;
 }
 
-/** Les adresses de bibliothèques que le widget déclare, telles que l'axe E les relève. */
+/**
+ * Les adresses de bibliothèques que le widget déclare, telles que l'axe E les relève, et pour chacune si l'axe E la juge protégée par une
+ * empreinte (`integrity`) : c'est ce que l'essai d'altération (voir `alterer`) vérifie dans un vrai navigateur.
+ * @returns {Map<string, boolean>} adresse → protégée par une empreinte selon l'analyse statique
+ */
 function adressesDeclarees(ctx) {
-  const vues = new Set();
+  const vues = new Map();
   for (const c of analyserDependancesDistantes(ctx)) {
     if (c.regle !== 'E-DEP-01' || !c.preuve?.adresse) continue;
-    try { const u = new URL(c.preuve.adresse); u.hash = ''; vues.add(u.href); } catch { /* adresse illisible : pas téléchargée */ }
+    try { const u = new URL(c.preuve.adresse); u.hash = ''; vues.set(u.href, (vues.get(u.href) ?? true) && c.bloquant === false); } catch { /* adresse illisible : pas téléchargée */ }
   }
-  return [...vues];
+  return vues;
 }
 
 /** Les modules qu'un module importe en clair (`import`, `export … from`, `import('…')` à littéral), résolus contre son adresse. Un script classique : aucun. */
@@ -93,7 +97,8 @@ export async function resoudreBibliotheques(ctx, options = {}) {
   const limites = { ...LIMITES, ...options.limites };
   const chercher = options.deps?.fetch ?? fetch;
   const lookup = options.deps?.lookup ?? ((h) => dns.lookup(h, { all: true }));
-  const racines = adressesDeclarees(ctx);
+  const protegees = adressesDeclarees(ctx);
+  const racines = [...protegees.keys()];
   const servies = new Map();
   const chargees = []; const refusees = [];
   const resume = { declarees: racines.length, chargees, refusees, octets: 0, tronque: false };
@@ -135,7 +140,7 @@ export async function resoudreBibliotheques(ctx, options = {}) {
       const corps = await lireBorne(reponse, limites.octetsParFichier);
       resume.octets += corps.length;
       servies.set(courante.href, { status: 200, type, corps });
-      chargees.push({ url: courante.href, sha256: crypto.createHash('sha256').update(corps).digest('hex'), taille: corps.length });
+      chargees.push({ url: courante.href, sha256: crypto.createHash('sha256').update(corps).digest('hex'), taille: corps.length, protegee: profondeur === 0 && protegees.get(href) === true });
       if (profondeur < limites.profondeur) {
         for (const lien of liensDuModule(corps.toString('utf8'), courante.href)) {
           if (new URL(lien).hostname === courante.hostname) file.push({ href: lien, profondeur: profondeur + 1 });
@@ -147,4 +152,23 @@ export async function resoudreBibliotheques(ctx, options = {}) {
   }
   journal(`  Bibliothèques du widget : ${chargees.length} fichier(s) téléchargé(s) (${Math.round(resume.octets / 1024)} Ko)${refusees.length ? `, ${refusees.length} non téléchargé(s)` : ''}.`);
   return { servies, resume };
+}
+
+/**
+ * L'essai d'altération : les mêmes bibliothèques, servies à la même adresse, avec une ligne de plus à la fin. Cette ligne ne fait que
+ * consigner un identifiant dans une variable globale (`__gw_altere`) : elle ne lit rien, n'envoie rien. Si le widget l'exécute, rien n'a
+ * vérifié que le fichier reçu est celui qu'on attendait (pas d'empreinte `integrity`, ou une empreinte qui ne joue pas son rôle) ; si le
+ * navigateur le refuse, l'empreinte fait son travail. Ce que ferait un vrai code malveillant avec les droits du widget est mesuré à part (essais 8 et 9).
+ * @returns {{servies: Map<string, object>, marqueurs: Map<string, string>}} marqueurs : identifiant posé → adresse du fichier
+ */
+export function alterer(servies) {
+  const alterees = new Map(); const marqueurs = new Map();
+  for (const [url, fichier] of servies) {
+    if (fichier.status !== 200 || !fichier.corps) { alterees.set(url, fichier); continue; }
+    const id = crypto.createHash('sha256').update(url).digest('hex').slice(0, 8);
+    marqueurs.set(id, url);
+    const marque = `\n;(globalThis.__gw_altere||(globalThis.__gw_altere=[])).push(${JSON.stringify(id)});\n`;
+    alterees.set(url, { ...fichier, corps: Buffer.concat([fichier.corps, Buffer.from(marque)]) });
+  }
+  return { servies: alterees, marqueurs };
 }

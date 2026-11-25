@@ -13,8 +13,8 @@ const md = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ');
 
 const LIBELLE = { reussi: 'Effet observé (constat)', bloque: 'Bloqué', rien_observe: 'Rien observé', non_teste: 'Non testé' };
 
-/** Nombre d'essais du catalogue de l'étude (joués ou non). */
-const ESSAIS_DU_CATALOGUE = 20;
+/** Nombre d'essais du catalogue de l'étude (joués ou non), plus l'essai 21 d'altération d'une bibliothèque, ajouté ensuite. */
+const ESSAIS_DU_CATALOGUE = 21;
 
 /** Ce que chaque essai tente, en une phrase. */
 const QUOI = {
@@ -23,6 +23,7 @@ const QUOI = {
   8: "On joue, depuis l'intérieur du widget, ce que ferait du code étranger (une bibliothèque piégée) : lire la liste des tables, une table sans rapport avec le widget, les tables système.",
   9: "On joue ce que ferait ce code étranger pour obtenir un jeton d'accès, appeler directement l'API du document avec ce jeton, et l'essayer sur un autre document.",
   12: "On joue ce que ferait ce code étranger pour créer un webhook, une sortie permanente de données qui survivrait au retrait du widget.",
+  21: "On sert à la même adresse chacune des bibliothèques du widget avec une ligne de plus, qui ne fait rien d'autre que se signaler, et on regarde si le navigateur l'exécute ou la refuse.",
   13: "On remplit le document de valeurs repérables (des « canaris ») et on regarde si l'une d'elles sort du widget vers un site extérieur.",
   15: "On regarde si le widget peut rediriger la page Grist qui l'héberge (de quoi afficher une fausse page de connexion).",
   16: "On regarde si le widget ouvre des fenêtres, des boîtes de dialogue ou des téléchargements sans qu'on le lui demande.",
@@ -63,6 +64,11 @@ function enClair(e) {
       return t === 'reussi'
         ? "Du code dans le widget a pu créer un webhook : il resterait en place après le retrait du widget et continuerait d'envoyer les modifications du document vers une adresse extérieure."
         : "Du code piégé dans le widget n'a pas pu créer de webhook, cette sortie permanente de données qui survivrait au retrait du widget. Résultat valable pour le réglage par défaut de Grist : un administrateur qui autorise des adresses de webhook peut le changer.";
+    case 21:
+      if (t === 'bloque') return "Le navigateur a refusé le fichier modifié : l'empreinte (integrity) déclarée par le widget fait son travail. Si le CDN servait un jour un fichier altéré, il ne s'exécuterait pas.";
+      return e.severite === 'critique'
+        ? "Le widget a exécuté une bibliothèque modifiée alors qu'il déclare une empreinte pour la protéger : l'empreinte ne protège pas. Un CDN compromis pourrait faire exécuter son code dans le widget."
+        : "Le widget a exécuté la bibliothèque modifiée : rien ne vérifie ce que le CDN sert. Un CDN compromis pourrait faire exécuter son code dans le widget (voir les essais 8 et 9 pour ce que ce code obtiendrait). Déjà signalé par la règle E-DEP-01 : sans effet de plus sur la note.";
     case 13:
       if (t === 'reussi') return "Des données du document sortent du widget vers un site extérieur : c'est une fuite.";
       return e.sorties > 0
@@ -85,7 +91,7 @@ function enClair(e) {
 export function verdictEssai(e) {
   if (e.resultat === 'non_teste') return { cle: 'non_teste', bande: 'neutre', symbole: '?', mot: 'Pas testé', precision: 'aucune conclusion' };
   if (e.resultat === 'reussi') {
-    if (e.severite === 'info') return { cle: 'a_savoir', bande: 'neutre', symbole: 'i', mot: 'À savoir', precision: e.nature === 'rayon' ? "ce qu'obtiendrait une dépendance piégée, sans effet sur la note" : "défaut de Grist, pas du widget" };
+    if (e.severite === 'info') return { cle: 'a_savoir', bande: 'neutre', symbole: 'i', mot: 'À savoir', precision: e.nature === 'rayon' ? "ce qu'obtiendrait une dépendance piégée, sans effet sur la note" : (e.nature === 'confirmation' ? "confirme E-DEP-01, sans effet de plus sur la note" : "défaut de Grist, pas du widget") };
     if (e.severite === 'critique') return { cle: 'pas_bien', bande: 'critique', symbole: '✘', mot: 'Pas bien', precision: 'critique' };
     return { cle: 'pas_bien', bande: 'serieuse', symbole: '✘', mot: 'Pas bien', precision: e.severite ?? 'majeur' };
   }
