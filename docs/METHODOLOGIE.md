@@ -469,6 +469,14 @@ ceux que la base signale malveillants (E-VULN-04, critique bloquant) ; les avis 
 verrouillés restent à `npm audit`. Les bibliothèques embarquées ne sont pas interrogées : leur nom, lu
 dans un en-tête, n'est pas certain, et une version mal identifiée donnerait un faux avis. OSV qui ne répond
 pas est écrit « non mesuré » dans E-DEP-07, jamais « aucun avis ».
+Ce qui a été audité, et ce que l'adresse sert aujourd'hui (E-FIGE-01). Grist charge un widget par son adresse : un dépôt
+qui avance, une branche qui bouge ou un compte compromis font servir autre chose que ce que l'audit a lu. Le rapport garde
+l'empreinte de ce qui a été lu (SHA-256 des contenus de tous les fichiers, hors `.git` et `node_modules`, avec le commit et
+la branche) en information, sans effet sur la note ; une cible clonée est dite lue à la pointe de sa branche, qui avance à
+chaque envoi. `gwaudit --verifier rapport.json` compare cette empreinte à ce que la cible est aujourd'hui et nomme les
+fichiers modifiés, ajoutés et retirés. Une empreinte égale dit « les mêmes octets » : elle ne dit rien des services
+externes appelés ni des bibliothèques chargées de loin, dont E-DEP-01 dit déjà qu'elles peuvent changer sans que le dépôt bouge.
+Au-delà de 20 000 fichiers ou 512 Mo, l'empreinte est dite partielle.
 
 Ce que `npm install` lance et d'où il télécharge (E-INSTALL, E-VERROU) : quiconque
 installe un dépôt exécute les scripts d'installation du dépôt et de ses dépendances,

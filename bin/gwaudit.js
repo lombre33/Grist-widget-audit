@@ -22,10 +22,14 @@
  *   --scenario <fichier.json>  remplace les données de test de l'axe D par un
  *                        document personnalisé (voir README § Personnaliser
  *                        le scénario de l'axe D) ; ignoré si invalide
+ *   --verifier <rapport.json> [<dossier-ou-url>]  compare ce que la cible est aujourd'hui à l'empreinte
+ *                        gardée dans un rapport --json (E-FIGE-01) : le dépôt a-t-il changé depuis l'audit ?
  *   --interface          lance l'interface web locale (lien du dépôt → suivi
  *                        en direct → page d'audit) au lieu d'un audit direct
  *   --port <n>            port de l'interface web (défaut : 4317)
  *
+ * Codes de sortie de --verifier : 0 identique à l'audit · 2 modifié depuis l'audit · 3 rapport illisible ou sans
+ * empreinte · 4 cible refusée ou inaccessible · 1 usage.
  * Codes de sortie : 0 conforme · 1 conforme sous réserve, ou non conforme sans
  * point bloquant · 2 au moins un point bloquant · 3 erreur interne de l'outil ·
  * 4 cible refusée ou inaccessible (URL refusée par la validation, clonage
@@ -51,6 +55,8 @@ import { genererSarif } from '../src/rapport/sarif.js';
 import { comparerRapports, genererDiffMarkdown } from '../src/rapport/diff.js';
 import { validerScenario } from '../src/runtime/scenario.js';
 import { demarrerInterface } from '../src/interface/serveur.js';
+import { empreinteDuDepot, constatEmpreinte, comparerEmpreintes } from '../src/regles/e-empreinte.js';
+import { neutraliser } from '../src/moteur/texte-du-widget.js';
 
 const RACINE_OUTIL = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const VERSION = JSON.parse(fs.readFileSync(path.join(RACINE_OUTIL, 'package.json'), 'utf8')).version;
@@ -71,6 +77,11 @@ async function main() {
     return;
   }
 
+  if (flag('verifier')) {
+    await verifierEmpreinte(argv);
+    return;
+  }
+
   if (flag('interface')) {
     await lancerInterface(valeur);
     return; // la promesse ne se résout qu'à l'arrêt du serveur (Ctrl+C)
@@ -79,6 +90,7 @@ async function main() {
   if (!cible || flag('aide') || flag('help')) {
     console.log(`Usage : gwaudit <chemin-ou-url-du-widget> [--sans-dynamique] [--grist-reel] [--sans-reseau] [--sans-html] [--sarif] [--sortie <dossier>] [--json]`);
     console.log(`        gwaudit --diff <ancien-rapport.json> <nouveau-rapport.json> [--sortie <fichier.md>]`);
+    console.log(`        gwaudit --verifier <rapport.json> [<dossier-ou-url>]`);
     console.log(`        gwaudit --interface [--port <n>]`);
     console.log(`        gwaudit --version`);
     // --aide/--help est une réussite (code 0) même sans cible : ce n'est une
@@ -101,6 +113,8 @@ async function main() {
 
     console.error('→ Analyse statique (axes A, B, C, E, F)…');
     const constats = await analyseStatique(ctx, { reseau: !flag('sans-reseau') });
+    // Ce qui a été lu, avant que l'audit dynamique ne fasse quoi que ce soit : `gwaudit --verifier` le comparera à ce que la cible est ensuite.
+    constats.push(constatEmpreinte(empreinteDuDepot(racine), { cible: temporaire ? cible : null }));
 
     const axesNonExecutes = new Set();
     let gristReel = null;
@@ -242,8 +256,67 @@ function diffRapports(argv) {
   process.exit(diff.nouveaux.length ? 2 : 0);
 }
 
+/**
+ * `gwaudit --verifier <rapport.json> [<dossier-ou-url>]` : ce que la cible est aujourd'hui, comparé à l'empreinte que le rapport a gardée (E-FIGE-01).
+ * La cible est celle du rapport (l'adresse clonée), ou celle qu'on donne ; un rapport d'un dossier local demande le dossier. Quitte avec 0 (identique),
+ * 2 (modifié depuis l'audit), 3 (rapport illisible ou sans empreinte) ou 4 (cible refusée, par `main`).
+ */
+async function verifierEmpreinte(argv) {
+  const i = argv.indexOf('--verifier');
+  const cheminRapport = argv[i + 1];
+  if (!cheminRapport || cheminRapport.startsWith('--')) {
+    console.error('Usage : gwaudit --verifier <rapport.json> [<dossier-ou-url>]');
+    console.error("Le rapport doit avoir été généré avec l'option --json.");
+    process.exitCode = 1;
+    return;
+  }
+  let rapport;
+  try {
+    rapport = JSON.parse(fs.readFileSync(path.resolve(cheminRapport), 'utf8'));
+  } catch (e) {
+    console.error(`Erreur de lecture du rapport : ${e.message}`);
+    process.exitCode = 3;
+    return;
+  }
+  const preuve = Object.values(rapport?.axes ?? {}).flatMap((a) => a?.constats ?? []).find((c) => c?.regle === 'E-FIGE-01')?.preuve;
+  if (!preuve || typeof preuve.empreinte !== 'string') {
+    console.error("Ce rapport ne porte pas d'empreinte (E-FIGE-01) : il vient d'une version de l'outil qui n'en écrivait pas. Relancer l'audit avec --json.");
+    process.exitCode = 3;
+    return;
+  }
+  const autre = argv[i + 2] && !argv[i + 2].startsWith('--') ? argv[i + 2] : null;
+  const cible = autre ?? rapport.cible ?? preuve.cible ?? null;
+  if (!cible) {
+    console.error("Ce rapport vient d'un dossier local : indiquer le dossier à comparer (gwaudit --verifier <rapport.json> <dossier>).");
+    process.exitCode = 1;
+    return;
+  }
+  const { racine, temporaire } = await resoudreCible(cible, { historique: false });
+  try {
+    const aujourdhui = empreinteDuDepot(racine);
+    const ecart = comparerEmpreintes(preuve, aujourdhui);
+    const nom = neutraliser(String(cible));
+    if (ecart.identique) {
+      console.log(`Identique à ce qui a été audité : ${nom} a la même empreinte (${aujourdhui.empreinte.slice(0, 12)}…, ${aujourdhui.fichiers} fichier(s)).`);
+      console.log("Une empreinte égale dit « les mêmes octets » ; elle ne dit rien des services externes appelés ni des bibliothèques chargées de loin.");
+      return;
+    }
+    process.exitCode = 2;
+    console.log(`MODIFIÉ depuis l'audit : ${nom} n'a plus l'empreinte du rapport (${preuve.empreinte.slice(0, 12)}… → ${aujourdhui.empreinte.slice(0, 12)}…).`);
+    if (preuve.commit || aujourdhui.commit) console.log(`Commit : ${(preuve.commit ?? 'inconnu').slice(0, 12)} → ${(aujourdhui.commit ?? 'inconnu').slice(0, 12)}`);
+    const dire = (titre, liste) => { if (liste.length) console.log(`${titre} (${liste.length}) : ${liste.slice(0, 20).map(neutraliser).join(', ')}${liste.length > 20 ? ' …' : ''}`); };
+    dire('Fichiers modifiés', ecart.modifies);
+    dire('Fichiers ajoutés', ecart.ajoutes);
+    dire('Fichiers retirés', ecart.retires);
+    if (ecart.partiel) console.log("Liste partielle : le dépôt compte plus de fichiers que le rapport n'en détaille.");
+    console.log("Le rapport ne vaut plus pour ce contenu : relancer l'audit.");
+  } finally {
+    if (temporaire) fs.rmSync(racine, { recursive: true, force: true });
+  }
+}
+
 /** Résout la cible en chemin local à auditer, et indique si ce chemin est un clone temporaire à purger après usage. */
-async function resoudreCible(cible) {
+async function resoudreCible(cible, { historique = true } = {}) {
   if (!/^(https?:\/\/|git@)/.test(cible)) {
     const abs = path.resolve(cible);
     if (!fs.existsSync(abs)) throw new CibleRefusee(`chemin introuvable : ${abs}`);
@@ -268,7 +341,7 @@ async function resoudreCible(cible) {
     if (e?.code === 'ENOENT') throw e; // git absent : une panne d'installation, pas une cible refusée
     throw new CibleRefusee(expliquerEchecClonage(cible, e));
   }
-  completerLHistorique(dest);
+  if (historique) completerLHistorique(dest);
   return { racine: dest, temporaire: true, identite: identiteDepuisUrl(cible) };
 }
 

@@ -168,6 +168,30 @@ comparaison dans un fichier au lieu de l'afficher. Le code de sortie est `2`
 si des constats nouveaux sont apparus (utile pour gater une CI dessus),
 sinon `0`.
 
+## Le dépôt a-t-il changé depuis l'audit ?
+
+Grist charge un widget par son adresse : ce que cette adresse sert demain n'est
+pas forcément ce que l'audit a lu aujourd'hui. Chaque rapport garde donc
+l'empreinte de ce qui a été audité (E-FIGE-01 : le SHA-256 des contenus de tous
+les fichiers, hors `.git` et `node_modules`, avec le commit et la branche) ; un
+audit d'une adresse `https://…` lit la pointe de la branche par défaut, et le
+rapport le dit. Pour comparer ce que la cible est aujourd'hui à ce qui a été
+audité, à partir d'un rapport écrit avec `--json` :
+
+```powershell
+node bin/gwaudit.js https://github.com/mon-compte/mon-widget --json --sortie ./audit
+# ... plus tard ...
+node bin/gwaudit.js --verifier ./audit/rapport.json
+# pour un audit de dossier local, dire le dossier :
+node bin/gwaudit.js --verifier ./audit/rapport.json C:\widgets\mon-widget
+```
+
+Code de sortie : `0` identique à l'audit, `2` modifié (les fichiers modifiés,
+ajoutés et retirés sont nommés), `3` rapport illisible ou sans empreinte, `4`
+cible refusée ou inaccessible. Une empreinte égale dit « les mêmes octets » ; elle
+ne dit rien des services externes que le widget appelle ni des bibliothèques
+qu'il charge de loin (voir E-DEP-01).
+
 ## Personnaliser le scénario de l'axe D
 
 Par défaut, l'axe D (analyse dynamique) charge le widget face à un document
