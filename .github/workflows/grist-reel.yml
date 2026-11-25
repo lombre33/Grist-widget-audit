@@ -44,8 +44,9 @@ jobs:
         run: npx playwright install chromium
 
       # Premier passage : télécharge Grist Desktop (environ 300 Mo) et le lance pour de vrai.
+      # Les fichiers de test se jouent l'un après l'autre : ils partagent le même dossier de cache de Grist Desktop (téléchargement, extraction).
       - name: Essais contre un Grist réel (téléchargement, lancement, widgets de test)
         env:
           GWAUDIT_GRIST_REEL_E2E: '1'
           GWAUDIT_RESEAU_REEL: '1'
-        run: node --test tests/grist-reel.test.mjs tests/interface.test.mjs tests/api-grist-partout.test.mjs tests/grist-reel-rapport.test.mjs tests/grist-reel-bibliotheques.test.mjs
+        run: node --test --test-concurrency=1 tests/grist-reel.test.mjs tests/interface.test.mjs tests/api-grist-partout.test.mjs tests/grist-reel-rapport.test.mjs tests/grist-reel-bibliotheques.test.mjs
