@@ -512,7 +512,7 @@ par les colonnes attendues.
 | D-GRIST-01 | Le widget n'a jamais négocié son accès pendant le scénario (`grist.ready()` sans effet observé) | majeur |
 | D-GRIST-02 | Des appels RPC ont échoué pendant le scénario (mesure partielle) | info, mesure partielle |
 | D-PERIMETRE-01 | Le widget a lu/écrit la table appât (`fetchTable`/`applyUserActions` dessus) : si le README annonce explicitement une lecture/écriture de l'ensemble du document **et** l'accès `full` est demandé → info, non bloquant (comportement honnête) ; **sinon** → **critique, BLOQUANT** (énumération aveugle du document au-delà du périmètre déclaré) |
-| D-CONSOLE-01 | Erreurs JavaScript pendant le scénario | mineur |
+| D-CONSOLE-01 | Erreurs JavaScript pendant le scénario (hors messages de l'API officielle de Grist elle-même) | mineur |
 | D-CONSOLE-02 | Erreurs de chargement dues à la neutralisation réseau de l'audit lui-même (pas un défaut du widget) | info, ne compte pas contre le widget |
 
 **Particularité importante** : les violations d'accessibilité détectées à

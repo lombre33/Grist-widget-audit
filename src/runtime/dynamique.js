@@ -545,7 +545,7 @@ export async function auditDynamique(ctx, options = {}) {
     // Linux/macOS, `%TEMP%` sous Windows) sans rien changer au reste.
     dossierTravail = fs.mkdtempSync(path.join(os.tmpdir(), 'gwaudit-axeD-'));
     const harnaisRacine = await construireHarnais(dossierTravail);
-    const { origine, fermer } = await demarrerServeur({ widgetRacine: ctx.racine, harnaisRacine });
+    const { origine, fermer, apiServie } = await demarrerServeur({ widgetRacine: ctx.racine, harnaisRacine });
     arreterServeur = fermer;
 
     const cheminReel = cheminChromium(chromium);
@@ -607,7 +607,14 @@ export async function auditDynamique(ctx, options = {}) {
     const contexte = await navigateur.newContext({ locale: 'fr-FR', viewport: { width: 1280, height: 900 } });
     page = await contexte.newPage();
 
-    page.on('console', (m) => brut.consoles.push({ type: m.type(), texte: m.text().slice(0, 500) }));
+    // Un message émis par l'API officielle de Grist (servie par l'audit ou substituée) n'est pas le fait du widget : voir `apiGrist` dans constatsConsole.
+    const venantDeLApiGrist = (m) => {
+      try {
+        const u = new URL(m.location().url);
+        return /(^|\/)grist-plugin-api\.js$/.test(u.pathname) && (u.origin !== origine || apiServie.has(u.pathname));
+      } catch { return false; }
+    };
+    page.on('console', (m) => brut.consoles.push({ type: m.type(), texte: m.text().slice(0, 500), ...(venantDeLApiGrist(m) ? { apiGrist: true } : {}) }));
     page.on('pageerror', (e) => brut.erreursPage.push(String(e?.message ?? e).slice(0, 500)));
 
     // Interception réseau : voir l'en-tête du module pour la justification.
@@ -943,7 +950,8 @@ const MOTIF_ERREUR_IMPORT_NEUTRALISE = /Failed to load module script|net::ERR_FA
 
 function constatsConsole(consoles, erreursPage, nbRequetesNeutralisees) {
   const constats = [];
-  const toutesErreurs = consoles.filter((c) => c.type === 'error');
+  // Les erreurs que l'API officielle de Grist produit elle-même (ex. son thème injecté refusé par la CSP `style-src 'self'` d'un widget bien conçu) ne sont pas celles du widget.
+  const toutesErreurs = consoles.filter((c) => c.type === 'error' && !c.apiGrist);
   // Une requête vers un domaine tiers est neutralisée pendant l'audit (voir
   // en-tête du module) : un widget qui importe un module ES depuis un CDN
   // voit alors cet import échouer, ce qui est un artefact du bac à sable,

@@ -292,6 +292,13 @@ lui-même. Concrètement :
   [`gristlabs/grist-core`](https://github.com/gristlabs/grist-core)
   (licence Apache 2.0 — voir `ressources/grist-plugin-api/PROVENANCE.md`
   pour le commit exact et la licence complète).
+- Le chargement de cette API est l'usage normal d'un widget, d'où qu'il la
+  demande (`/grist-plugin-api.js` à la racine du site, un chemin relatif, un hôte
+  Grist) : si le dépôt n'a pas son propre fichier à cet endroit, le serveur de
+  l'audit sert l'API officielle, sans constat. Ce que l'API écrit elle-même dans
+  la console (par exemple son thème refusé par une CSP `style-src 'self'`) n'est
+  pas compté comme une erreur du widget (D-CONSOLE-01). Une copie de l'API
+  embarquée dans le dépôt, elle, est auditée comme du code du widget.
 - La négociation `grist.ready()` → `CustomSectionAPI.configure()` passe par
   la vraie bibliothèque `grain-rpc` que Grist utilise en production, avec le
   même transport (`postMessage` entre l'iframe et sa fenêtre parente).
