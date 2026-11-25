@@ -94,6 +94,15 @@ async function jouerDroits(page, cadre, prefixe) {
   return sortie;
 }
 
+/** En-têtes de sécurité de la page Grist elle-même (réponse du document), lus tels que le navigateur les a reçus. */
+const ENTETES_SUIVIS = ['content-security-policy', 'x-frame-options', 'referrer-policy', 'x-content-type-options'];
+async function entetesDe(reponse) {
+  try {
+    const h = await reponse.allHeaders();
+    return { statut: reponse.status(), entetes: Object.fromEntries(ENTETES_SUIVIS.filter((k) => h[k] !== undefined).map((k) => [k, String(h[k]).slice(0, 500)])) };
+  } catch { return null; }
+}
+
 const hoteDe = (url) => { try { return new URL(url).hostname; } catch { return null; } };
 const origineDe = (url) => { try { return new URL(url).origin; } catch { return null; } };
 const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; return u.href; } catch { return url; } };
@@ -122,7 +131,7 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
   const obs = {
     charge: false, appelsRpc: [], configure: null, canariRecu: false, texteDuCadre: '',
     xss: { executions: 0, lu: null, refus: null, erreur: null },
-    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null, droits: null, pollution: null, stockage: null, messages: null, apiInstance: null, hostileRecu: false,
+    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null, droits: null, pollution: null, stockage: null, messages: null, apiInstance: null, hostileRecu: false, entetesPage: null,
     consoles: [], erreursPage: [], erreur: null,
   };
   const origineGrist = origineDe(base);
@@ -198,7 +207,8 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
     page.on('pageerror', (e) => obs.erreursPage.push(String(e?.message ?? e).slice(0, 500)));
 
     const travail = (async () => {
-      await page.goto(base + chemin, { waitUntil: 'load', timeout: Math.max(5000, delaiMs - 15_000) });
+      const reponsePage = await page.goto(base + chemin, { waitUntil: 'load', timeout: Math.max(5000, delaiMs - 15_000) });
+      obs.entetesPage = reponsePage ? await entetesDe(reponsePage) : null;
       try { await page.waitForSelector('iframe.custom_view', { state: 'attached', timeout: 20_000 }); obs.charge = true; }
       catch { obs.erreur = "La page du document s'est chargée mais aucun cadre de widget n'y est apparu."; return; }
 

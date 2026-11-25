@@ -22,6 +22,10 @@
  * L'essai 22 (hors du catalogue de l'étude) mesure les voies de sortie du navigateur que la politique de sécurité (CSP) du widget laisse ouvertes
  * à du code étranger : fetch, image, sendBeacon, WebSocket, balises, formulaire… Passe à part, vers un hôte factice distinct du puits.
  *
+ * L'essai 19 lit les en-têtes de sécurité de la page Grist qui héberge le widget, tels que le navigateur les a reçus (CSP, protection contre
+ * l'inclusion en cadre, Referrer-Policy, nosniff). Il mesure Grist Desktop et son déploiement, pas le widget : jamais de pénalité. Les en-têtes de la page
+ * du widget ne sont pas mesurés : c'est l'audit qui la sert, ils ne diraient rien de son hébergement réel (l'effet de sa CSP est l'objet de l'essai 22).
+ *
  * L'essai 5 appelle le widget avec une adresse qui affirme `access=full&readonly=false` (Grist ajoute après les siens, sans retirer les faux : un widget qui lit
  * le premier `access` lit le faux) et compare ses appels à Grist avec ceux de la passe normale au même niveau : accès demandé, écritures tentées.
  *
@@ -33,8 +37,8 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 3, 4, 5, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 20, 21, 22, 23, 24];
-export const ESSAIS_PAS_ENCORE = '2, 6, 11, 14, 19';
+export const ESSAIS_JOUES = [1, 3, 4, 5, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24];
+export const ESSAIS_PAS_ENCORE = '2, 6, 11, 14';
 
 /** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
 const CANAUX = [['fetch', 'fetch'], ['xhr', 'XMLHttpRequest'], ['image', 'image (balise img)'], ['beacon', 'sendBeacon'], ['websocket', 'WebSocket'], ['script', 'balise script'], ['iframe', 'cadre iframe'], ['feuille', 'feuille de style'], ['cssurl', 'image de fond CSS'], ['prefetch', 'préchargement (link prefetch)'], ['formulaire', 'formulaire envoyé']];
@@ -690,6 +694,37 @@ export function evaluerEssais(phases, jeu) {
     }
   }
 
+  // --- 19. En-têtes de sécurité de la page Grist qui héberge le widget (lus sur la vraie réponse ; une mesure de Grist, pas du widget) ---
+  {
+    const titre = 'La page Grist qui héberge le widget pose-t-elle ses en-têtes de sécurité ?';
+    const p = chargees.map((o) => o.entetesPage).find((x) => x && x.statut === 200);
+    if (aucunePage) essais.push(essai(19, titre, 'non_teste', raisonPage));
+    else if (!p) essais.push(essai(19, titre, 'non_teste', "les en-têtes de la réponse de la page du document n'ont pas pu être lus"));
+    else {
+      const h = p.entetes ?? {};
+      const csp = h['content-security-policy'] ?? '';
+      const MESURES = [
+        ["une politique de sécurité du contenu (Content-Security-Policy)", !!csp],
+        ["une protection contre l'inclusion de la page dans un cadre d'une autre origine (X-Frame-Options ou frame-ancestors)", !!h['x-frame-options'] || /frame-ancestors/i.test(csp)],
+        ['Referrer-Policy', !!h['referrer-policy']],
+        ['X-Content-Type-Options: nosniff', /nosniff/i.test(h['x-content-type-options'] ?? '')],
+      ];
+      const absents = MESURES.filter(([, ok]) => !ok).map(([nom]) => nom);
+      if (absents.length) {
+        essais.push(essai(19, titre, 'reussi', `la page du document, servie par Grist, n'envoie pas : ${absents.join(' ; ')}`, { regle: 'D-REEL-19', severite: 'info', absents, presents: MESURES.length - absents.length, total: MESURES.length }));
+        constats.push(constat({
+          regle: 'D-REEL-19', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+          titre: `La page Grist qui héberge le widget n'envoie pas ${absents.length === MESURES.length ? 'ses' : `${absents.length} de ses`} en-têtes de sécurité`,
+          constat: `Dans un vrai Grist (Grist Desktop, instance jetable), la réponse de la page du document, lue dans le navigateur, ne comporte pas : ${absents.join(' ; ')}.`,
+          impact: "Une page de Grist sans ces en-têtes peut être incluse dans un cadre par une page tierce (détournement de clic) et n'est pas bridée par une CSP ; le widget n'y est pour rien. C'est une mesure de Grist et de son déploiement : un serveur Grist derrière un proxy peut poser ces en-têtes, que cette instance jetable n'a pas. Information sans pénalité.",
+          remediation: "Sur l'instance où le widget sera installé : vérifier ces en-têtes (par exemple avec les outils du navigateur, onglet Réseau) et les poser au niveau du reverse proxy (Content-Security-Policy avec frame-ancestors, X-Content-Type-Options: nosniff, Referrer-Policy). Sinon, le signaler à l'éditeur de Grist.",
+          referentiels: ['OWASP Secure Headers Project', 'CWE-1021 (Improper Restriction of Rendered UI Layers or Frames)'],
+          preuve: { absents, presents: Object.keys(h) },
+        }));
+      } else essais.push(essai(19, titre, 'rien_observe', `la page du document, servie par Grist, envoie les ${MESURES.length} en-têtes mesurés (CSP, protection contre l'inclusion en cadre, Referrer-Policy, nosniff) ; leur contenu n'est pas jugé`, { presents: MESURES.length, total: MESURES.length }));
+    }
+  }
+
   // --- 10. Écritures : ce que du code étranger dans le widget pourrait changer dans le document (effets relus côté serveur, jamais crus sur parole) ---
   {
     const w = phases.ecritures;
@@ -730,7 +765,7 @@ export function evaluerEssais(phases, jeu) {
   if (manquantes.length) {
     const hotes = [...new Set(manquantes.map((d) => d.hote).filter(Boolean))].slice(0, 3).join(', ');
     essais.forEach((e, i) => {
-      if (e.resultat !== 'rien_observe') return;
+      if (e.resultat !== 'rien_observe' || e.id === 19) return; // l'essai 19 lit la réponse de la page Grist : aucun code du widget n'y entre
       essais[i] = essai(e.id, e.titre, 'non_teste', `${manquantes.length} bibliothèque(s) du widget n'ont pas pu être chargées pendant l'essai (${hotes}) : leur code n'a pas été joué, « rien observé » ne prouverait rien`, { ...(e.niveau ? { niveau: e.niveau } : {}), bibliothequesManquantes: manquantes.length });
     });
   }
