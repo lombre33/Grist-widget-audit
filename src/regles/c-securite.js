@@ -24,6 +24,7 @@ import { lireFeuille, nouveauBudgetCss, LIMITES_CSS } from '../moteur/css.js';
 import { numeroLigne } from '../moteur/lignes.js';
 import { analyserSecrets } from './c-secrets.js';
 import { analyserHistorique } from './c-historique.js';
+import { analyserInvisibles } from './c-invisibles.js';
 import { estGrist, documentGristVise } from '../contexte/hotes-grist.js';
 import { analyserAccesGrist } from './c-grist.js';
 import { preuveDeChargement } from '../moteur/bibliotheque.js';
@@ -2409,7 +2410,7 @@ export const reglesC = [
   preparerCodeExecuteEnChaine,
   analyserAccesGrist, analyserSortiesReseau, analyserRessourcesExternes,
   analyserInjections, analyserHtmlDangereux, analyserCspPermissive, analyserPostMessage,
-  analyserStockage, analyserSecrets, analyserHistorique, analyserAlea,
+  analyserStockage, analyserSecrets, analyserHistorique, analyserInvisibles, analyserAlea,
   analyserEmpreinteAutomatisation, analyserPersistanceHorsWidget,
   analyserEmissionPostMessage, analyserPressePapiers, analyserScriptDynamique,
   analyserImportDynamique,

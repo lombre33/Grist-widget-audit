@@ -311,6 +311,35 @@ les lignes d'un diff ne se lisent que par le décompte de l'en-tête de chaque b
 (une ligne ajoutée qui ressemble à un en-tête de fichier n'en est pas un), et le
 travail est borné en temps, en octets et en nombre de valeurs.
 
+### Caractères invisibles (C-INVISIBLE-01)
+
+Ce qu'une revue lit n'est pas toujours ce que le navigateur exécute. Des
+caractères de sens d'écriture (U+202A à U+202E, U+2066 à U+2069) réordonnent
+l'affichage du code sans le changer (« Trojan Source », CVE-2021-42574) ; des
+caractères de largeur nulle ou des remplisseurs font deux noms identiques à
+l'œil ; des étiquettes Unicode (U+E0000 à U+E007F) écrivent un texte que l'écran
+ne montre pas mais qu'un assistant IA lit : une consigne cachée à celui qui
+relit le dépôt. La règle lit tous les fichiers texte et dit ce qui est là, où et
+sous quelle écriture visible (`\u202e`), jamais plus : le texte caché n'est ni
+décodé ni recopié.
+
+La gravité dit ce que le caractère permet, jamais son intention (aucun constat
+n'est bloquant). **Majeur** : huit caractères invisibles de suite ou plus (un
+texte encodé) ; une étiquette Unicode hors d'un drapeau de subdivision ; un
+caractère de sens d'écriture dans un commentaire de JavaScript, dans une chaîne
+quand c'est un remplacement ou un embrayage (U+202A à U+202E, la forme de
+l'attaque), dans une page, une feuille de style ou une donnée ; un caractère de
+largeur nulle, un remplisseur ou une liaison (U+200C, U+200D) dans le code d'un
+JavaScript, où ils font partie d'un nom. **Information** : un isolat (U+2066 à
+U+2069) dans une chaîne ou un document, ce que les traductions emploient ; la
+largeur nulle dans un commentaire, une chaîne ou une page, où un espace insécable
+collé du web en porte ; la marque d'ordre des octets hors du début d'un fichier.
+**Rien** : les marques U+200E, U+200F et U+061C du texte de droite à gauche, les
+liaisons d'émoji, les sélecteurs de variante, le trait d'union conditionnel, le
+drapeau de l'Écosse, du pays de Galles ou de l'Angleterre, la marque d'ordre des
+octets du premier signe. Dans le code d'un JavaScript, un caractère de sens
+d'écriture est une erreur de syntaxe : le fichier est illisible (C-SURFACE-03).
+
 ## Axe D — Sécurité en condition réelle
 
 ### Ce qui est exécuté, et ce qui ne l'est pas
