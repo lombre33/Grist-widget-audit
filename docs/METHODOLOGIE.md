@@ -169,7 +169,8 @@ retirer d'un fichier ne l'efface pas de l'historique, il faut le révoquer. La
 règle cherche deux choses, et ne les mélange pas.
 
 - **Le format d'un fournisseur** (clé d'accès AWS, jetons GitHub, clés de type
-  OpenAI, jetons Slack, clé privée PEM avec son corps, JWT) est reconnu dans
+  OpenAI, jetons Slack, clés des services d'IA : Anthropic, Hugging Face, Groq,
+  OpenRouter, xAI, Perplexity, Replicate ; clé privée PEM avec son corps, JWT) est reconnu dans
   tout texte du dépôt, README et carte de sources compris, et dans un fichier
   que l'outil ne sait pas lire : seul un fichier de verrous de paquets, dont
   les empreintes ressemblent à des clés, n'est pas lu. C'est un critique
@@ -261,8 +262,8 @@ signalé, et un libellé écrit en minuscules (`wachtwoord`) ou en majuscules de
 six lettres et plus (`PASSWORT`) l'est encore ; un fichier
 TypeScript ou un code illisible n'est lu que par les formats de fournisseur
 (et, quand une page l'exécute, dit illisible par C-SURFACE-03) ; un format de
-fournisseur absent de la liste (clés Stripe secrètes, Anthropic, jetons Slack
-d'application…) n'est reconnu que s'il est affecté, dans un fichier JavaScript
+fournisseur absent de la liste (clés Stripe secrètes, jetons Slack
+d'application, clés Mistral ou Cohere, sans préfixe…) n'est reconnu que s'il est affecté, dans un fichier JavaScript
 ou de configuration, à un nom qui évoque un secret ; un JWT collé à un caractère
 de base64 URL n'est pas reconnu (le prix de ne chercher une suite qu'à son
 début).
@@ -278,6 +279,37 @@ caractères (une image en base64, une carte de sources), et la règle échoue av
 tous les secrets du reste du dépôt. `scripts/mutants-c-secret.mjs` rejoue un défaut
 plausible par choix de la règle, et les essais sont faits pour que chacun en tue
 un.
+
+### Secrets retirés, restés dans l'historique (C-SECRET-02)
+
+Retirer une clé d'un fichier ne la retire pas du dépôt : quiconque clone
+l'historique la lit dans le commit qui l'a introduite, et un attaquant équipé
+d'une IA balaie l'historique des dépôts publics à la recherche de ces clés. La
+règle lit les lignes **ajoutées** de chaque commit de toutes les branches
+(`git log --all -p -U0`) et y cherche les formats de fournisseur de C-SECRET-01,
+ceux-là seuls : un format est une preuve, un « nom = valeur » ne l'est pas hors
+de son contexte. Une valeur encore dans les fichiers actuels est le constat de
+C-SECRET-01, non de celui-ci ; une clé publique par conception ou un leurre ne
+disent rien. Le constat est un **majeur non bloquant** : le format dit la forme
+d'une clé, non qu'elle ouvre encore quelque chose, et le constat demande de la
+révoquer (réécrire l'historique ne reprend pas ce que des tiers ont cloné). Il
+dit le commit qui l'a introduite, son fichier et sa ligne, jamais la clé.
+
+Ce que la règle ne lit pas, elle le dit, en information sans pénalité : un
+clone peu profond (`--depth`), git qui refuse ou échoue, un délai de 60 secondes
+ou 64 Mio dépassés (les commits les plus récents sont lus), plus de cinquante
+valeurs distinctes. Un dossier qui n'est pas un dépôt Git n'a pas d'historique :
+rien n'est dit, et l'absence de constat ne vaut jamais absence de secret dans
+l'historique. Pour une adresse de dépôt, l'outil complète son clone de tout
+l'historique (`git fetch --unshallow`, 120 secondes au plus : au-delà, l'audit
+de l'arbre est le même et la règle dit qu'elle n'a pas tout lu).
+
+Le dépôt audité est une donnée hostile : git est lancé sans conversion de texte,
+sans programme de comparaison externe, sans vérification de signature (ni
+pagineur ni surveillance de fichiers) que la configuration du dépôt nommerait,
+les lignes d'un diff ne se lisent que par le décompte de l'en-tête de chaque bloc
+(une ligne ajoutée qui ressemble à un en-tête de fichier n'en est pas un), et le
+travail est borné en temps, en octets et en nombre de valeurs.
 
 ## Axe D — Sécurité en condition réelle
 

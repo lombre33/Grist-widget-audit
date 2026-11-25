@@ -268,7 +268,27 @@ async function resoudreCible(cible) {
     if (e?.code === 'ENOENT') throw e; // git absent : une panne d'installation, pas une cible refusée
     throw new CibleRefusee(expliquerEchecClonage(cible, e));
   }
+  completerLHistorique(dest);
   return { racine: dest, temporaire: true, identite: identiteDepuisUrl(cible) };
+}
+
+/**
+ * Le clone ne porte que le dernier commit (rapide : c'est l'arbre qui est audité). Un secret retiré du code reste dans les commits plus anciens, que C-SECRET-02
+ * lit : on complète le clone de tout l'historique, toutes branches. Un échec (délai de 120 s, dépôt énorme, réseau) laisse le clone tel quel, et l'audit de l'arbre
+ * est le même : la règle dit alors que l'historique n'a pas été lu en entier.
+ */
+function completerLHistorique(dest) {
+  try {
+    const options = { stdio: ['ignore', 'pipe', 'pipe'], encoding: 'utf8', timeout: 120_000 };
+    // Un dépôt d'un seul commit n'est pas « peu profond » : il n'y a rien à compléter.
+    if (execFileSync('git', ['-C', dest, 'rev-parse', '--is-shallow-repository'], options).trim() !== 'true') return;
+    console.error("→ Lecture de l'historique Git…");
+    execFileSync('git', ['-C', dest, 'remote', 'set-branches', 'origin', '*'], options);
+    execFileSync('git', ['-C', dest, 'fetch', '--unshallow', '--quiet', 'origin'], options);
+  } catch (e) {
+    if (e?.code === 'ENOENT') throw e; // git absent : une panne d'installation (le clonage l'aurait déjà dit)
+    console.error("→ Historique Git non récupéré en entier : l'audit continue sur le dernier commit.");
+  }
 }
 
 /** Erreur attribuable à la cible (refusée, injoignable, chemin faux) et non à l'outil : sortie nette, sans pile, code 4. */
