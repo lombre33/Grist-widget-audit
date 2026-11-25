@@ -135,20 +135,18 @@ export function construireArgsChromium() {
   // launch()/launchServer() — c'est `bacASableChromium()` qui le passe. Avant
   // cette date le commentaire ici affirmait « actif par défaut » alors que rien
   // ne le faisait : le widget audité tournait toujours dans un Chromium sans
-  // bac à sable (arguments du vrai processus lus dans le conteneur V2).
+  // bac à sable (arguments du vrai processus Chromium relevés pendant un audit).
   return bacASableChromium() ? argsReseau : [...argsReseau, '--no-sandbox'];
 }
 
 /**
  * Le bac à sable natif de Chromium est demandé, sauf dérogation EXPLICITE :
  * GWAUDIT_CHROMIUM_SANS_SANDBOX=1. Quand Chromium ne peut pas démarrer avec
- * (root, espaces de noms utilisateur interdits, AppArmor, profil seccomp par
- * défaut de Docker), le lancement échoue franchement et l'axe D le dit avec
+ * (root, espaces de noms utilisateur interdits, AppArmor), le lancement échoue franchement et l'axe D le dit avec
  * cette cause précise (`indiceBacASable()`) — jamais de repli silencieux vers
  * `--no-sandbox`. Une dérogation n'est pas cachée non plus : l'axe D pose alors
  * le marqueur `D-INDISPONIBLE-BAC-A-SABLE`. GWAUDIT_CHROMIUM_SANDBOX=1, l'ancien
- * nom de la demande, reste accepté et ne change rien. Dans l'image V2
- * (docker/execution/entrypoint.sh) la dérogation est refusée.
+ * nom de la demande, reste accepté et ne change rien.
  */
 export function bacASableChromium() {
   return process.env.GWAUDIT_CHROMIUM_SANS_SANDBOX !== '1';
@@ -229,7 +227,7 @@ export function constatSansBacASable() {
     titre: 'Axe D lancé sans le bac à sable de Chromium (dérogation explicite)',
     constat: "GWAUDIT_CHROMIUM_SANS_SANDBOX=1 est posée : le navigateur lancé pour l'axe D tournait avec --no-sandbox, et le widget audité, dès qu'il a été chargé, y a été exécuté.",
     impact: "Le widget audité est du code non fiable. Sans bac à sable, une faille du moteur de rendu que ce code exploiterait lui donnerait les droits du processus qui a lancé l'audit. Les constats de l'axe D restent valables : c'est l'isolation de la machine qui a été réduite, pas la mesure. Ce marqueur n'entre pas dans le verdict.",
-    remediation: "Retirer la dérogation et corriger l'environnement pour que le bac à sable démarre : ne pas lancer l'audit en root, autoriser les espaces de noms utilisateur non privilégiés, ou en conteneur le profil seccomp et la capacité SYS_CHROOT de docker/execution (docs/ARCHITECTURE-V2.md §4).",
+    remediation: "Retirer la dérogation et corriger l'environnement pour que le bac à sable démarre : ne pas lancer l'audit en root, autoriser les espaces de noms utilisateur non privilégiés.",
   });
 }
 
@@ -310,8 +308,8 @@ function limiteCpuSecondes() {
  * audit consomme normalement (~200 Mio résidents) : le lancement échoue
  * immédiatement. Une vraie limite mémoire demande un plafond sur la
  * mémoire RÉSIDENTE (cgroups), pas sur l'espace virtuel qu'un ulimit POSIX
- * peut poser — c'est le rôle des limites au niveau conteneur prévues pour
- * la V2 (docs/ARCHITECTURE-V2.md, §4), pas quelque chose qu'un simple
+ * peut poser — c'est le rôle d'une limite posée par le système
+ * (docs/archive-v2-vps.md, constat 10c), pas quelque chose qu'un simple
  * réglage de lancement peut fournir ici. Le délai global déjà posé plus
  * haut (`DELAI_GLOBAL_AXE_D_MS`) reste donc la seule protection contre un
  * widget qui consommerait la mémoire de la machine ; ce plafond CPU est un
@@ -656,8 +654,8 @@ export async function auditDynamique(ctx, options = {}) {
     // Le canal WebSocket échappe entièrement à `context.route()` ci-dessus,
     // qui n'intercepte que le trafic HTTP. `--host-resolver-rules` bloque
     // déjà une connexion WebSocket vers un domaine tiers réel, nom d'hôte
-    // ou IP littérale (vérifié à l'exécution, voir docs/ARCHITECTURE-V2.md
-    // §1 constat 5 — WebSocket passe par le même résolveur que le trafic
+    // ou IP littérale (vérifié à l'exécution, voir docs/archive-v2-vps.md,
+    // constat 5 — WebSocket passe par le même résolveur que le trafic
     // HTTP(S), contrairement à WebRTC) : le vrai trou n'est pas
     // l'exfiltration externe, mais (1) l'absence totale de trace dans le
     // rapport d'une tentative pourtant bloquée, et (2) le passe-droit
@@ -792,7 +790,7 @@ export async function auditDynamique(ctx, options = {}) {
           titre: "Analyse dynamique non exécutée : Chromium ne peut pas démarrer avec son bac à sable",
           constat: `Chromium a refusé de démarrer avec son bac à sable natif : ${e.message}`,
           impact: "Les constats de l'axe D (comportement réel du widget : réseau, XSS à l'exécution, accessibilité rendue) ne peuvent pas être produits. Ce n'est pas une absence de risque, c'est une absence de mesure. Le bac à sable sépare le widget audité — du code non fiable, exécuté par cet axe — du reste de la machine : l'outil ne le retire pas de lui-même.",
-          remediation: "Deux issues. (1) Corriger l'environnement pour que le bac à sable démarre : ne pas lancer l'audit en root ; autoriser les espaces de noms utilisateur non privilégiés (Ubuntu 23.10+ : la restriction AppArmor `kernel.apparmor_restrict_unprivileged_userns`) ; en conteneur Docker, un profil seccomp qui les autorise et la capacité SYS_CHROOT (docker/execution/seccomp-chromium.json, docs/ARCHITECTURE-V2.md §4). (2) Ou déroger explicitement avec `GWAUDIT_CHROMIUM_SANS_SANDBOX=1`, en sachant ce que cela expose : le widget audité s'exécute alors dans un Chromium sans bac à sable, sur cette machine, et le rapport le dit (D-INDISPONIBLE-BAC-A-SABLE). Dans l'image V2 la dérogation est refusée.",
+          remediation: "Deux issues. (1) Corriger l'environnement pour que le bac à sable démarre : ne pas lancer l'audit en root ; autoriser les espaces de noms utilisateur non privilégiés (Ubuntu 23.10+ : la restriction AppArmor `kernel.apparmor_restrict_unprivileged_userns`). (2) Ou déroger explicitement avec `GWAUDIT_CHROMIUM_SANS_SANDBOX=1`, en sachant ce que cela expose : le widget audité s'exécute alors dans un Chromium sans bac à sable, sur cette machine, et le rapport le dit (D-INDISPONIBLE-BAC-A-SABLE).",
         })],
         brut: null,
         nonExecute: true,

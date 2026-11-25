@@ -61,7 +61,6 @@ test('par défaut, Chromium est lancé SANS --no-sandbox ; un refus du bac à sa
   assert.doesNotMatch(c.constat, /zygote_host_impl|\[123:/);
   assert.match(c.remediation, /\(1\)[^]*Corriger l'environnement/);
   assert.match(c.remediation, /\(2\)[^]*GWAUDIT_CHROMIUM_SANS_SANDBOX=1[^]*ce que cela expose/);
-  assert.match(c.remediation, /image V2 la dérogation est refusée/);
   assert.equal(c.severite, 'info');
   assert.equal(c.bloquant, false);
 });

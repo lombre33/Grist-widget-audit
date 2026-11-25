@@ -4,7 +4,7 @@
  * Ce script joue le rôle que joue `WidgetFrame.ts` dans le vrai Grist : il
  * négocie avec le widget via `grain-rpc` (le même canal RPC par-dessus
  * `postMessage` que produit le vrai `grist-plugin-api.js`, bundlé sans
- * modification dans build/grist-plugin-api.js) et implémente les quatre
+ * modification dans ressources/grist-plugin-api/grist-plugin-api.js) et implémente les quatre
  * interfaces que le widget peut appeler : GristDocAPI, GristView, WidgetAPI,
  * CustomSectionAPI.
  *

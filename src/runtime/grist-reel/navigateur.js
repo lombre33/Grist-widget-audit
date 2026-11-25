@@ -14,7 +14,6 @@
  *  - les navigations du cadre parent, fenêtres ouvertes, boîtes de dialogue, téléchargements ;
  *  - la sonde de la charge XSS (voir donnees.js), lue dans le cadre du widget.
  */
-import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
