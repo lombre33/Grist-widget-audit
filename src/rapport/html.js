@@ -12,7 +12,7 @@
 import { SEVERITES, CONFIANCES } from '../moteur/modele.js';
 import { raisonsDeTroncature } from '../contexte/inventaire.js';
 import { libelleDeBibliotheque, regrouperParBibliotheque } from '../moteur/bibliotheque.js';
-import { htmlGristReel } from './grist-reel.js';
+import { htmlGristReel, cssGristReel } from './grist-reel.js';
 
 const SEUIL_GROUPE = 4;
 
@@ -535,7 +535,7 @@ a{color:inherit;}
 .synthese-externe table{border-collapse:collapse; width:100%; font-size:12.5px;}
 .synthese-externe th,.synthese-externe td{border:1px solid var(--border); padding:6px 8px; text-align:left; vertical-align:top;}
 .synthese-externe th{background:var(--surface-2);}
-
+${cssGristReel}
 .pied{margin-top:56px; padding-top:18px; border-top:1px solid var(--border); font-size:12.5px; color:var(--text-muted); line-height:1.6;}
 
 body:has(#f-critique:checked) .constat:not([data-sev="critique"]){display:none;}

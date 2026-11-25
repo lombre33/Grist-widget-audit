@@ -62,7 +62,7 @@ export function evaluerEssais(phases, jeu) {
         { etape: 'sortie vers un hôte externe (neutralisée par l\'audit)', ok: !!sortie, ...(sortie ? {} : { barriere: lu ? 'aucune requête de sortie observée' : 'rien à sortir' }) },
       ];
       if (lu) {
-        essais.push(essai(1, titre, 'reussi', `la charge s'est exécutée, a lu la table appât avec le niveau « ${d.niveau} »${sortie ? ' et l\'a envoyée à l\'extérieur' : ' (sortie non observée)'}`, { niveau: d.niveau, regle: 'D-REEL-01', etapes }));
+        essais.push(essai(1, titre, 'reussi', `la charge s'est exécutée, a lu la table appât avec le niveau « ${d.niveau} »${sortie ? ' et l\'a envoyée à l\'extérieur' : ' (sortie non observée)'}`, { niveau: d.niveau, regle: 'D-REEL-01', severite: 'critique', etapes }));
         constats.push(constat({
           regle: 'D-REEL-01', axe: 'D', severite: 'critique', bloquant: true, confiance: 'prouve',
           titre: `XSS exécutée dans un vrai Grist, avec lecture d'une autre table au niveau « ${d.niveau} »${sortie ? ' et sortie des données' : ''}`,
@@ -73,7 +73,7 @@ export function evaluerEssais(phases, jeu) {
           preuve: { niveau: d.niveau, etapes, canariLu: true, sortieObservee: !!sortie },
         }));
       } else {
-        essais.push(essai(1, titre, 'reussi', `la charge s'est exécutée ; la lecture hors table a été arrêtée (${etapes[1].barriere})`, { niveau: d.niveau, regle: 'D-REEL-01', etapes }));
+        essais.push(essai(1, titre, 'reussi', `la charge s'est exécutée ; la lecture hors table a été arrêtée (${etapes[1].barriere})`, { niveau: d.niveau, regle: 'D-REEL-01', severite: 'majeur', etapes }));
         constats.push(constat({
           regle: 'D-REEL-01', axe: 'D', severite: 'majeur', bloquant: false, confiance: 'prouve',
           titre: `XSS exécutée dans un vrai Grist (lecture hors table arrêtée au niveau « ${d.niveau} »)`,
@@ -93,7 +93,7 @@ export function evaluerEssais(phases, jeu) {
     const a = phases.none;
     if (!a?.charge) essais.push(essai(7, titre, 'non_teste', raisonPage, { niveau: 'none' }));
     else if (a.canariRecu) {
-      essais.push(essai(7, titre, 'reussi', "des données du document sont arrivées au widget alors qu'il était limité à « none » (défaut de Grist, pas du widget)", { niveau: 'none', regle: 'D-REEL-07' }));
+      essais.push(essai(7, titre, 'reussi', "des données du document sont arrivées au widget alors qu'il était limité à « none » (défaut de Grist, pas du widget)", { niveau: 'none', regle: 'D-REEL-07', severite: 'info' }));
       constats.push(constat({
         regle: 'D-REEL-07', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
         titre: 'Grist a transmis des données à un widget limité au niveau « none »',
@@ -118,7 +118,7 @@ export function evaluerEssais(phases, jeu) {
       const fuites = sorties.filter((r) => r.canari);
       if (fuites.length) {
         const hotes = [...new Set(fuites.map((r) => r.hote))];
-        essais.push(essai(13, titre, 'reussi', `une valeur du document a été trouvée dans une requête vers ${hotes.join(', ')}`, { regle: 'D-REEL-13' }));
+        essais.push(essai(13, titre, 'reussi', `une valeur du document a été trouvée dans une requête vers ${hotes.join(', ')}`, { regle: 'D-REEL-13', severite: 'critique' }));
         constats.push(constat({
           regle: 'D-REEL-13', axe: 'D', severite: 'critique', bloquant: true, confiance: 'prouve',
           titre: `Des données du document sortent du widget vers ${hotes.join(', ')} (canari retrouvé)`,
@@ -129,7 +129,7 @@ export function evaluerEssais(phases, jeu) {
           preuve: { requetes: fuites.slice(0, 10).map(({ url, methode, hote, type, corps, canari }) => ({ url, methode, hote, type, corps, canari })) },
         }));
       } else if (sorties.length) {
-        essais.push(essai(13, titre, 'rien_observe', `${sorties.length} requête(s) sortante(s) neutralisée(s) (${[...new Set(sorties.map((r) => r.hote))].slice(0, 4).join(', ')}) ; aucun canari ni valeur du document trouvé en clair dans leur adresse ou leur corps (hors encodage particulier)`));
+        essais.push(essai(13, titre, 'rien_observe', `${sorties.length} requête(s) sortante(s) neutralisée(s) (${[...new Set(sorties.map((r) => r.hote))].slice(0, 4).join(', ')}) ; aucun canari ni valeur du document trouvé en clair dans leur adresse ou leur corps (hors encodage particulier)`, { sorties: sorties.length }));
       } else essais.push(essai(13, titre, 'rien_observe', 'aucune requête sortante du widget pendant les phases jouées'));
     }
   }
@@ -141,7 +141,7 @@ export function evaluerEssais(phases, jeu) {
     const refusees = chargees.flatMap((o) => o.navigationsRefusees);
     if (aucunePage) essais.push(essai(15, titre, 'non_teste', raisonPage));
     else if (navs.length) {
-      essais.push(essai(15, titre, 'reussi', `la page Grist a été redirigée vers ${resume(navs[0].url, 120)}`, { regle: 'D-REEL-15' }));
+      essais.push(essai(15, titre, 'reussi', `la page Grist a été redirigée vers ${resume(navs[0].url, 120)}`, { regle: 'D-REEL-15', severite: 'majeur' }));
       constats.push(constat({
         regle: 'D-REEL-15', axe: 'D', severite: 'majeur', bloquant: false, confiance: 'prouve',
         titre: 'Le widget redirige la page Grist qui l\'héberge',
@@ -162,7 +162,7 @@ export function evaluerEssais(phases, jeu) {
     if (aucunePage) essais.push(essai(16, titre, 'non_teste', raisonPage));
     else if (popups.length || dialogues.length || dl.length) {
       const liste = [popups.length ? `${popups.length} fenêtre(s) ouverte(s)` : null, dialogues.length ? `${dialogues.length} boîte(s) de dialogue (${[...new Set(dialogues.map((d) => d.type))].join(', ')})` : null, dl.length ? `${dl.length} téléchargement(s)` : null].filter(Boolean).join(', ');
-      essais.push(essai(16, titre, 'reussi', liste, { regle: 'D-REEL-16' }));
+      essais.push(essai(16, titre, 'reussi', liste, { regle: 'D-REEL-16', severite: 'majeur' }));
       constats.push(constat({
         regle: 'D-REEL-16', axe: 'D', severite: 'majeur', bloquant: false, confiance: 'prouve',
         titre: `Le widget ouvre des fenêtres, des boîtes de dialogue ou des téléchargements (${liste})`,
