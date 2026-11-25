@@ -34,7 +34,7 @@ test('le script sort en code 0 sur l\'arbre courant et dit chaque forme, sans é
   assert.match(r.stdout, /Aucune forme de fournisseur ne dépasse un tirage sur 100000 pris pour un leurre\./);
   // Les comptes seuls : aucune ligne ne porte autre chose qu'un libellé et deux nombres.
   const lignes = r.stdout.trim().split('\n').slice(1, -1);
-  assert.equal(lignes.length, 12);
+  assert.equal(lignes.length, 18);
   for (const l of lignes) assert.match(l, /^ {5}.+ +\d+ ont la forme de mots, +\d+ prises pour un leurre$/);
 });
 
@@ -52,8 +52,8 @@ test('un arbre qui prend toute clé pour un leurre sort en code 1 et nomme les f
     const r1 = lancer('--tirages=200', `--racine=${tout}`);
     assert.equal(r1.status, 1, r1.stdout + r1.stderr);
     const lignes = r1.stdout.trim().split('\n').slice(1, -1);
-    // Seules les six formes de fournisseur sont en faute, les six autres (les pires cas) sont dites sans l'être.
-    assert.deepEqual(lignes.map((l) => l.startsWith('TROP ')), [true, true, true, true, true, true, false, false, false, false, false, false]);
+    // Seules les douze formes de fournisseur sont en faute, les six autres (les pires cas) sont dites sans l'être.
+    assert.deepEqual(lignes.map((l) => l.startsWith('TROP ')), [...Array(12).fill(true), ...Array(6).fill(false)]);
     assert.match(r1.stdout, /TROP AWS, base 32, 16 signes +0 ont la forme de mots, +200 prises pour un leurre/);
     assert.match(r1.stdout, /Une forme de fournisseur dépasse un tirage sur 100000 pris pour un leurre\./);
     const r0 = lancer('--tirages=200', `--racine=${rien}`);
