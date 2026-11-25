@@ -391,6 +391,12 @@ seul code, pour comparer deux audits partis de la même grille ; *en complément
 avec le rapport de l'outil, que le modèle ne refait pas : il tranche les signaux
 que l'outil laisse ouverts et fait les jugements de la section 8 du prompt.
 
+Un second prompt, `docs/PROMPT-ATTAQUANT-LLM.md`, fait jouer l'attaquant à l'IA : elle
+liste les entrées d'un widget, cherche où elles atterrissent, décrit l'exploit de
+chaque piste et le compare au rapport de l'outil. Ses pistes ne valent qu'une
+fois rejouées dans le bac à sable ; une piste rejouée que l'outil n'avait pas vue
+est un trou à fermer.
+
 Les critères d'un code de widget, et à qui revient chacun :
 
 | Le code du widget doit être | L'outil mesure | L'IA juge |
