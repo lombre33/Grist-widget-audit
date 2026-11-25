@@ -1,0 +1,23 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Widget de test (écoute les messages sans contrôle d'origine)</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+</head>
+<body>
+<h1>Contacts</h1>
+<div id="zone"></div>
+<script>
+  grist.ready({ requiredAccess: 'read table', columns: ['Nom', 'Email'] });
+  grist.onRecords(function () { /* rien à afficher */ });
+  // Défaut volontaire, pour l'essai 4 : le widget écrit dans la page le HTML reçu par message et appelle l'adresse qu'il contient, sans vérifier l'origine ni la source.
+  window.addEventListener('message', function (e) {
+    var donnees = e.data;
+    if (typeof donnees === 'string') { try { donnees = JSON.parse(donnees); } catch (x) { return; } }
+    if (donnees && typeof donnees.html === 'string') document.getElementById('zone').innerHTML = donnees.html;
+    if (donnees && typeof donnees.url === 'string') fetch(donnees.url, { mode: 'no-cors' }).catch(function () { /* hôte injoignable */ });
+  });
+</script>
+</body>
+</html>

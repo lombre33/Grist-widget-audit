@@ -20,6 +20,9 @@ export const HOTE_PUITS = 'puits.gwaudit.invalid';
 /** Hôte factice des essais de canaux de sortie (essai 22) : distinct du puits, pour que ces requêtes ne se mêlent jamais à celles de l'essai 1 ou 13. */
 export const HOTE_CANAUX = 'canaux.gwaudit.invalid';
 
+/** Hôte factice des messages forgés (essai 4) : jamais joignable, intercepté par l'audit ; une requête qui y arrive vient d'un message forgé. */
+export const HOTE_MESSAGES = 'messages.gwaudit.invalid';
+
 /**
  * Les tables sacrifiées de l'essai 10 (écritures destructrices) : une par effet à mesurer, pour que l'audit vérifie chaque effet côté serveur, sans
  * croire ce que le widget rapporte. Chacune a deux colonnes (`Valeur`, `Autre`) et une ligne ; la table `regle` reçoit une règle d'accès.

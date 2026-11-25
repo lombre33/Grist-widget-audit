@@ -245,3 +245,39 @@ export async function kitStockage(p) {
   const caches = async () => { try { return window.caches ? (await window.caches.keys()).slice(0, 20).map((k) => String(k).slice(0, 60)) : null; } catch { return null; } };
   return { local: lireStockage('localStorage'), session: lireStockage('sessionStorage'), indexedDB: await lireIndexedDB(), caches: await caches() };
 }
+
+/**
+ * Messages forgés (essai 4) : un cadre voisin sans aucun droit (autre widget de la même page, page tierce qui encadrerait le widget) lui envoie des
+ * messages `postMessage` qu'aucun contrôle d'origine ne peut croire : le widget les prend-il pour des ordres ? Joué dans la PAGE Grist (pas dans le
+ * cadre du widget) : un cadre `sandbox` à l'origine opaque (« null ») pose les messages dans le cadre du widget, sous quatre formes (texte brut,
+ * objet à plat, objet imbriqué, JSON en texte) et sous les noms de champs usuels. Chaque charge est un `<img onerror>` qui compte ses exécutions
+ * dans `window.__gw_msg` du widget, et chaque champ d'adresse vise un hôte factice intercepté par l'audit.
+ *
+ * Fonction autonome : Playwright la sérialise, elle ne peut rien utiliser qui soit défini hors d'elle.
+ * @param {{hote: string, marqueur: string}} p
+ */
+export async function kitMessagesForges(p) {
+  const widget = document.querySelector('iframe.custom_view');
+  if (!widget || !widget.contentWindow) return { erreur: 'cadre du widget introuvable dans la page' };
+  let indice = -1;
+  for (let i = 0; i < window.length; i++) { try { if (window.frames[i] === widget.contentWindow) indice = i; } catch { /* cadre inaccessible */ } }
+  if (indice < 0) return { erreur: "le cadre du widget n'est pas dans la liste des cadres de la page" };
+  const charge = '<img src=x onerror="window.__gw_msg=(window.__gw_msg||0)+1">';
+  const adresse = `https://${p.hote}/m?d=${p.marqueur}`;
+  const plat = {};
+  for (const cle of ['html', 'innerHTML', 'text', 'message', 'msg', 'content', 'data', 'value', 'body', 'label', 'title', 'name']) plat[cle] = charge;
+  for (const cle of ['url', 'href', 'src', 'link', 'redirect', 'location', 'endpoint', 'api']) plat[cle] = adresse;
+  for (const cle of ['type', 'action', 'cmd', 'command', 'event', 'method']) plat[cle] = 'update';
+  const messages = [charge, plat, { type: 'message', data: plat, payload: plat, detail: plat, args: [plat] }, JSON.stringify(plat)];
+  const corps = JSON.stringify(messages).replace(/</g, '\\u003c');
+  const cadre = document.createElement('iframe');
+  cadre.setAttribute('sandbox', 'allow-scripts');
+  cadre.hidden = true;
+  cadre.srcdoc = `<script>try{var w=parent.frames[${indice}];var m=${corps};for(var i=0;i<m.length;i++)w.postMessage(m[i],"*");parent.postMessage("gw-envoye","*")}catch(e){parent.postMessage("gw-erreur "+String(e&&e.message).slice(0,100),"*")}</scr` + 'ipt>';
+  const retour = await new Promise((fin) => {
+    const garde = setTimeout(() => fin('délai dépassé'), 5000);
+    window.addEventListener('message', (e) => { if (e.source === cadre.contentWindow && String(e.data).startsWith('gw-')) { clearTimeout(garde); fin(String(e.data)); } });
+    document.body.appendChild(cadre);
+  });
+  return { envoye: retour === 'gw-envoye', retour, formes: messages.length };
+}

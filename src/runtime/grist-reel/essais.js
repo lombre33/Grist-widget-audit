@@ -30,8 +30,8 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 3, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 21, 22, 23, 24];
-export const ESSAIS_PAS_ENCORE = '2, 4 à 6, 11, 14, 19, 20';
+export const ESSAIS_JOUES = [1, 3, 4, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 21, 22, 23, 24];
+export const ESSAIS_PAS_ENCORE = '2, 5, 6, 11, 14, 19, 20';
 
 /** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
 const CANAUX = [['fetch', 'fetch'], ['xhr', 'XMLHttpRequest'], ['image', 'image (balise img)'], ['beacon', 'sendBeacon'], ['websocket', 'WebSocket'], ['script', 'balise script'], ['iframe', 'cadre iframe'], ['feuille', 'feuille de style'], ['cssurl', 'image de fond CSS'], ['prefetch', 'préchargement (link prefetch)'], ['formulaire', 'formulaire envoyé']];
@@ -419,6 +419,38 @@ export function evaluerEssais(phases, jeu) {
         essais.push(essai(3, titre, 'rien_observe', `le widget a reçu les lignes hostiles (JSON avec __proto__ et constructor.prototype, chemin __proto__.clé, mots-clés dangereux) sans qu'une propriété soit ajoutée à Object.prototype`, { niveau }));
       } else {
         essais.push(essai(3, titre, 'non_teste', `les lignes hostiles n'ont pas atteint le widget au niveau « ${niveau} » (aucune donnée transmise, colonnes non liées, ou widget qui ne lit que la ligne sélectionnée) : le contrôle des prototypes ne prouve rien`, { niveau }));
+      }
+    }
+  }
+
+  // --- 4. Messages forgés : un cadre voisin sans droit fait-il agir le widget par postMessage ? (même passe que l'essai 22) ---
+  {
+    const c = phases.canaux;
+    const titre = 'Messages forgés envoyés au widget par un cadre voisin';
+    if (c) {
+      const niveau = c.niveau;
+      const o = c.obs;
+      const m = o?.messages ?? null;
+      const exec = m?.executions ?? 0;
+      const requetes = m?.requetes ?? 0;
+      if (!o?.charge) essais.push(essai(4, titre, 'non_teste', `le widget n'a pas été chargé pour cet essai (${resume(o?.erreur)})`, { niveau }));
+      else if (!m || m.erreur) essais.push(essai(4, titre, 'non_teste', `le cadre voisin n'a pas pu envoyer ses messages${m?.erreur ? ` (${resume(m.erreur, 150)})` : ''}`, { niveau }));
+      else if (exec > 0 || requetes > 0) {
+        const effets = [exec > 0 ? `une charge HTML reçue dans un message s'est exécutée dans le widget (${exec} fois)` : null, requetes > 0 ? `le widget a appelé ${requetes} fois l'adresse donnée par un message` : null].filter(Boolean);
+        essais.push(essai(4, titre, 'reussi', `un cadre voisin sans droit a fait agir le widget par postMessage : ${effets.join(' ; ')}`, { niveau, regle: 'D-REEL-04', severite: 'majeur', executions: exec, requetes }));
+        constats.push(constat({
+          regle: 'D-REEL-04', axe: 'D', severite: 'majeur', bloquant: false, confiance: 'prouve',
+          titre: "Le widget obéit à des messages postMessage venus d'un cadre quelconque",
+          constat: `Dans un vrai Grist (niveau « ${niveau} »), un cadre voisin à l'origine opaque (« null »), sans aucun droit, a envoyé au widget des messages sous quatre formes (texte brut, objet, objet imbriqué, JSON) et sous les noms de champs usuels. Effet : ${effets.join(' ; ')}. Le widget n'a donc vérifié ni l'origine ni la source des messages qu'il reçoit.`,
+          impact: "N'importe quelle page qui encadre le widget, ou un autre widget de la même page Grist, peut y faire exécuter du code (XSS par message, CWE-79 et CWE-346) ou lui faire appeler une adresse de son choix, avec les droits d'accès du widget.",
+          remediation: "Dans le gestionnaire du `message`, n'accepter que `event.source === window.parent`, vérifier `event.origin` contre l'origine de Grist, ne jamais écrire le contenu d'un message avec `innerHTML` (utiliser `textContent`) ni s'en servir comme adresse ; ou ne pas écouter `message` du tout : l'API Grist suffit.",
+          referentiels: ['CWE-346', 'CWE-79', 'OWASP Top 10 A03:2021 — Injection'],
+          preuve: { niveau, executions: exec, requetes },
+        }));
+      } else if ((m.forgeRecu ?? 0) > 0 && !m.cadreIllisible) {
+        essais.push(essai(4, titre, 'rien_observe', `quatre formes de message forgé (texte brut, objet, objet imbriqué, JSON), reçues par le widget (${m.forgeRecu}), n'ont déclenché ni exécution de code ni appel réseau`, { niveau }));
+      } else {
+        essais.push(essai(4, titre, 'non_teste', m.cadreIllisible ? "le cadre du widget n'a pas pu être relu après l'envoi des messages" : "les messages forgés ne sont pas arrivés jusqu'au widget (aucun message d'origine « null » vu dans son cadre) : l'essai ne prouve rien", { niveau }));
       }
     }
   }
