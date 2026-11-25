@@ -19,6 +19,7 @@ const ESSAIS_DU_CATALOGUE = 22;
 /** Ce que chaque essai tente, en une phrase. */
 const QUOI = {
   1: "On place dans une cellule du document un texte piégé (du code déguisé en donnée), puis on regarde si le widget l'exécute.",
+  3: "On ajoute au document des lignes dont le texte est piégé (JSON avec __proto__ ou constructor.prototype, chemin __proto__.clé) et on regarde si le widget, en les lisant, modifie les objets de base de JavaScript (pollution de prototype).",
   7: "On limite le widget au niveau d'accès « none » (aucune donnée) et on vérifie que Grist ne lui transmet rien.",
   8: "On joue, depuis l'intérieur du widget, ce que ferait du code étranger (une bibliothèque piégée) : lire la liste des tables, une table sans rapport avec le widget, les tables système.",
   9: "On joue ce que ferait ce code étranger pour obtenir un jeton d'accès, appeler directement l'API du document avec ce jeton, et l'essayer sur un autre document.",
@@ -51,6 +52,10 @@ function enClair(e) {
       return e.severite === 'critique'
         ? "Le texte piégé s'est exécuté dans le widget et a pu lire une autre table du document. Quiconque peut écrire dans le document peut donc faire agir du code avec les droits du widget."
         : "Le texte piégé s'est exécuté dans le widget, mais Grist a refusé qu'il lise une autre table. Le défaut est réel ; il deviendrait plus grave si l'accès accordé au widget était élargi.";
+    case 3:
+      return t === 'reussi'
+        ? "En lisant des cellules piégées, le widget a modifié les objets de base de JavaScript : quiconque peut écrire dans le document peut changer le comportement du widget (pollution de prototype)."
+        : "Le widget a lu des cellules piégées (JSON avec __proto__ et constructor.prototype, chemin __proto__.clé) sans modifier les objets de base de JavaScript. C'est ce qu'on attend ; cela ne couvre que ces trois formes de piège.";
     case 7:
       return t === 'bloque'
         ? "Grist a bien refusé de transmettre les données au niveau « none ». C'est le garde-fou de Grist qui est vérifié ici, pas le widget."

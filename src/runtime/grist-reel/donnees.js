@@ -26,6 +26,9 @@ export const HOTE_CANAUX = 'canaux.gwaudit.invalid';
  */
 export const TABLES_SACRIFIEES = { ajout: 'GwauditEcrAjout', renom: 'GwauditEcrRenom', colonne: 'GwauditEcrColonne', table: 'GwauditEcrTable', regle: 'GwauditEcrRegle' };
 
+/** Les clés que les données hostiles de l'essai 3 tentent d'ajouter aux prototypes ; aucune ne peut exister ailleurs que par ces données. */
+export const CLES_POLLUTION = ['gwaudit_pollue_proto', 'gwaudit_pollue_ctor', 'gwaudit_pollue_chemin'];
+
 /** Un identifiant Grist valide à partir d'un nom de colonne ou de table (Grist retire le `_` initial et les caractères hors [A-Za-z0-9_]). */
 function idGrist(nom, parDefaut) {
   const propre = String(nom).normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/[^A-Za-z0-9_]/g, '_').replace(/^_+/, '');
@@ -196,4 +199,27 @@ export async function verifierEcritures(client, doc) {
     table: !tables.includes(T.table),
     regle: regles.some((r) => r.p === '-R'),
   };
+}
+
+/**
+ * Les lignes hostiles de l'essai 3 : des valeurs qui, fusionnées sans précaution dans un objet, ajouteraient une clé à `Object.prototype`
+ * (JSON avec `__proto__`, JSON avec `constructor.prototype`, chemin `__proto__.clé`), et des mots-clés dangereux. Ajoutées à la fin de la table du
+ * widget, dans ses colonnes de texte seulement, avant la dernière passe : le widget les reçoit comme n'importe quelle donnée.
+ */
+export function lignesHostiles(jeu) {
+  const valeurs = [
+    `{"__proto__":{"${CLES_POLLUTION[0]}":"${jeu.graine}"}}`,
+    `{"constructor":{"prototype":{"${CLES_POLLUTION[1]}":"${jeu.graine}"}}}`,
+    `__proto__.${CLES_POLLUTION[2]}`,
+    '__proto__', 'constructor', 'toString', 'hasOwnProperty', '[object Object]',
+  ];
+  const colonnes = jeu.table.colonnes.filter((c) => c.type === 'Text' && c.id !== 'GwauditCanari');
+  if (!colonnes.length) return [];
+  return valeurs.map((v) => Object.fromEntries(colonnes.map((c) => [c.id, v])));
+}
+
+export async function ajouterDonneesHostiles(client, doc, jeu) {
+  const lignes = lignesHostiles(jeu);
+  if (lignes.length) await client.ajouterLignes(doc.docId, jeu.table.id, lignes);
+  return lignes.length;
 }

@@ -22,7 +22,7 @@ import {
 } from '../dynamique.js';
 import { estGrist } from '../../contexte/hotes-grist.js';
 import { trouverCanari } from './donnees.js';
-import { kitDependancePiegee, kitCanaux, kitEcritures, kitDroits, poserSurfaceDeClic } from './kit.js';
+import { kitDependancePiegee, kitCanaux, kitEcritures, kitDroits, kitPollution, poserSurfaceDeClic } from './kit.js';
 
 const ICI = path.dirname(fileURLToPath(import.meta.url));
 const RACINE_OUTIL = path.resolve(ICI, '../../..');
@@ -39,7 +39,7 @@ export async function lancerChromium(chromium) {
 
 /** Posé dans tous les cadres avant leur propre code. Page Grist : appels du widget. Cadre du widget : réponses et données reçues de Grist. */
 function sondeInitiale({ prefixe, valeurs }) {
-  const g = (window.__gw = window.__gw || { appels: [], reponses: [], canariRecu: false });
+  const g = (window.__gw = window.__gw || { appels: [], reponses: [], canariRecu: false, hostileRecu: false });
   const court = (x) => { try { return JSON.stringify(x).slice(0, 300); } catch { return String(x).slice(0, 300); } };
   if (window === window.top) {
     window.addEventListener('message', (e) => {
@@ -54,6 +54,7 @@ function sondeInitiale({ prefixe, valeurs }) {
       if (!d || typeof d !== 'object') return;
       if (d.mtype === 2 || d.mtype === 3) g.reponses.push({ mtype: d.mtype, reqId: d.reqId, mesg: typeof d.mesg === 'string' ? d.mesg.slice(0, 200) : undefined });
       // Grist transmet les données soit par un appel (mtype 1), soit en réponse à la lecture du widget (mtype 2).
+      if (!g.hostileRecu && (d.mtype === 1 || d.mtype === 2)) { try { if (JSON.stringify(d).includes('gwaudit_pollue')) g.hostileRecu = true; } catch { /* message non sérialisable */ } }
       if (!g.canariRecu && (d.mtype === 1 || d.mtype === 2)) {
         try { const t = JSON.stringify(d); if (t.includes(prefixe) || t.includes('__gw_xss') || valeurs.some((v) => t.includes(JSON.stringify(v).slice(1, -1)))) g.canariRecu = true; } catch { /* message non sérialisable */ }
       }
@@ -97,16 +98,17 @@ const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; retur
  * @param {object} p.jeu           voir donnees.js
  * @param {boolean} [p.lireMarqueurs]  lit dans le cadre du widget les marqueurs que posent les bibliothèques altérées (voir `alterer` dans bibliotheques.js)
  * @param {object} [p.canaux]     paramètres du kit des canaux de sortie (voir kitCanaux) : s'il est fourni, il est joué dans le cadre du widget
+ * @param {object} [p.pollution]  clés cherchées dans `Object.prototype` (voir kitPollution) : si fourni, joué dans le cadre du widget ; les lignes hostiles doivent être déjà dans la table (voir `ajouterDonneesHostiles`)
  * @param {boolean} [p.droits]    joue le kit des droits du navigateur donnés au cadre (voir kitDroits), avec un vrai clic de l'audit dans le widget ; l'écriture du presse-papier est accordée à la page Grist, comme le fait un Chrome ordinaire pour l'onglet actif
  * @param {object} [p.ecritures]  identifiants des tables sacrifiées (voir kitEcritures) : si fourni, le kit des écritures est joué dans le cadre du widget, en tout dernier
  * @param {object} [p.kit]         paramètres du kit de la dépendance piégée (voir kit.js) : s'il est fourni, il est joué dans le cadre du widget
  * @param {number} [p.delaiMs]
  */
-export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, canaux, ecritures, droits, lireMarqueurs, delaiMs = 45_000 }) {
+export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, canaux, ecritures, droits, pollution, lireMarqueurs, delaiMs = 45_000 }) {
   const obs = {
     charge: false, appelsRpc: [], configure: null, canariRecu: false, texteDuCadre: '',
     xss: { executions: 0, lu: null, refus: null, erreur: null },
-    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null, droits: null,
+    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null, droits: null, pollution: null, hostileRecu: false,
     consoles: [], erreursPage: [], erreur: null,
   };
   const origineGrist = origineDe(base);
@@ -200,7 +202,7 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
       let dansCadre = null;
       if (cadre) {
         dansCadre = await cadre.evaluate(() => ({
-          reponses: window.__gw?.reponses ?? [], canariRecu: !!window.__gw?.canariRecu,
+          reponses: window.__gw?.reponses ?? [], canariRecu: !!window.__gw?.canariRecu, hostileRecu: !!window.__gw?.hostileRecu,
           xss: window.__gw_xss || 0, lu: window.__gw_lu ?? null, refus: window.__gw_refus ?? null, erreur: window.__gw_err ?? null,
           texte: (document.documentElement?.innerText ?? '').slice(0, 20000),
         })).catch(() => null);
@@ -214,11 +216,13 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
       if (conf) { try { obs.configure = JSON.parse(conf.args)?.[0] ?? null; } catch { obs.configure = { illisible: true }; } }
       if (dansCadre) {
         obs.canariRecu = dansCadre.canariRecu || !!trouverCanari(dansCadre.texte, jeu);
+        obs.hostileRecu = dansCadre.hostileRecu;
         obs.texteDuCadre = dansCadre.texte.slice(0, 500);
         obs.xss = { executions: dansCadre.xss, lu: dansCadre.lu, refus: dansCadre.refus, erreur: dansCadre.erreur };
       }
       if (lireMarqueurs && cadre) obs.alteration = { executees: await cadre.evaluate(() => (Array.isArray(globalThis.__gw_altere) ? globalThis.__gw_altere.slice(0, 300).map(String) : [])).catch(() => []) };
       if (droits && cadre) obs.droits = await jouerDroits(page, cadre, jeu.prefixe).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
+      if (pollution && cadre) obs.pollution = await cadre.evaluate(kitPollution, pollution).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       if (canaux && cadre) obs.canaux = await cadre.evaluate(kitCanaux, canaux).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       // En tout dernier : l'écriture d'une règle d'accès fait recharger la page par Grist, le cadre disparaît (l'échec d'`evaluate` qui s'ensuit est attendu).
       if (ecritures && cadre) obs.ecritures = await cadre.evaluate(kitEcritures, ecritures).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200), cadreRecharge: /detached|destroyed|navigation/i.test(String(e?.message ?? e)) }));

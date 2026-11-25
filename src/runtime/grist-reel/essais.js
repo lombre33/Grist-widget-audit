@@ -30,8 +30,8 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 21, 22];
-export const ESSAIS_PAS_ENCORE = '2 à 6, 11, 14, 19, 20';
+export const ESSAIS_JOUES = [1, 3, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 21, 22];
+export const ESSAIS_PAS_ENCORE = '2, 4 à 6, 11, 14, 19, 20';
 
 /** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
 const CANAUX = [['fetch', 'fetch'], ['xhr', 'XMLHttpRequest'], ['image', 'image (balise img)'], ['beacon', 'sendBeacon'], ['websocket', 'WebSocket'], ['script', 'balise script'], ['iframe', 'cadre iframe'], ['feuille', 'feuille de style'], ['cssurl', 'image de fond CSS'], ['prefetch', 'préchargement (link prefetch)'], ['formulaire', 'formulaire envoyé']];
@@ -390,6 +390,35 @@ export function evaluerEssais(phases, jeu) {
         } else {
           essais.push(essai(22, titre, 'non_teste', `aucune voie n'a abouti et ${inconnus.length} sur ${CANAUX.length} n'ont donné ni requête vue ni blocage signalé (${inconnus.slice(0, 3).join(', ')}) : la mesure n'est pas fiable`, { niveau, etapes }));
         }
+      }
+    }
+  }
+
+  // --- 3. Données hostiles : des clés dangereuses ajoutent-elles une propriété aux prototypes du widget ? (même passe que l'essai 22) ---
+  {
+    const c = phases.canaux;
+    const titre = 'Données hostiles : pollution des prototypes (__proto__, constructor)';
+    if (c) {
+      const niveau = c.niveau;
+      const o = c.obs;
+      const k = o?.pollution ?? null;
+      if (!o?.charge) essais.push(essai(3, titre, 'non_teste', `le widget n'a pas été chargé pour cet essai (${resume(o?.erreur)})`, { niveau }));
+      else if (!k || k.erreur) essais.push(essai(3, titre, 'non_teste', `${k?.erreur ? `le contrôle des prototypes n'a pas pu être joué dans le cadre du widget (${resume(k.erreur, 150)})` : "les lignes hostiles n'ont pas pu être ajoutées au document de test"}`, { niveau }));
+      else if (k.polluees?.length) {
+        essais.push(essai(3, titre, 'reussi', `des données de cellule ont ajouté une propriété à Object.prototype dans le widget : ${k.polluees.join(', ')}`, { niveau, regle: 'D-REEL-03', severite: 'majeur', polluees: k.polluees }));
+        constats.push(constat({
+          regle: 'D-REEL-03', axe: 'D', severite: 'majeur', bloquant: false, confiance: 'prouve',
+          titre: "Des données de cellule modifient les prototypes du widget (pollution de prototype)",
+          constat: `Le document de test contenait des lignes dont le texte est un JSON piégé (\`__proto__\`, \`constructor.prototype\`) ou un chemin \`__proto__.clé\`. Après leur réception par le widget chargé dans un vrai Grist (niveau « ${niveau} »), \`Object.prototype\` portait une propriété qui ne peut venir que de ces données : ${k.polluees.join(', ')}.`,
+          impact: "Quiconque peut écrire une cellule du document peut ajouter des propriétés à tous les objets du widget : cela ouvre la voie à un contournement de contrôles, à des erreurs en cascade ou, avec un bout de code du widget qui lit ces propriétés, à l'exécution de code (CWE-1321).",
+          remediation: "Ne pas fusionner de JSON issu des cellules avec une fonction récursive maison ou une bibliothèque ancienne (lodash < 4.17.21, jQuery.extend profond < 3.4) ; ignorer les clés `__proto__`, `constructor` et `prototype` ; utiliser `Object.create(null)` ou une `Map` pour les tables de correspondance ; `Object.freeze(Object.prototype)` en dernier recours.",
+          referentiels: ['CWE-1321', 'OWASP Top 10 A03:2021 — Injection'],
+          preuve: { niveau, polluees: k.polluees },
+        }));
+      } else if (o.hostileRecu) {
+        essais.push(essai(3, titre, 'rien_observe', `le widget a reçu les lignes hostiles (JSON avec __proto__ et constructor.prototype, chemin __proto__.clé, mots-clés dangereux) sans qu'une propriété soit ajoutée à Object.prototype`, { niveau }));
+      } else {
+        essais.push(essai(3, titre, 'non_teste', `les lignes hostiles n'ont pas atteint le widget au niveau « ${niveau} » (aucune donnée transmise, colonnes non liées, ou widget qui ne lit que la ligne sélectionnée) : le contrôle des prototypes ne prouve rien`, { niveau }));
       }
     }
   }

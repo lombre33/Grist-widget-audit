@@ -18,7 +18,7 @@ import { resoudreBibliotheques, alterer } from './bibliotheques.js';
 import { assurerGristDesktop, EPINGLE, InstallationImpossible } from './installateur.js';
 import { lancerInstance, InstanceImpossible } from './instance.js';
 import { creerClient } from './client.js';
-import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, verifierEcritures, HOTE_PUITS, HOTE_CANAUX, TABLES_SACRIFIEES } from './donnees.js';
+import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, verifierEcritures, ajouterDonneesHostiles, HOTE_PUITS, HOTE_CANAUX, CLES_POLLUTION, TABLES_SACRIFIEES } from './donnees.js';
 import { lancerChromium, jouerPhase } from './navigateur.js';
 import { evaluerEssais, constatIndisponible, ESSAIS_JOUES, ESSAIS_PAS_ENCORE } from './essais.js';
 import { bacASableChromium, resumerCauseErreur } from '../dynamique.js';
@@ -106,13 +106,16 @@ export async function auditGristReel(ctx, options = {}) {
       } else phases.alteration = { indisponible: "aucune des bibliothèques déclarées par le widget n'a pu être téléchargée (voir la liste des bibliothèques du rapport)" };
     }
 
-    // Dernière passe, au niveau que le widget demande : essais 17 et 18 (quels droits du navigateur Grist donne au cadre), essai 22 (par quelles voies du
+    // Dernière passe, au niveau que le widget demande : essai 3 (des données hostiles font-elles ajouter une clé aux prototypes du widget ?), essais 17 et 18 (quels droits du navigateur Grist donne au cadre), essai 22 (par quelles voies du
     // navigateur du code étranger dans le widget pourrait envoyer ce qu'il a lu ?) puis essai 10 (qu'est-ce qu'il pourrait changer dans le document ?). Elle doit rester la dernière : l'écriture d'une règle d'accès
     // modifie le document de test et fait recharger la page.
     if (obsNone.charge) {
       const niveau = phases.demande?.niveau ?? 'none';
       journal(`  Phase ${phases.alteration ? 4 : 3} : ce que du code piégé dans le widget pourrait envoyer et modifier, au niveau « ${niveau} »…`);
-      const obsFinale = await jouerPhase({ ...commun, kit: undefined, canaux: { hote: HOTE_CANAUX, prefixe: jeu.prefixe }, droits: true, ecritures: TABLES_SACRIFIEES });
+      // Essai 3 : les lignes hostiles sont ajoutées à la table avant que le widget ne se charge, pour qu'il les reçoive comme toute autre donnée.
+      let hostiles = 0;
+      try { hostiles = await ajouterDonneesHostiles(client, doc, jeu); } catch (e) { journal(`  Lignes hostiles non ajoutées (${resumerCauseErreur(e)}) : l'essai 3 ne sera pas joué.`); }
+      const obsFinale = await jouerPhase({ ...commun, kit: undefined, canaux: { hote: HOTE_CANAUX, prefixe: jeu.prefixe }, droits: true, ...(hostiles ? { pollution: { cles: CLES_POLLUTION } } : {}), ecritures: TABLES_SACRIFIEES });
       phases.canaux = { niveau, obs: obsFinale };
       let serveur;
       try { await new Promise((r) => setTimeout(r, 2500)); serveur = await verifierEcritures(client, doc); }

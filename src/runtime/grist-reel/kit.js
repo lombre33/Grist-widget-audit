@@ -182,3 +182,15 @@ export function poserSurfaceDeClic() {
   (document.body || document.documentElement).appendChild(d);
   return { largeur: window.innerWidth, hauteur: window.innerHeight };
 }
+
+/**
+ * Pollution des prototypes (essai 3) : après que le widget a reçu les lignes hostiles (voir `lignesHostiles` dans donnees.js), les clés qu'elles
+ * tentaient d'ajouter à `Object.prototype` y sont-elles ? Une clé ne peut y être que par ces données : le fait est prouvé, jamais déduit.
+ *
+ * Fonction autonome : Playwright la sérialise, elle ne peut rien utiliser qui soit défini hors d'elle.
+ * @param {{cles: string[]}} p
+ */
+export function kitPollution(p) {
+  const polluees = p.cles.filter((cle) => Object.prototype.hasOwnProperty.call(Object.prototype, cle) || ({})[cle] !== undefined);
+  return { polluees };
+}

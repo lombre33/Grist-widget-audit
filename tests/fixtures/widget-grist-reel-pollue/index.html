@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Widget de test (fusion récursive naïve des cellules JSON)</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+</head>
+<body>
+<h1>Réglages</h1>
+<pre id="reglages"></pre>
+<script>
+  // Défaut volontaire, pour l'essai 3 : une fusion récursive naïve de réglages lus dans les cellules.
+  function fusionner(cible, source) {
+    for (var cle in source) {
+      if (source[cle] && typeof source[cle] === 'object') { cible[cle] = cible[cle] || {}; fusionner(cible[cle], source[cle]); }
+      else cible[cle] = source[cle];
+    }
+    return cible;
+  }
+  grist.ready({ requiredAccess: 'read table', columns: ['Nom'] });
+  grist.onRecords(function (records) {
+    var reglages = {};
+    records.forEach(function (r) { try { fusionner(reglages, JSON.parse(r.Nom)); } catch (e) { /* cellule qui n'est pas du JSON */ } });
+    document.getElementById('reglages').textContent = JSON.stringify(reglages);
+  });
+</script>
+</body>
+</html>

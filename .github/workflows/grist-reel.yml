@@ -49,4 +49,4 @@ jobs:
         env:
           GWAUDIT_GRIST_REEL_E2E: '1'
           GWAUDIT_RESEAU_REEL: '1'
-        run: node --test --test-concurrency=1 tests/grist-reel.test.mjs tests/interface.test.mjs tests/api-grist-partout.test.mjs tests/grist-reel-rapport.test.mjs tests/grist-reel-bibliotheques.test.mjs tests/grist-reel-dependance-piegee.test.mjs tests/grist-reel-alteration.test.mjs tests/grist-reel-canaux.test.mjs tests/grist-reel-ecritures.test.mjs tests/grist-reel-droits.test.mjs
+        run: node --test --test-concurrency=1 tests/grist-reel.test.mjs tests/interface.test.mjs tests/api-grist-partout.test.mjs tests/grist-reel-rapport.test.mjs tests/grist-reel-bibliotheques.test.mjs tests/grist-reel-dependance-piegee.test.mjs tests/grist-reel-alteration.test.mjs tests/grist-reel-canaux.test.mjs tests/grist-reel-ecritures.test.mjs tests/grist-reel-droits.test.mjs tests/grist-reel-pollution.test.mjs
