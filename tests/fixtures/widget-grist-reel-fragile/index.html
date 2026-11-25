@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Widget de test (fragile : valeurs limites et rafale)</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+</head>
+<body>
+<h1>Contacts</h1>
+<ul id="liste"></ul>
+<script>
+  // Défauts volontaires, pour les essais 2 et 6 : le nom d'une cellule est décodé sans précaution (un pourcentage mal formé lève une erreur),
+  // et le widget lève une erreur à partir de la 25e mise à jour reçue (il n'avait pas prévu qu'elles arrivent en rafale).
+  var misesAJour = 0;
+  grist.ready({ requiredAccess: 'read table', columns: ['Nom', 'Email'] });
+  grist.onRecords(function (records) {
+    misesAJour += 1;
+    if (misesAJour > 25) throw new Error('trop de mises à jour reçues');
+    var liste = document.getElementById('liste');
+    liste.textContent = '';
+    records.slice(0, 200).forEach(function (r) {
+      var li = document.createElement('li');
+      li.textContent = decodeURIComponent(r.Nom || '') + ' — ' + r.Email;
+      liste.appendChild(li);
+    });
+  });
+</script>
+</body>
+</html>
