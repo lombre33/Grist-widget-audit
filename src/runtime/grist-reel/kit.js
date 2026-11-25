@@ -194,3 +194,54 @@ export function kitPollution(p) {
   const polluees = p.cles.filter((cle) => Object.prototype.hasOwnProperty.call(Object.prototype, cle) || ({})[cle] !== undefined);
   return { polluees };
 }
+
+/**
+ * Stockage dans le navigateur (essai 23) : le widget a-t-il gardé des données du document dans le navigateur (localStorage, sessionStorage,
+ * IndexedDB), où elles survivent à la fermeture du document et sont lisibles par tout code de la même origine (les autres widgets du même hébergeur
+ * par exemple) ? On cherche les canaris et les valeurs ordinaires du document de test ; on rend les faits (noms, nombres), jamais les contenus.
+ *
+ * Fonction autonome : Playwright la sérialise, elle ne peut rien utiliser qui soit défini hors d'elle.
+ * @param {{prefixe: string, valeurs: string[]}} p
+ */
+export async function kitStockage(p) {
+  const contient = (texte) => { const t = String(texte); return t.includes(p.prefixe) || p.valeurs.some((v) => t.includes(v)); };
+  const lireStockage = (nom) => {
+    try {
+      const st = window[nom];
+      const cles = []; let canari = false; let taille = 0;
+      for (let i = 0; i < Math.min(st.length, 500); i++) { const k = st.key(i); const v = st.getItem(k) ?? ''; taille += k.length + v.length; if (cles.length < 20) cles.push(String(k).slice(0, 60)); if (contient(k) || contient(v)) canari = true; }
+      return { nombre: st.length, cles, taille, canari };
+    } catch (e) { return { erreur: String((e && e.message) || e).slice(0, 120) }; }
+  };
+  const lireIndexedDB = async () => {
+    if (!window.indexedDB || typeof indexedDB.databases !== 'function') return { indisponible: true };
+    try {
+      const bases = (await indexedDB.databases()).filter((b) => b && b.name);
+      const sortie = { nombre: bases.length, noms: bases.slice(0, 20).map((b) => String(b.name).slice(0, 60)), canari: false };
+      for (const b of bases.slice(0, 10)) {
+        await new Promise((fin) => {
+          const garde = setTimeout(fin, 2500);
+          const fermer = (db) => { try { if (db) db.close(); } catch { /* déjà fermée */ } clearTimeout(garde); fin(); };
+          let req; try { req = indexedDB.open(b.name); } catch { clearTimeout(garde); return fin(); }
+          req.onerror = () => fermer(null);
+          req.onsuccess = () => {
+            const db = req.result;
+            try {
+              const magasins = [...db.objectStoreNames]; let restant = magasins.length;
+              if (!restant) return fermer(db);
+              const un = () => { restant -= 1; if (restant <= 0) fermer(db); };
+              for (const m of magasins) {
+                const r = db.transaction(m, 'readonly').objectStore(m).getAll(undefined, 200);
+                r.onsuccess = () => { try { if (contient(JSON.stringify(r.result))) sortie.canari = true; } catch { /* valeur non sérialisable */ } un(); };
+                r.onerror = un;
+              }
+            } catch { fermer(db); }
+          };
+        });
+      }
+      return sortie;
+    } catch (e) { return { erreur: String((e && e.message) || e).slice(0, 120) }; }
+  };
+  const caches = async () => { try { return window.caches ? (await window.caches.keys()).slice(0, 20).map((k) => String(k).slice(0, 60)) : null; } catch { return null; } };
+  return { local: lireStockage('localStorage'), session: lireStockage('sessionStorage'), indexedDB: await lireIndexedDB(), caches: await caches() };
+}

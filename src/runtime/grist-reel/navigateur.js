@@ -22,7 +22,7 @@ import {
 } from '../dynamique.js';
 import { estGrist } from '../../contexte/hotes-grist.js';
 import { trouverCanari } from './donnees.js';
-import { kitDependancePiegee, kitCanaux, kitEcritures, kitDroits, kitPollution, poserSurfaceDeClic } from './kit.js';
+import { kitDependancePiegee, kitCanaux, kitEcritures, kitDroits, kitPollution, kitStockage, poserSurfaceDeClic } from './kit.js';
 
 const ICI = path.dirname(fileURLToPath(import.meta.url));
 const RACINE_OUTIL = path.resolve(ICI, '../../..');
@@ -62,6 +62,15 @@ function sondeInitiale({ prefixe, valeurs }) {
   }
 }
 
+/** Ce que le widget a gardé dans le navigateur (voir kitStockage) et les cookies de son origine, vus par le navigateur : les canaris y sont cherchés, rien d'autre n'est rendu que des noms et des nombres. */
+async function jouerStockage(contexte, cadre, origineWidget, jeu) {
+  const dansCadre = await cadre.evaluate(kitStockage, { prefixe: jeu.prefixe, valeurs: jeu.valeursCherchees.slice(0, 60) });
+  // Tous les cookies du contexte, filtrés par l'hôte du widget : `cookies([adresse])` écarte les cookies « Secure » d'une adresse http, alors que Chromium les accepte sur 127.0.0.1.
+  const hote = hoteDe(origineWidget);
+  const cookies = (await contexte.cookies()).filter((c) => String(c.domain).replace(/^\./, '') === hote).slice(0, 30).map((c) => ({ nom: String(c.name).slice(0, 60), httpOnly: c.httpOnly, secure: c.secure, sameSite: c.sameSite, duree: c.expires === -1 ? 'session' : 'persistant', canari: !!trouverCanari(`${c.name} ${c.value}`, jeu) }));
+  return { ...dansCadre, cookies };
+}
+
 /** Les droits du navigateur donnés au cadre, avec un vrai clic dans le widget et la relecture du presse-papier depuis la page Grist (voir kitDroits). */
 async function jouerDroits(page, cadre, prefixe) {
   const marqueur = `${prefixe}-PRESSE-PAPIER-ECRIT-PAR-LE-CADRE`;
@@ -98,17 +107,18 @@ const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; retur
  * @param {object} p.jeu           voir donnees.js
  * @param {boolean} [p.lireMarqueurs]  lit dans le cadre du widget les marqueurs que posent les bibliothèques altérées (voir `alterer` dans bibliotheques.js)
  * @param {object} [p.canaux]     paramètres du kit des canaux de sortie (voir kitCanaux) : s'il est fourni, il est joué dans le cadre du widget
+ * @param {boolean} [p.stockage]  lit dans le cadre ce que le widget a gardé dans le navigateur, et ses cookies (voir kitStockage), avant les autres kits
  * @param {object} [p.pollution]  clés cherchées dans `Object.prototype` (voir kitPollution) : si fourni, joué dans le cadre du widget ; les lignes hostiles doivent être déjà dans la table (voir `ajouterDonneesHostiles`)
  * @param {boolean} [p.droits]    joue le kit des droits du navigateur donnés au cadre (voir kitDroits), avec un vrai clic de l'audit dans le widget ; l'écriture du presse-papier est accordée à la page Grist, comme le fait un Chrome ordinaire pour l'onglet actif
  * @param {object} [p.ecritures]  identifiants des tables sacrifiées (voir kitEcritures) : si fourni, le kit des écritures est joué dans le cadre du widget, en tout dernier
  * @param {object} [p.kit]         paramètres du kit de la dépendance piégée (voir kit.js) : s'il est fourni, il est joué dans le cadre du widget
  * @param {number} [p.delaiMs]
  */
-export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, canaux, ecritures, droits, pollution, lireMarqueurs, delaiMs = 45_000 }) {
+export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, canaux, ecritures, droits, pollution, stockage, lireMarqueurs, delaiMs = 45_000 }) {
   const obs = {
     charge: false, appelsRpc: [], configure: null, canariRecu: false, texteDuCadre: '',
     xss: { executions: 0, lu: null, refus: null, erreur: null },
-    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null, droits: null, pollution: null, hostileRecu: false,
+    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null, droits: null, pollution: null, stockage: null, hostileRecu: false,
     consoles: [], erreursPage: [], erreur: null,
   };
   const origineGrist = origineDe(base);
@@ -221,6 +231,7 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
         obs.xss = { executions: dansCadre.xss, lu: dansCadre.lu, refus: dansCadre.refus, erreur: dansCadre.erreur };
       }
       if (lireMarqueurs && cadre) obs.alteration = { executees: await cadre.evaluate(() => (Array.isArray(globalThis.__gw_altere) ? globalThis.__gw_altere.slice(0, 300).map(String) : [])).catch(() => []) };
+      if (stockage && cadre) obs.stockage = await jouerStockage(contexte, cadre, origineWidget, jeu).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       if (droits && cadre) obs.droits = await jouerDroits(page, cadre, jeu.prefixe).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       if (pollution && cadre) obs.pollution = await cadre.evaluate(kitPollution, pollution).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       if (canaux && cadre) obs.canaux = await cadre.evaluate(kitCanaux, canaux).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));

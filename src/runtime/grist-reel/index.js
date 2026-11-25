@@ -91,7 +91,7 @@ export async function auditGristReel(ctx, options = {}) {
         resume.correspondanceColonnes = mapping ? Object.keys(mapping) : null;
         journal(`  Phase 2 : le widget au niveau « ${niveau} »${parDefaut ? ' (niveau usuel, le widget n\'en déclare pas)' : ' (celui qu\'il demande)'}…`);
         await reglerSection(client, doc, section, { url: urlWidget, access: niveau, columnsMapping: mapping ?? undefined });
-        phases.demande = { niveau, obs: await jouerPhase(commun) };
+        phases.demande = { niveau, obs: await jouerPhase({ ...commun, stockage: true }) };
       }
     }
 

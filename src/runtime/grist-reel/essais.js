@@ -30,7 +30,7 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 3, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 21, 22];
+export const ESSAIS_JOUES = [1, 3, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 21, 22, 23];
 export const ESSAIS_PAS_ENCORE = '2, 4 à 6, 11, 14, 19, 20';
 
 /** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
@@ -497,6 +497,46 @@ export function evaluerEssais(phases, jeu) {
               essais.push(essai(18, titre18, 'bloque', `la politique d'autorisations du navigateur n'a donné au cadre aucun des ${connus.length} droits sensibles vérifiés (caméra, micro, position, partage d'écran, USB, paiement…) : ${delegation}`, { niveau, barriere: "politique d'autorisations du navigateur (délégation de Grist limitée à l'écriture du presse-papier)", etapes }));
             }
           }
+        }
+      }
+    }
+  }
+
+  // --- 23. Stockage dans le navigateur : des données du document gardées après la fermeture du document ? ---
+  {
+    const d = phases.demande;
+    const titre = 'Stockage dans le navigateur : le widget garde-t-il des données du document ?';
+    if (d) {
+      const niveau = d.niveau;
+      const o = d.obs;
+      const s = o?.stockage ?? null;
+      if (!o?.charge) essais.push(essai(23, titre, 'non_teste', `le widget n'a pas été chargé pour cet essai (${resume(o?.erreur)})`, { niveau }));
+      else if (!s || s.erreur) essais.push(essai(23, titre, 'non_teste', `le contenu du stockage du navigateur n'a pas pu être lu dans le cadre du widget${s?.erreur ? ` (${resume(s.erreur, 150)})` : ''}`, { niveau }));
+      else {
+        const cookies = s.cookies ?? [];
+        const lieux = [['localStorage', s.local, s.local?.nombre], ['sessionStorage', s.session, s.session?.nombre], ['IndexedDB', s.indexedDB, s.indexedDB?.nombre], ['cookie', { canari: cookies.some((c) => c.canari) }, cookies.length]];
+        const gardes = lieux.filter(([, x]) => x?.canari).map(([nom]) => nom);
+        const usage = lieux.filter(([, , n]) => n > 0).map(([nom, , n]) => `${nom} (${n})`);
+        const illisibles = [s.local, s.session, s.indexedDB].filter((x) => x?.erreur || x?.indisponible).length;
+        const etapes = lieux.map(([nom, x, n]) => ({ etape: `${nom} : données du document retrouvées`, ok: !!x?.canari, ...(x?.canari ? {} : { barriere: n > 0 ? `${n} entrée(s), aucune donnée du document` : 'vide' }) }));
+        const cookiesTexte = cookies.length ? ` Cookies de l'origine du widget : ${cookies.slice(0, 5).map((c) => c.nom).join(', ')}${cookies.length > 5 ? '…' : ''}.` : '';
+        if (gardes.length) {
+          essais.push(essai(23, titre, 'reussi', `le widget a gardé des données du document dans le navigateur : ${gardes.join(', ')}`, { niveau, regle: 'D-REEL-23', severite: 'mineur', etapes, gardes }));
+          constats.push(constat({
+            regle: 'D-REEL-23', axe: 'D', severite: 'mineur', bloquant: false, confiance: 'prouve',
+            titre: `Le widget garde des données du document dans le navigateur (${gardes.join(', ')})`,
+            constat: `Dans un vrai Grist (Grist Desktop, instance jetable), au niveau d'accès « ${niveau} », des valeurs du document de test (canaris et valeurs ordinaires) ont été retrouvées dans : ${gardes.join(', ')}. Elles y restent après la fermeture du document.${cookiesTexte}`,
+            impact: "Des données du document, parfois personnelles, survivent dans le navigateur de la personne, hors de Grist, sans que le document ni ses règles d'accès les gouvernent. Tout code qui s'exécute sur la même origine peut les lire : les autres widgets du même hébergeur, une bibliothèque compromise (essais 8 à 10). Question de conservation des données (RGPD) autant que de sécurité.",
+            remediation: "Ne rien écrire dans le stockage du navigateur ; si un cache est nécessaire, y garder des réglages, jamais des données du document, et l'effacer à la fermeture (`sessionStorage` plutôt que `localStorage`). Héberger le widget sur une origine qui lui soit propre.",
+            referentiels: ['RGPD art. 5 (limitation de la conservation, minimisation)', 'CWE-922'],
+            preuve: { niveau, gardes, usage },
+          }));
+        } else if (!o.canariRecu) {
+          essais.push(essai(23, titre, 'non_teste', `aucune donnée du document n'est arrivée au widget au niveau « ${niveau} » : une conservation ne pouvait ni se produire ni être mesurée${usage.length ? `. Stockage utilisé : ${usage.join(', ')}` : ''}`, { niveau, etapes }));
+        } else if (illisibles >= 3) {
+          essais.push(essai(23, titre, 'non_teste', "le stockage du navigateur n'a pas pu être lu dans le cadre du widget (localStorage, sessionStorage et IndexedDB inaccessibles)", { niveau, etapes }));
+        } else {
+          essais.push(essai(23, titre, 'rien_observe', `aucune donnée du document n'a été retrouvée dans le stockage du navigateur du widget${usage.length ? ` (stockage utilisé : ${usage.join(', ')})` : ' (stockage vide)'}.${cookiesTexte}`, { niveau, etapes, usage }));
         }
       }
     }

@@ -13,8 +13,8 @@ const md = (s) => String(s ?? '').replace(/\|/g, '\\|').replace(/\s+/g, ' ');
 
 const LIBELLE = { reussi: 'Effet observé (constat)', bloque: 'Bloqué', rien_observe: 'Rien observé', non_teste: 'Non testé' };
 
-/** Nombre d'essais du catalogue de l'étude (joués ou non), plus les essais 21 (altération d'une bibliothèque) et 22 (voies de sortie), ajoutés ensuite. */
-const ESSAIS_DU_CATALOGUE = 22;
+/** Nombre d'essais du catalogue de l'étude (joués ou non), plus les essais 21 (altération d'une bibliothèque) 22 (voies de sortie) et 23 (stockage dans le navigateur), ajoutés ensuite. */
+const ESSAIS_DU_CATALOGUE = 23;
 
 /** Ce que chaque essai tente, en une phrase. */
 const QUOI = {
@@ -27,6 +27,7 @@ const QUOI = {
   12: "On joue ce que ferait ce code étranger pour créer un webhook, une sortie permanente de données qui survivrait au retrait du widget.",
   17: "Après un clic réel dans le widget, on joue ce que ferait du code étranger pour remplacer le contenu du presse-papier, et on relit le presse-papier depuis la page Grist.",
   18: "On lit, dans le cadre du widget, la politique d'autorisations que le navigateur lui applique : caméra, micro, position, partage d'écran, USB, paiement, lecture du presse-papier… lesquels Grist lui délègue-t-il ?",
+  23: "Une fois le widget chargé avec ses données, on regarde ce qu'il a gardé dans le navigateur (localStorage, sessionStorage, IndexedDB, cookies) et si des valeurs du document s'y trouvent : elles y survivraient à la fermeture du document.",
   21: "On sert à la même adresse chacune des bibliothèques du widget avec une ligne de plus, qui ne fait rien d'autre que se signaler, et on regarde si le navigateur l'exécute ou la refuse.",
   22: "On joue ce que ferait du code étranger dans le widget pour envoyer ce qu'il a lu vers l'extérieur : fetch, image, sendBeacon, WebSocket, balises, formulaire. Chaque tentative est interceptée ; on regarde lesquelles la politique de sécurité du widget laisse passer.",
   13: "On remplit le document de valeurs repérables (des « canaris ») et on regarde si l'une d'elles sort du widget vers un site extérieur.",
@@ -85,6 +86,10 @@ function enClair(e) {
       return t === 'reussi'
         ? `Le navigateur laisserait du code étranger dans le widget demander à la personne : ${(e.ouverts ?? []).join(', ')}. Mesure donnée à titre d'information, sans effet sur la note ; à signaler à l'éditeur de Grist.`
         : "Grist ne donne au cadre du widget aucun des droits sensibles du navigateur (caméra, micro, position, partage d'écran, USB, paiement…) : du code piégé ne pourrait pas en demander à la personne. Seule l'écriture du presse-papier lui est déléguée (voir l'essai 17).";
+    case 23:
+      return t === 'reussi'
+        ? `Le widget a gardé des données du document dans le navigateur (${(e.gardes ?? []).join(', ')}) : elles y restent après la fermeture du document et tout code de la même origine peut les lire. Effet limité (pénalité faible) ; à corriger si les données sont personnelles.`
+        : "Aucune donnée du document n'a été retrouvée dans le navigateur après le chargement du widget : il ne garde rien en dehors de Grist.";
     case 21:
       if (t === 'bloque') return "Le navigateur a refusé le fichier modifié : l'empreinte (integrity) déclarée par le widget fait son travail. Si le CDN servait un jour un fichier altéré, il ne s'exécuterait pas.";
       return e.severite === 'critique'
