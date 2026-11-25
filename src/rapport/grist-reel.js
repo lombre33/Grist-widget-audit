@@ -156,7 +156,8 @@ function bandeau(r) {
   return `${r.produit} ${r.version} (${r.plateforme}), instance jetable lancée pour cet audit, le ${lireDate(r.date)}. Phases jouées : ${niveaux || 'aucune'}${r.niveauParDefaut ? " (le widget ne déclare aucun niveau : niveau usuel « read table » supposé)" : ''}. Ce résultat vaut pour cette version de Grist et cette configuration, pas pour l'instance où le widget sera installé (Grist.Gouv, par exemple) si elle diffère.${r.sansBacASable ? " Chromium a tourné sans son bac à sable (dérogation explicite, voir D-INDISPONIBLE-BAC-A-SABLE)." : ''}`;
 }
 
-const nonJoues = (r) => `Ce rapport ne couvre pas tout : ${ESSAIS_DU_CATALOGUE - r.essais.length} essais du catalogue restent à développer (n° ${r.essaisPasEncore}).`;
+// Le nombre d'essais développés vient de la liste des essais jouables (`essaisJoues`), pas de ceux joués : l'essai 21, par exemple, n'existe que si le widget déclare des bibliothèques.
+const nonJoues = (r) => `Ce rapport ne couvre pas tout : ${ESSAIS_DU_CATALOGUE - (r.essaisJoues?.length ?? r.essais.length)} essais du catalogue restent à développer (n° ${r.essaisPasEncore}).`;
 
 const COMMENT_LIRE = "Comment lire : « Bien » veut dire que l'essai n'a rien révélé d'anormal, ou que Grist ou le navigateur l'a arrêté (aucune pénalité). « Pas bien » veut dire qu'un effet a été observé : il devient un constat noté (règle D-REEL-NN). « Pas testé » veut dire que l'essai n'a pas pu être joué : aucune conclusion, ni dans un sens ni dans l'autre. Un « Bien » ne prouve pas que le widget est sûr : il dit seulement que cet essai-là n'a rien trouvé.";
 
