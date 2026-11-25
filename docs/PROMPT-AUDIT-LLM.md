@@ -553,6 +553,10 @@ maximal), embarquées dans le dépôt (risque maîtrisé), de développement
 | E-DEP-04 | Dépendances npm déclarées sans fichier de verrouillage (`package-lock.json`/`yarn.lock`/`pnpm-lock.yaml`) | majeur |
 | E-DEP-05 | Dépendances de production à version non figée (`^`, `~`, `*`, `latest`, `>`) | mineur |
 | E-DEP-06 | Plus de 12 dépendances de production directes | mineur |
+| E-INSTALL-01 | `package.json` déclare `preinstall`, `install` ou `postinstall` | mineur ; **majeur** si la commande télécharge ou exécute du texte (`curl`, `wget`, `\| sh`, `node -e`, `eval`, `base64`, une adresse, PowerShell) ; jamais bloquant |
+| E-INSTALL-02 | Dépendances du `package-lock.json` marquées `hasInstallScript` | information |
+| E-VERROU-01 | Paquet du `package-lock.json` téléchargé par `http://` → **majeur** ; hors de registry.npmjs.org / registry.yarnpkg.com (autre registre, dépôt git) → mineur | majeur ou mineur |
+| E-VERROU-02 | Paquet du registre sans `integrity` dans le `package-lock.json` | mineur |
 | E-VULN-00/01/02 | `npm audit` sur les dépendances verrouillées — **tu ne peux pas l'exécuter** ; voir section 6 |
 | E-VULN-OPTION | `npm audit` non lancé à la demande de l'utilisateur (`--sans-reseau`) sur un dépôt qui verrouille ses dépendances : une absence de mesure, non de vulnérabilité ; le verdict ne peut pas être « CONFORME » | info ; axe E mesuré en partie |
 | E-DEP-07 | Bilan des dépendances, quand le widget en a au moins une (npm, embarquée, distante) : une seule information qui dit, pour la maintenance et pour la sûreté, ce qui est mesuré et ce qui ne l'est pas. Maintenance : le drapeau « déprécié » du verrou npm, et, quand l'outil a pu interroger le registre npm, la date de dernière publication (récente jusqu'à 24 mois) et le retard de version majeure des 25 premières dépendances directes de production ; sinon « non mesurée ». Sûreté : l'état de `npm audit` (E-VULN-*), les bibliothèques embarquées ou distantes restant non vérifiées | info ; ni pénalité, ni mesure partielle, ni plafond |

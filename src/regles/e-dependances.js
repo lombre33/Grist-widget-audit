@@ -13,6 +13,7 @@
  *   2. embarquées dans le dépôt — risque maîtrisé, à jour manuellement
  *   3. de développement         — risque limité au poste du contributeur
  */
+import { analyserInstallation } from './e-installation.js';
 import path from 'node:path';
 import fs from 'node:fs';
 import { constat } from '../moteur/modele.js';
@@ -441,5 +442,5 @@ function ligneDansPackageJson(ctx, nomPaquet) {
 
 export const reglesE = [
   analyserDependancesDistantes, analyserDependancesEmbarquees,
-  analyserPaquetNpm, analyserLicence,
+  analyserPaquetNpm, analyserInstallation, analyserLicence,
 ];

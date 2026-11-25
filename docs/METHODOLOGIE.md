@@ -434,6 +434,17 @@ qui n'a pas pu être lu (option, registre injoignable, paquet hors registre
 public) est écrit « non mesuré ». Complété par la vérification de la licence du dépôt — condition
 de fait pour qu'un fork par l'équipe Grist.Gouv soit juridiquement possible.
 
+Ce que `npm install` lance et d'où il télécharge (E-INSTALL, E-VERROU) : quiconque
+installe un dépôt exécute les scripts d'installation du dépôt et de ses dépendances,
+canal des vers qui se propagent de paquet en paquet, et le fichier de verrouillage dit
+d'où chaque paquet vient et ce qu'il doit valoir. Le `package.json` qui déclare
+`preinstall`, `install` ou `postinstall` est un mineur (majeur si la commande
+télécharge ou exécute du texte : `curl`, `| sh`, `node -e`, une adresse, PowerShell) ;
+les dépendances du verrou marquées `hasInstallScript` sont dites en information ; un
+paquet téléchargé en `http://` est un majeur, hors de registry.npmjs.org (autre
+registre, dépôt git) un mineur, et un paquet du registre sans `integrity` un mineur.
+Rien n'est bloquant. Seul le `package-lock.json` de la racine est lu (versions 1 à 3).
+
 ## Axe F — Conformité, souveraineté, accessibilité, sobriété
 
 Appels vers des services non-souverains identifiés explicitement (Google
