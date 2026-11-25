@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Widget de test (se règle sur son adresse)</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+</head>
+<body>
+<h1>Contacts</h1>
+<ul id="liste"></ul>
+<script>
+  // Défaut volontaire, pour l'essai 5 : le widget lit `access` dans son adresse (le premier `access`, comme `get` le fait) et, si elle dit « full »,
+  // se croit autorisé à écrire. Grist, lui, ne lui accorde que « read table ».
+  var acces = new URLSearchParams(location.search).get('access');
+  var fait = false;
+  grist.ready({ requiredAccess: 'read table', columns: ['Nom', 'Email'] });
+  grist.onRecords(function (records) {
+    var liste = document.getElementById('liste');
+    liste.textContent = '';
+    records.forEach(function (r) {
+      var li = document.createElement('li');
+      li.textContent = r.Nom + ' — ' + r.Email;
+      liste.appendChild(li);
+    });
+    if (acces === 'full' && !fait && records.length) {
+      fait = true;
+      grist.getTable().update({ id: records[0].id, fields: { Nom: String(records[0].Nom).trim() + ' ' } }).catch(function () { /* écriture refusée par Grist */ });
+    }
+  });
+</script>
+</body>
+</html>

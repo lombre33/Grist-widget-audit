@@ -22,6 +22,9 @@
  * L'essai 22 (hors du catalogue de l'étude) mesure les voies de sortie du navigateur que la politique de sécurité (CSP) du widget laisse ouvertes
  * à du code étranger : fetch, image, sendBeacon, WebSocket, balises, formulaire… Passe à part, vers un hôte factice distinct du puits.
  *
+ * L'essai 5 appelle le widget avec une adresse qui affirme `access=full&readonly=false` (Grist ajoute après les siens, sans retirer les faux : un widget qui lit
+ * le premier `access` lit le faux) et compare ses appels à Grist avec ceux de la passe normale au même niveau : accès demandé, écritures tentées.
+ *
  * Les essais 8, 9 et 12 sont ceux de la « dépendance piégée » : du code étranger joué DANS le cadre du widget (voir kit.js) montre ce
  * qu'une bibliothèque compromise obtiendrait avec le niveau d'accès réellement accordé. Ils mesurent un rayon d'action, pas un défaut
  * prouvé du widget : leurs constats sont d'information (sans effet sur la note ; le niveau demandé est déjà pesé par C-GRIST-03),
@@ -30,8 +33,8 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 3, 4, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 20, 21, 22, 23, 24];
-export const ESSAIS_PAS_ENCORE = '2, 5, 6, 11, 14, 19';
+export const ESSAIS_JOUES = [1, 3, 4, 5, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 20, 21, 22, 23, 24];
+export const ESSAIS_PAS_ENCORE = '2, 6, 11, 14, 19';
 
 /** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
 const CANAUX = [['fetch', 'fetch'], ['xhr', 'XMLHttpRequest'], ['image', 'image (balise img)'], ['beacon', 'sendBeacon'], ['websocket', 'WebSocket'], ['script', 'balise script'], ['iframe', 'cadre iframe'], ['feuille', 'feuille de style'], ['cssurl', 'image de fond CSS'], ['prefetch', 'préchargement (link prefetch)'], ['formulaire', 'formulaire envoyé']];
@@ -638,6 +641,50 @@ export function evaluerEssais(phases, jeu) {
           }));
         } else {
           essais.push(essai(24, titre, 'rien_observe', `le widget n'a écrit dans le document à aucun moment de son chargement${refusees.length ? ` (${refusees.length} tentative(s) d'écriture refusée(s) par Grist au niveau « ${niveau} »)` : ''}`, { niveau }));
+        }
+      }
+    }
+  }
+
+  // --- 5. Adresse forgée : le widget règle-t-il sa conduite sur ce que son adresse affirme plutôt que sur ce que Grist lui accorde ? (ses appels à Grist, comparés à la passe normale du même niveau) ---
+  {
+    const f = phases.forgee;
+    const titre = "Le widget se fie-t-il à son adresse plutôt qu'à ce que Grist lui accorde ?";
+    if (f) {
+      const niveau = f.niveau;
+      const o = f.obs;
+      const refs = (f.reference ?? []).filter((r) => r?.charge && r.appelsRpc?.length);
+      const nom = (a) => `${a.interface ?? '?'}.${a.methode}`;
+      const ecrit = (a) => a.methode === 'applyUserActions' && /GristDocAPI/.test(a.interface ?? '');
+      if (f.sansObjet) essais.push(essai(5, titre, 'non_teste', `au niveau « ${niveau} », une adresse qui affirme « access=full » dit la même chose que Grist : il n'y a rien à comparer`, { niveau }));
+      else if (!o?.charge) essais.push(essai(5, titre, 'non_teste', `le widget n'a pas été chargé avec l'adresse forgée (${resume(o?.erreur)})`, { niveau }));
+      else if (!refs.length) essais.push(essai(5, titre, 'non_teste', "la passe normale n'a rien échangé avec Grist : il n'y a rien à comparer", { niveau }));
+      else if (!o.appelsRpc?.length) essais.push(essai(5, titre, 'non_teste', "le widget n'a rien échangé avec Grist quand son adresse est forgée : la comparaison n'a pas pu se faire", { niveau }));
+      else {
+        const connus = new Set(refs.flatMap((r) => r.appelsRpc.map(nom)));
+        const nouveaux = [...new Set(o.appelsRpc.map(nom).filter((n) => !connus.has(n)))].slice(0, 8);
+        const accesForge = o.configure?.requiredAccess ?? null;
+        const accesChange = !!accesForge && refs.every((r) => r.configure?.requiredAccess && r.configure.requiredAccess !== accesForge);
+        const ecritures = o.appelsRpc.filter(ecrit);
+        const ecritNouveau = ecritures.length > 0 && !refs.some((r) => r.appelsRpc.some(ecrit));
+        const acceptees = ecritures.filter((a) => a.issue === 'accepte').length;
+        const faits = [
+          ...(accesChange ? [`il demande l'accès « ${accesForge} » (au lieu de « ${refs[0].configure.requiredAccess} »)`] : []),
+          ...(ecritNouveau ? [`il tente d'écrire dans le document (${ecritures.length} appel(s) applyUserActions${acceptees ? `, ${acceptees} accepté(s) par Grist` : ', refusés par Grist'})`] : []),
+        ];
+        if (faits.length) {
+          essais.push(essai(5, titre, 'reussi', `quand son adresse affirme « access=full&readonly=false » alors que Grist lui accorde « ${niveau} », ${faits.join(' ; ')}, ce qu'il ne fait pas avec l'adresse normale`, { niveau, regle: 'D-REEL-05', severite: 'info', nature: 'comportement', faits, nouveaux }));
+          constats.push(constat({
+            regle: 'D-REEL-05', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            titre: "Le widget règle sa conduite sur son adresse plutôt que sur le niveau d'accès que Grist lui accorde",
+            constat: `Dans un vrai Grist (Grist Desktop, instance jetable), au niveau d'accès « ${niveau} », le widget a été appelé avec une adresse qui affirme \`access=full&readonly=false\` (Grist y ajoute ensuite ses propres paramètres sans retirer les faux). Il a changé de conduite : ${faits.join(' ; ')}. Avec l'adresse normale, au même niveau, il ne le fait pas.`,
+            impact: "Le niveau d'accès réel est fixé par Grist, pas par l'adresse : le widget n'obtient rien de plus. Mais un widget qui se règle sur son adresse (il affiche l'édition, demande plus d'accès, tente d'écrire) se laisse piloter par quiconque fabrique l'adresse ou la configuration de la section. Information sans pénalité.",
+            remediation: "Ne pas lire `access` ni `readonly` dans l'adresse : demander son niveau à `grist.ready({ requiredAccess })` et se fier aux refus de Grist ; si l'adresse doit porter un réglage, le valider.",
+            referentiels: ['OWASP Top 10 A04:2021 — Insecure Design (confiance accordée à une entrée du client)', 'CWE-807'],
+            preuve: { niveau, faits, nouveaux },
+          }));
+        } else {
+          essais.push(essai(5, titre, 'rien_observe', `quand son adresse affirme « access=full&readonly=false », le widget demande le même accès et ne tente aucune écriture de plus qu'avec l'adresse normale${nouveaux.length ? ` (appels de plus, sans écriture ni demande d'accès : ${nouveaux.join(', ')})` : ''} ; seuls ses appels à Grist sont comparés, pas l'apparence de sa page`, { niveau, nouveaux }));
         }
       }
     }
