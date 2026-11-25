@@ -24,6 +24,8 @@ const QUOI = {
   9: "On joue ce que ferait ce code étranger pour obtenir un jeton d'accès, appeler directement l'API du document avec ce jeton, et l'essayer sur un autre document.",
   10: "On joue ce que ferait ce code étranger pour modifier le document : ajouter des lignes, renommer ou supprimer une colonne, supprimer une table, créer une règle d'accès. L'audit relit ensuite le document pour voir ce qui a vraiment changé (sur des tables créées pour l'essai).",
   12: "On joue ce que ferait ce code étranger pour créer un webhook, une sortie permanente de données qui survivrait au retrait du widget.",
+  17: "Après un clic réel dans le widget, on joue ce que ferait du code étranger pour remplacer le contenu du presse-papier, et on relit le presse-papier depuis la page Grist.",
+  18: "On lit, dans le cadre du widget, la politique d'autorisations que le navigateur lui applique : caméra, micro, position, partage d'écran, USB, paiement, lecture du presse-papier… lesquels Grist lui délègue-t-il ?",
   21: "On sert à la même adresse chacune des bibliothèques du widget avec une ligne de plus, qui ne fait rien d'autre que se signaler, et on regarde si le navigateur l'exécute ou la refuse.",
   22: "On joue ce que ferait du code étranger dans le widget pour envoyer ce qu'il a lu vers l'extérieur : fetch, image, sendBeacon, WebSocket, balises, formulaire. Chaque tentative est interceptée ; on regarde lesquelles la politique de sécurité du widget laisse passer.",
   13: "On remplit le document de valeurs repérables (des « canaris ») et on regarde si l'une d'elles sort du widget vers un site extérieur.",
@@ -70,6 +72,14 @@ function enClair(e) {
       return t === 'reussi'
         ? "Du code dans le widget a pu créer un webhook : il resterait en place après le retrait du widget et continuerait d'envoyer les modifications du document vers une adresse extérieure."
         : "Du code piégé dans le widget n'a pas pu créer de webhook, cette sortie permanente de données qui survivrait au retrait du widget. Résultat valable pour le réglage par défaut de Grist : un administrateur qui autorise des adresses de webhook peut le changer.";
+    case 17:
+      return t === 'reussi'
+        ? "Après un clic dans le widget, du code étranger qui s'y exécuterait pourrait remplacer ce que la personne a copié (une commande à coller dans un terminal, par exemple). Grist donne ce droit à tous les widgets ; la mesure est donnée à titre d'information, sans effet sur la note."
+        : "Le navigateur a refusé que le widget écrive dans le presse-papier : du code piégé n'aurait pas pu remplacer ce que la personne a copié.";
+    case 18:
+      return t === 'reussi'
+        ? `Le navigateur laisserait du code étranger dans le widget demander à la personne : ${(e.ouverts ?? []).join(', ')}. Mesure donnée à titre d'information, sans effet sur la note ; à signaler à l'éditeur de Grist.`
+        : "Grist ne donne au cadre du widget aucun des droits sensibles du navigateur (caméra, micro, position, partage d'écran, USB, paiement…) : du code piégé ne pourrait pas en demander à la personne. Seule l'écriture du presse-papier lui est déléguée (voir l'essai 17).";
     case 21:
       if (t === 'bloque') return "Le navigateur a refusé le fichier modifié : l'empreinte (integrity) déclarée par le widget fait son travail. Si le CDN servait un jour un fichier altéré, il ne s'exécuterait pas.";
       return e.severite === 'critique'

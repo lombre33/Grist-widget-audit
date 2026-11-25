@@ -148,3 +148,37 @@ export async function kitEcritures(p) {
   sortie.regle = await agir([['AddRecord', '_grist_ACLResources', -1, { tableId: p.regle, colIds: '*' }], ['AddRecord', '_grist_ACLRules', null, { resource: -1, aclFormula: '', permissionsText: '-R', rulePos: 100 }]]);
   return sortie;
 }
+
+/**
+ * Les droits du navigateur donnés au cadre du widget : ce que la politique d'autorisations (Permissions-Policy) de Chromium laisse faire à du
+ * code étranger dans ce cadre (caméra, micro, position, partage d'écran, presse-papier…). La politique est celle que Grist fixe par l'attribut
+ * `allow` du cadre, rétrécie au besoin par les en-têtes du widget : c'est la politique réellement appliquée, lue dans le cadre.
+ * Pour le presse-papier, l'essai va jusqu'au bout : après un vrai clic dans le widget (fait par l'audit, voir `poserSurfaceDeClic`), le cadre écrit
+ * un texte de test, que l'audit relit depuis la page Grist. La lecture du presse-papier par le cadre n'est pas tentée : la politique dit si Grist la lui délègue.
+ *
+ * Fonction autonome : Playwright la sérialise, elle ne peut rien utiliser qui soit défini hors d'elle.
+ * @param {{marqueur: string}} p texte de test écrit par le cadre
+ */
+export async function kitDroits(p) {
+  const court = (m) => String((m && m.message) || m).replace(/\s+/g, ' ').slice(0, 220);
+  const avec = (promesse) => Promise.race([promesse, new Promise((_, rejet) => setTimeout(() => rejet(new Error('délai dépassé')), 4000))]);
+  const sortie = { activation: !!(navigator.userActivation && navigator.userActivation.isActive), politique: null, connues: null };
+  const pol = document.permissionsPolicy || document.featurePolicy;
+  try { if (pol && typeof pol.allowedFeatures === 'function') { sortie.politique = pol.allowedFeatures().map(String).sort(); sortie.connues = typeof pol.features === 'function' ? pol.features().map(String).sort() : null; } }
+  catch (e) { sortie.erreurPolitique = court(e); }
+  const essayer = async (f) => { try { return { ok: true, ...(await avec(f())) }; } catch (e) { return { ok: false, erreur: court(e) }; } };
+  if (!navigator.clipboard) return { ...sortie, ecriture: { ok: false, erreur: 'navigator.clipboard absent' } };
+  sortie.ecriture = await essayer(async () => { await navigator.clipboard.writeText(p.marqueur); return {}; });
+  return sortie;
+}
+
+/**
+ * Pose, dans le cadre du widget, une petite surface transparente en haut à gauche, par-dessus tout : le clic réel que fait ensuite l'audit tombe
+ * sur elle et non sur un bouton du widget, qu'il ne déclenche donc pas. Rend la place disponible dans le cadre.
+ */
+export function poserSurfaceDeClic() {
+  const d = document.createElement('div');
+  d.style.cssText = 'position:fixed;left:0;top:0;width:12px;height:12px;opacity:0;z-index:2147483647';
+  (document.body || document.documentElement).appendChild(d);
+  return { largeur: window.innerWidth, hauteur: window.innerHeight };
+}

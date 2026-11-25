@@ -106,13 +106,13 @@ export async function auditGristReel(ctx, options = {}) {
       } else phases.alteration = { indisponible: "aucune des bibliothèques déclarées par le widget n'a pu être téléchargée (voir la liste des bibliothèques du rapport)" };
     }
 
-    // Dernière passe, au niveau que le widget demande : essai 22 (par quelles voies du navigateur du code étranger dans le widget pourrait envoyer ce
-    // qu'il a lu ?) puis essai 10 (qu'est-ce qu'il pourrait changer dans le document ?). Elle doit rester la dernière : l'écriture d'une règle d'accès
+    // Dernière passe, au niveau que le widget demande : essais 17 et 18 (quels droits du navigateur Grist donne au cadre), essai 22 (par quelles voies du
+    // navigateur du code étranger dans le widget pourrait envoyer ce qu'il a lu ?) puis essai 10 (qu'est-ce qu'il pourrait changer dans le document ?). Elle doit rester la dernière : l'écriture d'une règle d'accès
     // modifie le document de test et fait recharger la page.
     if (obsNone.charge) {
       const niveau = phases.demande?.niveau ?? 'none';
       journal(`  Phase ${phases.alteration ? 4 : 3} : ce que du code piégé dans le widget pourrait envoyer et modifier, au niveau « ${niveau} »…`);
-      const obsFinale = await jouerPhase({ ...commun, kit: undefined, canaux: { hote: HOTE_CANAUX, prefixe: jeu.prefixe }, ecritures: TABLES_SACRIFIEES });
+      const obsFinale = await jouerPhase({ ...commun, kit: undefined, canaux: { hote: HOTE_CANAUX, prefixe: jeu.prefixe }, droits: true, ecritures: TABLES_SACRIFIEES });
       phases.canaux = { niveau, obs: obsFinale };
       let serveur;
       try { await new Promise((r) => setTimeout(r, 2500)); serveur = await verifierEcritures(client, doc); }

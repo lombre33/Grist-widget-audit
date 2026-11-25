@@ -22,7 +22,7 @@ import {
 } from '../dynamique.js';
 import { estGrist } from '../../contexte/hotes-grist.js';
 import { trouverCanari } from './donnees.js';
-import { kitDependancePiegee, kitCanaux, kitEcritures } from './kit.js';
+import { kitDependancePiegee, kitCanaux, kitEcritures, kitDroits, poserSurfaceDeClic } from './kit.js';
 
 const ICI = path.dirname(fileURLToPath(import.meta.url));
 const RACINE_OUTIL = path.resolve(ICI, '../../..');
@@ -61,6 +61,27 @@ function sondeInitiale({ prefixe, valeurs }) {
   }
 }
 
+/** Les droits du navigateur donnés au cadre, avec un vrai clic dans le widget et la relecture du presse-papier depuis la page Grist (voir kitDroits). */
+async function jouerDroits(page, cadre, prefixe) {
+  const marqueur = `${prefixe}-PRESSE-PAPIER-ECRIT-PAR-LE-CADRE`;
+  const sentinelle = `${prefixe}-PRESSE-PAPIER-AVANT`;
+  const relire = (attendu) => page.evaluate(async (a) => { try { return (await navigator.clipboard.readText()) === a ? 'attendu' : 'autre'; } catch (e) { return `erreur : ${String((e && e.message) || e).slice(0, 100)}`; } }, attendu);
+  const sortie = {
+    attributs: await page.evaluate(() => { const f = document.querySelector('iframe.custom_view'); return f ? { allow: f.getAttribute('allow'), sandbox: f.getAttribute('sandbox') } : null; }).catch(() => null),
+    pagePosee: await page.evaluate(async (s) => { try { await navigator.clipboard.writeText(s); return true; } catch { return false; } }, sentinelle).catch(() => false),
+  };
+  sortie.pageRelit = sortie.pagePosee ? (await relire(sentinelle)) === 'attendu' : false;
+  await cadre.evaluate(poserSurfaceDeClic);
+  const element = await cadre.frameElement();
+  await element.scrollIntoViewIfNeeded().catch(() => {});
+  const boite = await element.boundingBox();
+  sortie.clic = false;
+  if (boite && boite.width >= 14 && boite.height >= 14) { await page.mouse.click(boite.x + 6, boite.y + 6); sortie.clic = true; }
+  sortie.cadre = await cadre.evaluate(kitDroits, { marqueur });
+  sortie.relu = sortie.pageRelit ? await relire(marqueur) : null; // « attendu » : le texte écrit par le cadre est dans le presse-papier
+  return sortie;
+}
+
 const hoteDe = (url) => { try { return new URL(url).hostname; } catch { return null; } };
 const origineDe = (url) => { try { return new URL(url).origin; } catch { return null; } };
 const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; return u.href; } catch { return url; } };
@@ -76,15 +97,16 @@ const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; retur
  * @param {object} p.jeu           voir donnees.js
  * @param {boolean} [p.lireMarqueurs]  lit dans le cadre du widget les marqueurs que posent les bibliothèques altérées (voir `alterer` dans bibliotheques.js)
  * @param {object} [p.canaux]     paramètres du kit des canaux de sortie (voir kitCanaux) : s'il est fourni, il est joué dans le cadre du widget
+ * @param {boolean} [p.droits]    joue le kit des droits du navigateur donnés au cadre (voir kitDroits), avec un vrai clic de l'audit dans le widget ; l'écriture du presse-papier est accordée à la page Grist, comme le fait un Chrome ordinaire pour l'onglet actif
  * @param {object} [p.ecritures]  identifiants des tables sacrifiées (voir kitEcritures) : si fourni, le kit des écritures est joué dans le cadre du widget, en tout dernier
  * @param {object} [p.kit]         paramètres du kit de la dépendance piégée (voir kit.js) : s'il est fourni, il est joué dans le cadre du widget
  * @param {number} [p.delaiMs]
  */
-export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, canaux, ecritures, lireMarqueurs, delaiMs = 45_000 }) {
+export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, canaux, ecritures, droits, lireMarqueurs, delaiMs = 45_000 }) {
   const obs = {
     charge: false, appelsRpc: [], configure: null, canariRecu: false, texteDuCadre: '',
     xss: { executions: 0, lu: null, refus: null, erreur: null },
-    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null,
+    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null, alteration: null, canaux: null, ecritures: null, droits: null,
     consoles: [], erreursPage: [], erreur: null,
   };
   const origineGrist = origineDe(base);
@@ -93,6 +115,8 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
   let page;
   try {
     await contexte.addCookies(cookies.map((c) => ({ ...c, url: base })));
+    // Un Chrome ordinaire accorde l'écriture au presse-papier à la page de l'onglet actif (et, par délégation, au cadre que Grist y autorise) ; Playwright, non : on le lui accorde pour la page Grist seule, jamais pour l'origine du widget.
+    if (droits) await contexte.grantPermissions(['clipboard-read', 'clipboard-write'], { origin: origineGrist });
     await contexte.addInitScript(sondeInitiale, { prefixe: jeu.prefixe, valeurs: jeu.valeursCherchees.slice(0, 40) });
 
     const notifier = (p) => {
@@ -194,6 +218,7 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
         obs.xss = { executions: dansCadre.xss, lu: dansCadre.lu, refus: dansCadre.refus, erreur: dansCadre.erreur };
       }
       if (lireMarqueurs && cadre) obs.alteration = { executees: await cadre.evaluate(() => (Array.isArray(globalThis.__gw_altere) ? globalThis.__gw_altere.slice(0, 300).map(String) : [])).catch(() => []) };
+      if (droits && cadre) obs.droits = await jouerDroits(page, cadre, jeu.prefixe).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       if (canaux && cadre) obs.canaux = await cadre.evaluate(kitCanaux, canaux).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       // En tout dernier : l'écriture d'une règle d'accès fait recharger la page par Grist, le cadre disparaît (l'échec d'`evaluate` qui s'ensuit est attendu).
       if (ecritures && cadre) obs.ecritures = await cadre.evaluate(kitEcritures, ecritures).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200), cadreRecharge: /detached|destroyed|navigation/i.test(String(e?.message ?? e)) }));

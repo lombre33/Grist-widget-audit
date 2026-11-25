@@ -30,8 +30,8 @@
 import { constat } from '../../moteur/modele.js';
 import { HOTE_PUITS, HOTE_CANAUX } from './donnees.js';
 
-export const ESSAIS_JOUES = [1, 7, 8, 9, 10, 12, 13, 15, 16, 21, 22];
-export const ESSAIS_PAS_ENCORE = '2 à 6, 11, 14, 17 à 20';
+export const ESSAIS_JOUES = [1, 7, 8, 9, 10, 12, 13, 15, 16, 17, 18, 21, 22];
+export const ESSAIS_PAS_ENCORE = '2 à 6, 11, 14, 19, 20';
 
 /** Les voies de sortie essayées (identifiant dans l'adresse, libellé) ; la navigation du cadre est à part : aucune CSP ne la ferme. */
 const CANAUX = [['fetch', 'fetch'], ['xhr', 'XMLHttpRequest'], ['image', 'image (balise img)'], ['beacon', 'sendBeacon'], ['websocket', 'WebSocket'], ['script', 'balise script'], ['iframe', 'cadre iframe'], ['feuille', 'feuille de style'], ['cssurl', 'image de fond CSS'], ['prefetch', 'préchargement (link prefetch)'], ['formulaire', 'formulaire envoyé']];
@@ -389,6 +389,85 @@ export function evaluerEssais(phases, jeu) {
           essais.push(essai(22, titre, 'bloque', `la politique de sécurité (CSP) du widget a arrêté les ${CANAUX.length} voies d'envoi essayées (${[...new Set(arretes.values())].slice(0, 4).join(', ')}).${note}`, { niveau, barriere: 'politique de sécurité (CSP) du widget', etapes, navigation }));
         } else {
           essais.push(essai(22, titre, 'non_teste', `aucune voie n'a abouti et ${inconnus.length} sur ${CANAUX.length} n'ont donné ni requête vue ni blocage signalé (${inconnus.slice(0, 3).join(', ')}) : la mesure n'est pas fiable`, { niveau, etapes }));
+        }
+      }
+    }
+  }
+
+  // --- 17 et 18. Droits du navigateur donnés au cadre du widget (même passe que l'essai 22) ---
+  {
+    const c = phases.canaux;
+    const titre17 = 'Dépendance piégée : écrire dans le presse-papier';
+    const titre18 = 'Dépendance piégée : droits du navigateur donnés au cadre (caméra, micro, position…)';
+    if (c) {
+      const niveau = c.niveau;
+      const o = c.obs;
+      const d = o?.droits ?? null;
+      const k = d?.cadre ?? null;
+      const sautes = (raison) => { essais.push(essai(17, titre17, 'non_teste', raison, { niveau }), essai(18, titre18, 'non_teste', raison, { niveau })); };
+      if (!o?.charge) sautes(`le widget n'a pas été chargé pour cet essai (${resume(o?.erreur)})`);
+      else if (!d || d.erreur || !k || k.erreur) sautes(`le code d'essai n'a pas pu être joué dans le cadre du widget${d?.erreur || k?.erreur ? ` (${resume(d?.erreur ?? k?.erreur, 150)})` : ''}`);
+      else {
+        const politique = Array.isArray(k.politique) ? k.politique : null;
+        const connues = new Set(Array.isArray(k.connues) ? k.connues : []);
+        const allow = d.attributs?.allow ?? null;
+        const delegation = allow ? `attribut allow du cadre posé par Grist : « ${resume(allow, 80)} »` : "aucun attribut allow sur le cadre";
+
+        // 17. Écriture dans le presse-papier, après un vrai clic dans le widget
+        {
+          const ecr = k.ecriture ?? null;
+          const refusPolitique = ecr?.ok === false && /permissions? policy/i.test(ecr.erreur ?? '');
+          const nonDelegue = !!politique && connues.has('clipboard-write') && !politique.includes('clipboard-write');
+          const etapes = [
+            { etape: `Grist délègue l'écriture du presse-papier au cadre (${delegation})`, ok: !!politique?.includes('clipboard-write') },
+            { etape: 'clic réel dans le widget, reçu par le cadre', ok: !!d.clic && !!k.activation },
+            { etape: "le cadre écrit un texte de test dans le presse-papier", ok: ecr?.ok === true, ...(ecr?.ok === false ? { barriere: resume(ecr.erreur, 120) } : {}) },
+            { etape: 'la page Grist relit ce texte dans le presse-papier', ok: d.relu === 'attendu' },
+          ];
+          if (ecr?.ok && d.relu === 'attendu') {
+            essais.push(essai(17, titre17, 'reussi', `après un clic dans le widget, le code d'essai joué dans le cadre a remplacé le contenu du presse-papier par un texte de test (relu depuis la page Grist)`, { niveau, regle: 'D-REEL-17', severite: 'info', nature: 'rayon', etapes }));
+            constats.push(constat({
+              regle: 'D-REEL-17', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+              titre: "Du code étranger dans le widget pourrait remplacer le contenu du presse-papier de la personne",
+              constat: `Dans un vrai Grist (Grist Desktop, instance jetable), le cadre du widget a reçu de Grist le droit d'écrire dans le presse-papier (${delegation}). Après un clic de l'audit dans le widget, le code d'essai y a écrit un texte de test, que l'audit a relu depuis la page Grist. Le navigateur de l'audit accorde l'écriture au presse-papier à la page Grist, comme un Chrome ordinaire pour l'onglet actif.`,
+              impact: "Une bibliothèque compromise pourrait, au prochain clic de la personne dans le widget, remplacer ce qu'elle a copié par un texte de son choix (une commande à coller dans un terminal, une adresse de virement). Ce droit est donné par Grist à tous les widgets : mesure d'un rayon d'action, sans pénalité de plus.",
+              remediation: "Rien à changer dans le widget lui-même : c'est la délégation de Grist. La parade est de ne pas faire exécuter de code étranger au widget (bibliothèques embarquées dans le dépôt ou figées par empreinte) ; côté personne, relire avant de coller ce qui a été copié depuis un widget.",
+              referentiels: ['OWASP Top 10 A08:2021 — Software and Data Integrity Failures', 'CWE-1021'],
+              preuve: { niveau, etapes },
+            }));
+          } else if (refusPolitique || nonDelegue) {
+            essais.push(essai(17, titre17, 'bloque', `le navigateur a refusé au cadre d'écrire dans le presse-papier : Grist ne lui en délègue pas le droit (${delegation})`, { niveau, barriere: "politique d'autorisations du navigateur (Grist ne délègue pas l'écriture au cadre)", etapes }));
+          } else {
+            const raison = !d.pageRelit ? "le presse-papier du navigateur de l'audit n'a pas pu être relu depuis la page Grist"
+              : (!d.clic ? "le cadre du widget est trop petit pour y faire un clic" : (!k.activation ? "le clic de l'audit n'a pas été reçu par le widget" : (ecr?.ok === false ? `l'écriture a échoué sans que la politique l'explique (${resume(ecr.erreur, 150)})` : "le texte écrit n'a pas été retrouvé dans le presse-papier")));
+            essais.push(essai(17, titre17, 'non_teste', raison, { niveau, etapes }));
+          }
+        }
+
+        // 18. Autres droits sensibles : la politique d'autorisations appliquée au cadre, lue dans le cadre
+        {
+          const SENSIBLES = [['camera', 'caméra'], ['microphone', 'micro'], ['geolocation', 'position'], ['display-capture', "partage d'écran"], ['fullscreen', 'plein écran'], ['payment', 'paiement'], ['usb', 'USB'], ['serial', 'port série'], ['hid', 'périphériques HID'], ['bluetooth', 'Bluetooth'], ['midi', 'MIDI'], ['clipboard-read', 'lecture du presse-papier'], ['web-share', 'partage système'], ['publickey-credentials-get', 'clés d\'accès (passkeys)'], ['otp-credentials', 'codes à usage unique'], ['identity-credentials-get', "identité fédérée"], ['screen-wake-lock', "maintien de l'écran allumé"], ['accelerometer', 'accéléromètre'], ['gyroscope', 'gyroscope'], ['magnetometer', 'magnétomètre'], ['window-management', 'gestion des fenêtres'], ['local-fonts', 'polices locales']];
+          const connus = SENSIBLES.filter(([f]) => connues.has(f));
+          if (!politique || connus.length < 8) essais.push(essai(18, titre18, 'non_teste', politique ? `ce Chromium ne connaît que ${connus.length} des ${SENSIBLES.length} droits sensibles à vérifier : la mesure n'est pas fiable` : "la politique d'autorisations du cadre n'a pas pu être lue (API absente)", { niveau }));
+          else {
+            const ouverts = connus.filter(([f]) => politique.includes(f));
+            const etapes = connus.map(([f, l]) => ({ etape: `${l} (${f})`, ok: politique.includes(f), ...(politique.includes(f) ? {} : { barriere: "politique d'autorisations du navigateur" }) }));
+            if (ouverts.length) {
+              const noms = ouverts.map(([, l]) => l);
+              essais.push(essai(18, titre18, 'reussi', `le cadre du widget peut demander à la personne : ${noms.join(', ')} (${delegation})`, { niveau, regle: 'D-REEL-18', severite: 'info', nature: 'rayon', etapes, ouverts: noms }));
+              constats.push(constat({
+                regle: 'D-REEL-18', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+                titre: `Du code étranger dans le widget pourrait demander l'accès à : ${noms.join(', ')}`,
+                constat: `La politique d'autorisations que le navigateur applique au cadre du widget dans un vrai Grist (${delegation}) laisse le cadre demander : ${noms.join(', ')}. La personne verrait alors une demande d'autorisation du navigateur, au nom de Grist.`,
+                impact: "Une bibliothèque compromise pourrait profiter de la confiance que la personne accorde à Grist pour obtenir ces autorisations. Mesure d'un rayon d'action, sans pénalité de plus.",
+                remediation: "Rien à changer dans le widget : c'est la délégation de Grist. Signaler à l'éditeur de Grist que cette délégation dépasse le besoin des widgets ; ne pas faire exécuter de code étranger au widget.",
+                referentiels: ['Principe du moindre privilège', 'OWASP Top 10 A05:2021 — Security Misconfiguration'],
+                preuve: { niveau, ouverts: noms },
+              }));
+            } else {
+              essais.push(essai(18, titre18, 'bloque', `la politique d'autorisations du navigateur n'a donné au cadre aucun des ${connus.length} droits sensibles vérifiés (caméra, micro, position, partage d'écran, USB, paiement…) : ${delegation}`, { niveau, barriere: "politique d'autorisations du navigateur (délégation de Grist limitée à l'écriture du presse-papier)", etapes }));
+            }
+          }
         }
       }
     }
