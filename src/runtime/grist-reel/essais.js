@@ -435,7 +435,7 @@ export function evaluerEssais(phases, jeu) {
       } else if (o.hostileRecu) {
         essais.push(essai(3, titre, 'rien_observe', `le widget a reçu les lignes hostiles (JSON avec __proto__ et constructor.prototype, chemin __proto__.clé, mots-clés dangereux) sans qu'une propriété soit ajoutée à Object.prototype`, { niveau }));
       } else {
-        essais.push(essai(3, titre, 'non_teste', `les lignes hostiles n'ont pas atteint le widget au niveau « ${niveau} » (aucune donnée transmise, colonnes non liées, ou widget qui ne lit que la ligne sélectionnée) : le contrôle des prototypes ne prouve rien`, { niveau }));
+        essais.push(essai(3, titre, 'non_teste', `les lignes hostiles n'ont pas atteint le widget au niveau « ${niveau} » (aucune donnée transmise, colonnes non liées, ou widget qui ne lit que d'autres tables du document, par leur nom) : le contrôle des prototypes ne prouve rien`, { niveau }));
       }
     }
   }
