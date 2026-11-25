@@ -110,6 +110,19 @@ export async function creerDocument(client, jeu) {
   return { docId, tableId: jeu.table.id, tableRef, colonnesRef };
 }
 
+/**
+ * Un second document de l'instance jetable, sans rapport avec le widget, qui contient un canari : il sert à vérifier qu'un jeton d'accès
+ * obtenu par le widget ne donne pas accès à un autre document (essai 9). Il est créé après le contrôle d'isolation de départ.
+ */
+export async function creerDocumentVoisin(client, jeu) {
+  const espace = (await client.espaces()).find((w) => !w.isSupportWorkspace) ?? (await client.espaces())[0];
+  const docId = await client.creerDocument(espace.id, 'gwaudit-autre-document');
+  const canari = `${jeu.prefixe}-AUTREDOC-1`;
+  await client.creerTable(docId, 'Secret', [{ id: 'Valeur', type: 'Text' }]);
+  await client.ajouterLignes(docId, 'Secret', [{ Valeur: canari }]);
+  return { docId, canari };
+}
+
 /** Ajoute à la page du document une section « Custom » et rend les références de la section et de la page. */
 export async function creerSectionCustom(client, doc) {
   const r = await client.actions(doc.docId, [['CreateViewSection', doc.tableRef, 0, 'custom', null, null]]);

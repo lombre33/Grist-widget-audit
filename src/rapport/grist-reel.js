@@ -20,6 +20,9 @@ const ESSAIS_DU_CATALOGUE = 20;
 const QUOI = {
   1: "On place dans une cellule du document un texte piégé (du code déguisé en donnée), puis on regarde si le widget l'exécute.",
   7: "On limite le widget au niveau d'accès « none » (aucune donnée) et on vérifie que Grist ne lui transmet rien.",
+  8: "On joue, depuis l'intérieur du widget, ce que ferait du code étranger (une bibliothèque piégée) : lire la liste des tables, une table sans rapport avec le widget, les tables système.",
+  9: "On joue ce que ferait ce code étranger pour obtenir un jeton d'accès, appeler directement l'API du document avec ce jeton, et l'essayer sur un autre document.",
+  12: "On joue ce que ferait ce code étranger pour créer un webhook, une sortie permanente de données qui survivrait au retrait du widget.",
   13: "On remplit le document de valeurs repérables (des « canaris ») et on regarde si l'une d'elles sort du widget vers un site extérieur.",
   15: "On regarde si le widget peut rediriger la page Grist qui l'héberge (de quoi afficher une fausse page de connexion).",
   16: "On regarde si le widget ouvre des fenêtres, des boîtes de dialogue ou des téléchargements sans qu'on le lui demande.",
@@ -47,6 +50,19 @@ function enClair(e) {
       return t === 'bloque'
         ? "Grist a bien refusé de transmettre les données au niveau « none ». C'est le garde-fou de Grist qui est vérifié ici, pas le widget."
         : "Grist a transmis des données alors que le niveau était « none » : défaut de Grist, pas du widget. Sans effet sur la note ; à signaler à l'éditeur de Grist.";
+    case 8:
+      return t === 'reussi'
+        ? `Avec le niveau « ${e.niveau} », du code étranger qui s'exécuterait dans le widget (une bibliothèque piégée, par exemple) pourrait lire bien plus que sa table : ${(e.lus ?? []).join(', ')}. C'est ce que permet ce niveau d'accès ; cela ne devient un problème que si une dépendance du widget est compromise. Mesure donnée à titre d'information, sans effet sur la note.`
+        : "Grist a refusé toute lecture en dehors de la table du widget : même du code piégé dans une bibliothèque ne pourrait pas lire le reste du document. Il garderait l'accès à la table du widget elle-même.";
+    case 9:
+      if (e.severite === 'info' && e.nature !== 'rayon') return "Grist a laissé un jeton d'accès ouvrir un autre document : défaut de Grist, pas du widget. Sans effet sur la note ; à signaler à l'éditeur de Grist.";
+      return t === 'reussi'
+        ? `Avec le niveau « ${e.niveau} », du code étranger dans le widget obtiendrait de Grist un jeton d'accès${e.ecriture ? ' avec écriture' : ''}, valable quelques minutes, et pourrait interroger directement l'API du document.${e.autreDocumentFerme ? " Grist refuse en revanche d'utiliser ce jeton sur un autre document." : ''} Mesure donnée à titre d'information, sans effet sur la note.`
+        : "Du code piégé dans une bibliothèque ne pourrait pas se servir d'un jeton d'accès pour appeler l'API du document : un garde-fou l'a arrêté (nommé dans le détail).";
+    case 12:
+      return t === 'reussi'
+        ? "Du code dans le widget a pu créer un webhook : il resterait en place après le retrait du widget et continuerait d'envoyer les modifications du document vers une adresse extérieure."
+        : "Du code piégé dans le widget n'a pas pu créer de webhook, cette sortie permanente de données qui survivrait au retrait du widget. Résultat valable pour le réglage par défaut de Grist : un administrateur qui autorise des adresses de webhook peut le changer.";
     case 13:
       if (t === 'reussi') return "Des données du document sortent du widget vers un site extérieur : c'est une fuite.";
       return e.sorties > 0
@@ -69,7 +85,7 @@ function enClair(e) {
 export function verdictEssai(e) {
   if (e.resultat === 'non_teste') return { cle: 'non_teste', bande: 'neutre', symbole: '?', mot: 'Pas testé', precision: 'aucune conclusion' };
   if (e.resultat === 'reussi') {
-    if (e.severite === 'info') return { cle: 'a_savoir', bande: 'neutre', symbole: 'i', mot: 'À savoir', precision: "défaut de Grist, pas du widget" };
+    if (e.severite === 'info') return { cle: 'a_savoir', bande: 'neutre', symbole: 'i', mot: 'À savoir', precision: e.nature === 'rayon' ? "ce qu'obtiendrait une dépendance piégée, sans effet sur la note" : "défaut de Grist, pas du widget" };
     if (e.severite === 'critique') return { cle: 'pas_bien', bande: 'critique', symbole: '✘', mot: 'Pas bien', precision: 'critique' };
     return { cle: 'pas_bien', bande: 'serieuse', symbole: '✘', mot: 'Pas bien', precision: e.severite ?? 'majeur' };
   }
@@ -83,7 +99,7 @@ export function syntheseEssais(essais) {
   const morceaux = [];
   if (n.pas_bien) morceaux.push(`${n.pas_bien} pas bien`);
   if (n.bien) morceaux.push(`${n.bien} bien (rien d'anormal, ou arrêté par une barrière)`);
-  if (n.a_savoir) morceaux.push(`${n.a_savoir} à savoir (défaut de Grist, pas du widget)`);
+  if (n.a_savoir) morceaux.push(`${n.a_savoir} à savoir (information sans effet sur la note)`);
   if (n.non_teste) morceaux.push(`${n.non_teste} pas testé${n.non_teste > 1 ? 's' : ''} (aucune conclusion possible sur ces points)`);
   const bande = n.pas_bien ? 'critique' : (n.non_teste ? 'attention' : 'bonne');
   const titre = n.pas_bien ? `${n.pas_bien} problème${n.pas_bien > 1 ? 's' : ''} trouvé${n.pas_bien > 1 ? 's' : ''}`

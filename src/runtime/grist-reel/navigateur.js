@@ -12,7 +12,8 @@
  *  - ce que Grist a transmis au widget (un canari est-il arrivé ?) ;
  *  - les requêtes sortantes, avec la recherche des canaris dans l'adresse et le corps ;
  *  - les navigations du cadre parent, fenêtres ouvertes, boîtes de dialogue, téléchargements ;
- *  - la sonde de la charge XSS (voir donnees.js), lue dans le cadre du widget.
+ *  - la sonde de la charge XSS (voir donnees.js), lue dans le cadre du widget ;
+ *  - le kit de la dépendance piégée (voir kit.js), joué dans le cadre du widget une fois l'observation terminée, si `kit` est fourni.
  */
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,6 +22,7 @@ import {
 } from '../dynamique.js';
 import { estGrist } from '../../contexte/hotes-grist.js';
 import { trouverCanari } from './donnees.js';
+import { kitDependancePiegee } from './kit.js';
 
 const ICI = path.dirname(fileURLToPath(import.meta.url));
 const RACINE_OUTIL = path.resolve(ICI, '../../..');
@@ -72,13 +74,14 @@ const urlSansAncre = (url) => { try { const u = new URL(url); u.hash = ''; retur
  * @param {string} p.origineWidget origine du serveur du widget
  * @param {Map<string, object>} [p.servies]  bibliothèques du widget téléchargées par l'outil (voir bibliotheques.js), servies à la place de l'Internet coupé
  * @param {object} p.jeu           voir donnees.js
+ * @param {object} [p.kit]         paramètres du kit de la dépendance piégée (voir kit.js) : s'il est fourni, il est joué dans le cadre du widget
  * @param {number} [p.delaiMs]
  */
-export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, delaiMs = 45_000 }) {
+export async function jouerPhase({ navigateur, base, cookies, chemin, origineWidget, jeu, servies, kit, delaiMs = 45_000 }) {
   const obs = {
     charge: false, appelsRpc: [], configure: null, canariRecu: false, texteDuCadre: '',
     xss: { executions: 0, lu: null, refus: null, erreur: null },
-    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [],
+    requetesExternes: [], apiSubstituee: [], navigations: [], navigationsRefusees: [], popups: [], dialogues: [], telechargements: [], introuvables: [], bibliothequesServies: 0, dependancesNonResolues: [], kit: null,
     consoles: [], erreursPage: [], erreur: null,
   };
   const origineGrist = origineDe(base);
@@ -186,6 +189,7 @@ export async function jouerPhase({ navigateur, base, cookies, chemin, origineWid
         obs.texteDuCadre = dansCadre.texte.slice(0, 500);
         obs.xss = { executions: dansCadre.xss, lu: dansCadre.lu, refus: dansCadre.refus, erreur: dansCadre.erreur };
       }
+      if (kit && cadre) obs.kit = await cadre.evaluate(kitDependancePiegee, kit).catch((e) => ({ erreur: String(e?.message ?? e).slice(0, 200) }));
       try { if (origineDe(page.url()) !== origineGrist) obs.navigations.push({ url: page.url().slice(0, 500) }); } catch { /* page fermée */ }
     })();
     travail.catch(() => {}); // si le délai gagne, la fin tardive de ce travail (contexte fermé) ne doit pas remonter

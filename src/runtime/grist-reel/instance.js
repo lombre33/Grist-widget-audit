@@ -50,6 +50,8 @@ export function portLibre() {
 export function construireEnvironnement(profil, port, base = process.env) {
   const env = { ...base };
   for (const cle of ['HTTP_PROXY', 'HTTPS_PROXY', 'ALL_PROXY', 'http_proxy', 'https_proxy', 'all_proxy']) delete env[cle];
+  // Réglage par défaut de Grist pour les webhooks (aucune adresse autorisée) : les essais ne dépendent pas de la configuration de la machine qui les joue.
+  for (const cle of ['ALLOWED_WEBHOOK_DOMAINS', 'GRIST_PROXY_FOR_UNTRUSTED_URLS']) delete env[cle];
   Object.assign(env, {
     GRIST_DESKTOP_TEST_MODE: '1',
     GRIST_DESKTOP_AUTH: 'none',

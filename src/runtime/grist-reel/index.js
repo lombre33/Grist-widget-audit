@@ -18,7 +18,7 @@ import { resoudreBibliotheques } from './bibliotheques.js';
 import { assurerGristDesktop, EPINGLE, InstallationImpossible } from './installateur.js';
 import { lancerInstance, InstanceImpossible } from './instance.js';
 import { creerClient } from './client.js';
-import { construireJeu, creerDocument, creerSectionCustom, reglerSection, proposerCorrespondance } from './donnees.js';
+import { construireJeu, creerDocument, creerDocumentVoisin, creerSectionCustom, reglerSection, proposerCorrespondance, HOTE_PUITS } from './donnees.js';
 import { lancerChromium, jouerPhase } from './navigateur.js';
 import { evaluerEssais, constatIndisponible, ESSAIS_JOUES, ESSAIS_PAS_ENCORE } from './essais.js';
 import { bacASableChromium, resumerCauseErreur } from '../dynamique.js';
@@ -66,6 +66,7 @@ export async function auditGristReel(ctx, options = {}) {
     const jeu = construireJeu(options.scenario);
     const doc = await creerDocument(client, jeu);
     const section = await creerSectionCustom(client, doc);
+    const voisin = await creerDocumentVoisin(client, jeu).catch(() => null);
     const urlWidget = `${serveur.origine}/widget/${entree}`;
     navigateur = await lancerChromium(chromium);
     // Les bibliothèques que le widget déclare (esm.sh, CDN…) sont téléchargées par l'outil et servies au navigateur, qui reste coupé d'Internet.
@@ -73,7 +74,9 @@ export async function auditGristReel(ctx, options = {}) {
     try { bibliotheques = await (options.resoudreBibliotheques ?? resoudreBibliotheques)(ctx, { journal }); }
     catch (e) { journal(`  Bibliothèques du widget : non téléchargées (${resumerCauseErreur(e)}).`); }
     resume.bibliotheques = bibliotheques?.resume ?? null;
-    const commun = { navigateur, base: instance.base, cookies: client.cookiesNavigateur(), chemin: section.chemin, origineWidget: serveur.origine, jeu, servies: bibliotheques?.servies };
+    const commun = { navigateur, base: instance.base, cookies: client.cookiesNavigateur(), chemin: section.chemin, origineWidget: serveur.origine, jeu, servies: bibliotheques?.servies,
+      // Le kit de la dépendance piégée (kit.js) : joué dans le cadre du widget, à chaque phase ; ce qui compte est la phase du niveau que le widget demande.
+      kit: { appat: jeu.appat.id, table: jeu.table.id, prefixe: jeu.prefixe, autreDoc: voisin?.docId ?? null, canariAutre: voisin?.canari ?? null, puits: `https://${HOTE_PUITS}/webhook` } };
 
     journal('  Phase 1 : le widget chargé dans Grist au niveau « none »…');
     await reglerSection(client, doc, section, { url: urlWidget, access: 'none' });

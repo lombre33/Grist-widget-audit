@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<title>Widget de test (niveau full)</title>
+<script src="https://docs.getgrist.com/grist-plugin-api.js"></script>
+</head>
+<body>
+<h1>Contacts</h1>
+<ul id="liste"></ul>
+<script>
+  grist.ready({ requiredAccess: 'full', columns: ['Nom', 'Email'] });
+  grist.onRecords(function (records) {
+    var liste = document.getElementById('liste');
+    liste.textContent = '';
+    records.forEach(function (r) {
+      var li = document.createElement('li');
+      li.textContent = r.Nom + ' — ' + r.Email;
+      liste.appendChild(li);
+    });
+  });
+</script>
+</body>
+</html>
