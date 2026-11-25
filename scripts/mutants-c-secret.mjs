@@ -476,7 +476,7 @@ const MUTANTS = [
   ].map(([nom, de, par]) => dans('const MOTIF_DE_SECRET = /', de, par, `mots à chercher : ${nom} ne fait plus chercher un nom`)),
   dans('const MOTIF_DE_SECRET = /', 'passw(?:or)?d', 'passwd', 'mots à chercher : password ne fait plus chercher un nom (passwd seul)'),
   dans('const MOTIF_DE_SECRET = /', 'passw(?:or)?d', 'password', 'mots à chercher : passwd ne fait plus chercher un nom (password seul)'),
-  dans('const MOTIF_DE_SECRET = /', '[_-]?key/i', 'key/i', 'mots à chercher : api_key et api-key ne font plus chercher un nom'),
+  dans('const MOTIF_DE_SECRET = /', 'api[_-]?key|', 'apikey|', 'mots à chercher : api_key et api-key ne font plus chercher un nom'),
   dans('const MOTIF_DE_SECRET = /', 'mot[_-]?de[_-]?passe', 'motdepasse', 'mots à chercher : mot_de_passe ne fait plus chercher un nom'),
   dans('const MOTIF_DE_SECRET = /', '/i;', '/;', 'mots à chercher : une majuscule n\'est pas une lettre'),
   dans('const MOTIF_DE_SECRET_GLOBAL =', "'gi'", "'g'", 'mots à chercher : une majuscule n\'est pas une lettre (configuration)'),
@@ -554,8 +554,8 @@ const MUTANTS = [
   dans('yield { index: m.index, nom, valeur, debutDeValeur };', 'index: m.index', 'index: fin', 'lecture de configuration : la valeur est à la fin du nom'),
 
   // L'arbre d'un fichier JavaScript : chaque forme d'affectation --------------------------------------------------------------------------
-  dans("if (!nomEvoqueUnSecret(nom)) return;", '!nomEvoqueUnSecret(nom)', 'false', 'arbre : tout nom qui reçoit un littéral est lu'),
-  dans('if (texte !== null) trouvees.push', '!== null', '=== null', 'arbre : seul un nom qui ne reçoit pas un littéral est lu'),
+  dans("if (!enTete && !nomEvoqueUnSecret(nom)) return;", '!enTete && !nomEvoqueUnSecret(nom)', 'false', 'arbre : tout nom qui reçoit un littéral est lu'),
+  dans('if (texte === null) return;', '=== null', '!== null', 'arbre : seul un nom qui ne reçoit pas un littéral est lu'),
   dans('VariableDeclarator(n) {', 'VariableDeclarator(n) { voir(n, n.id.name, n.init); },', '', 'arbre : une déclaration (const apiKey = …) n\'est pas lue'),
   dans('VariableDeclarator(n) {', 'n.init', 'null', 'arbre : la valeur d\'une déclaration n\'est pas lue'),
   dans('Property(n) {', 'Property(n) { voir(n, nomDeCle(n.key, n.computed), n.value); },', '', 'arbre : une propriété ({ apiKey: … }) n\'est pas lue'),
@@ -648,7 +648,7 @@ const MUTANTS = [
 
   // Les préfixes de clé que l'outil connaît : chaque branche, chaque lettre, chaque variante ---------------------------------------------
   ...[['AKIA|', 'AKIA'], ['AIza|', 'AIza'], ['gh[pousr]_|', 'gh[pousr]_'], ['github_pat_|', 'github_pat_'], ['xox[baprs]-|', 'xox[baprs]-'], ['xapp-(?:\\d+-)?|', 'xapp-'],
-    ['sk-(?:(?:proj|svcacct|admin)-|ant-(?:api\\d+-)?)?|', 'sk-'], ['|[sr]k_(?:live|test)_', 'sk_ et rk_'], ['|pk_(?:live|test)_', 'pk_']]
+    ['sk-(?:(?:proj|svcacct|admin)-|ant-(?:[a-z]+\\d+-)?|or-v1-)?|', 'sk-'], ['|[sr]k_(?:live|test)_', 'sk_ et rk_'], ['|pk_(?:live|test)_', 'pk_']]
     .map(([de, nom]) => dans('const PREFIXE_DE_CLE =', de, '', `préfixe de clé : ${nom} n'est plus le début d'une clé`)),
   ...['p', 'o', 'u', 's', 'r'].map((c) => dans('const PREFIXE_DE_CLE =', 'gh[pousr]_', `gh[${'pousr'.replace(c, '')}]_`, `préfixe de clé : gh${c}_ n'est plus le début d'un jeton GitHub`)),
   ...['b', 'a', 'p', 'r', 's'].map((c) => dans('const PREFIXE_DE_CLE =', 'xox[baprs]-', `xox[${'baprs'.replace(c, '')}]-`, `préfixe de clé : xox${c}- n'est plus le début d'un jeton Slack`)),
@@ -662,8 +662,8 @@ const MUTANTS = [
   dans('const PREFIXE_DE_CLE =', 'proj|svcacct|admin', 'svcacct|admin', 'préfixe de clé : sk-proj- n\'est plus le début d\'une clé OpenAI'),
   dans('const PREFIXE_DE_CLE =', 'proj|svcacct|admin', 'proj|admin', 'préfixe de clé : sk-svcacct- n\'est plus le début d\'une clé OpenAI'),
   dans('const PREFIXE_DE_CLE =', 'proj|svcacct|admin', 'proj|svcacct', 'préfixe de clé : sk-admin- n\'est plus le début d\'une clé OpenAI'),
-  dans('const PREFIXE_DE_CLE =', '|ant-(?:api\\d+-)?', '', 'préfixe de clé : sk-ant- n\'est plus le début d\'une clé Anthropic'),
-  dans('const PREFIXE_DE_CLE =', '(?:api\\d+-)?', '', 'préfixe de clé : sk-ant-api03- perd son type de clé'),
+  dans('const PREFIXE_DE_CLE =', '|ant-(?:[a-z]+\\d+-)?', '', 'préfixe de clé : sk-ant- n\'est plus le début d\'une clé Anthropic'),
+  dans('const PREFIXE_DE_CLE =', '(?:[a-z]+\\d+-)?', '', 'préfixe de clé : sk-ant-api03- perd son type de clé'),
   dans('const PREFIXE_DE_CLE =', ')?|[sr]k_', ')|[sr]k_', 'préfixe de clé : sk- seul n\'est plus le début d\'une clé OpenAI'),
   dans('const PREFIXE_DE_CLE =', '/^(?:', '/(?:', 'préfixe de clé : un préfixe est retiré n\'importe où dans la valeur, non à son début'),
 

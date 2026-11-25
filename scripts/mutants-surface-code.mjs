@@ -190,8 +190,8 @@ MUTANTS.push(
   dansLigne(S, 'if (metas.some((m) => m.dansTete', 'm.dansTete && ', '', 'CSP : une balise hors de head compte'),
   dansLigne(P, 'dansTete: phase !== ', ' && templatesOuverts === 0', '', 'CSP : une balise de gabarit placée dans head compte (dansTete ne dit plus le gabarit)'),
   dansLigne(S, 'if (metas.some((m) => m.dansTete', ' && aUneDirective(m)', '', 'CSP : une balise sans directive compte pour C-CSP-01'),
-  dansLigne(S, 'const meta = lirePage(f.contenu).balises.find((b) => estMetaCsp(b)', ' && aUneDirective(b)', '', 'C-CSP-02 : une balise inerte devant une CSP permissive la masque'),
-  dansLigne(S, 'const meta = lirePage(f.contenu).balises.find((b) => estMetaCsp(b)', 'b.dansTete && ', '', 'C-CSP-02 : une CSP hors de head est jugée'),
+  dansLigne(S, 'const metas = lirePage(f.contenu).balises.filter((b) => estMetaCsp(b)', ' && aUneDirective(b)', '', 'C-CSP-02 : une balise inerte devant une CSP permissive la masque'),
+  dansLigne(S, 'const metas = lirePage(f.contenu).balises.filter((b) => estMetaCsp(b)', 'b.dansTete && ', '', 'C-CSP-02 : une CSP hors de head est jugée'),
 );
 
 // --- la feuille que seul un gabarit charge -------------------------------------------------------------------------------
