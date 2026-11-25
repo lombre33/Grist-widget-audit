@@ -55,3 +55,8 @@ test("Markdown : même verdict et même « En clair » que le HTML, détail et r
   assert.match(md, /la charge a lu la table appât \[D-REEL-01\]/);
   assert.match(md, /\? \*\*Pas testé\*\*/);
 });
+
+test("rapport : le nombre d'essais restant à développer vient de la liste des essais jouables, pas de ceux joués (l'essai 21 n'existe que si le widget a des bibliothèques)", () => {
+  const r = { ...resume([essai(1, 'rien_observe'), essai(7, 'bloque')]), essaisJoues: Array.from({ length: 16 }, (_, i) => i + 1), essaisPasEncore: '2, 4 à 6, 11, 14, 19, 20' };
+  assert.match(htmlGristReel(r), /8 essais du catalogue restent à développer \(n° 2, 4 à 6, 11, 14, 19, 20\)/);
+});
