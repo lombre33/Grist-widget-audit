@@ -27,7 +27,29 @@ qui a pu être lu et quel constat l'en empêche, et ce constat est toujours
 bloquant. Un 0 de cette sorte dit que la mesure n'a pas pu se faire, non que
 le code est mauvais.
 
-## Modèle de menace retenu (axes C et D)
+## Les axes et leurs poids
+
+| Axe | Titre | Poids |
+|---|---|---|
+| A | Qualité du code | 20 |
+| B | Lisibilité et maintenabilité humaine | 15 |
+| C | Sécurité applicative (statique) | 25 |
+| D | Sécurité en condition réelle (tests dynamiques) | 25 |
+| E | Chaîne d'approvisionnement et dépendances | 10 |
+| F | Conformité Grist.Gouv, souveraineté, accessibilité | 5 |
+| G | Pen-tests contre un Grist réel (**facultatif**) | 20 |
+
+Les six premiers axes pèsent 100 ensemble et sont toujours joués. L'axe G n'est
+joué que sur demande (`--grist-reel`, ou la case de l'interface) : la note
+globale est la moyenne des scores d'axe pondérée par leur poids, divisée par la
+somme des poids des axes joués (100 sans G, 120 avec). Non lancé, G s'affiche
+« non lancé · hors de la note » : ni la note ni le verdict ne bougent, et ce
+n'est pas un audit partiel, puisque personne ne lui a demandé de tourner. Un
+axe que l'utilisateur a désactivé, ou que l'outil n'a pas pu jouer (l'axe D, par
+exemple), sort aussi du calcul, mais le verdict le dit : c'est un audit partiel.
+Le poids de G se règle d'une ligne (`poids` de l'axe G dans `src/moteur/modele.js`).
+
+## Modèle de menace retenu (axes C, D et G)
 
 Un widget Grist est une page web tierce chargée dans une iframe, à laquelle
 l'agent accorde un niveau d'accès (`none`, `read table`, `full`). Avec
@@ -416,7 +438,8 @@ authentification, pas de vrai stockage, pas de vraie UI de mappage de
 colonnes. C'est un partenaire RPC protocolairement exact. Ce choix permet
 d'exécuter l'axe D à chaque audit, en quelques secondes, sans dépendre d'un
 accès réseau à une image Docker ni d'un temps de démarrage de plusieurs
-minutes — voir `docker/README.md` pour l'étape complémentaire avec une
+minutes. L'axe G (facultatif, voir plus bas) joue des essais contre un vrai
+Grist Desktop, et `docker/README.md` décrit l'étape complémentaire avec une
 vraie instance Grist, qui reste nécessaire avant toute mise en production.
 
 ### Sécurité de l'audit lui-même
@@ -531,6 +554,37 @@ Fonts, Google Analytics, CDN publics, API d'IA hors UE…), vérifications
 RGAA statiques, poids de la surface exécutée (écoconception), et
 conventions du guide de contribution (nom de dépôt, `SECURITY.md`,
 cohérence d'un éventuel `manifest.json`).
+
+## Axe G — Pen-tests contre un Grist réel (facultatif)
+
+L'axe D joue le widget dans un faux hôte de test, dont l'outil connaît chaque
+réponse. L'axe G le joue dans un **vrai Grist** (Grist Desktop, version épinglée
+et vérifiée par empreinte, instance neuve et dossier temporaire à chaque audit,
+jamais le Grist ni les documents de l'utilisateur) : un document de test aux
+valeurs « canaris », une section Custom qui charge le widget, puis des essais
+d'attaque (valeurs piégées, niveaux d'accès, données qui sortent, bibliothèques
+altérées, messages forgés, voies de sortie du cadre…). Les requêtes vers
+l'extérieur sont interceptées, jamais envoyées. Le catalogue des essais et leur
+lecture sont décrits dans le README, section « Essais contre un Grist réel ».
+
+Ce qui garde l'axe honnête :
+- **Un essai qui n'a pas pu se jouer est dit « Pas testé », avec sa raison**,
+  jamais « rien trouvé ». Un essai « Pas testé » ne pèse ni pour ni contre : la
+  carte de l'axe dit combien d'essais ont été joués (« 21/23 essais joués »).
+- **Une mesure partielle** (des bibliothèques du widget n'ont pas pu être
+  téléchargées, donc pas jouées : constat `D-REEL-BIBLIOTHEQUES`) rend l'axe
+  partiel : la note ne dit rien des essais non joués, et le verdict ne peut pas
+  être « conforme » sans réserve.
+- **Demandé mais impossible à lancer** (Grist Desktop introuvable, par exemple),
+  l'axe est « non exécuté » : audit partiel, jamais un axe silencieux ni noté
+  100 par défaut.
+- Les constats portent les numéros `D-REEL-NN`, notés et pesés comme ceux des
+  autres axes ; un constat bloquant de G condamne le verdict comme ailleurs. Les
+  essais qui n'ont rien trouvé figurent aussi au rapport, un bloc dépliant par
+  essai, pour qu'un « Bien » se lise comme un « Pas bien ».
+
+Ces essais mesurent le widget dans la version de Grist épinglée, pas dans
+l'instance qui l'hébergera.
 
 ## Le test algorithmique et l'analyse IA : ce que chacun fait
 
@@ -674,8 +728,9 @@ lire un fichier coûte, en temps et en mémoire, proportionnellement à sa taill
   accessibilité légale) : il signale les points qui appellent cette
   analyse, il ne la mène pas.
 - **Il ne teste pas la logique métier** : un widget peut être irréprochable
-  sur ces six axes et faire un calcul faux. Ce n'est pas son rôle — c'est
+  sur ces axes et faire un calcul faux. Ce n'est pas son rôle — c'est
   celui des tests unitaires (axe A, règle A-TEST-*) que le widget doit
   fournir.
 - **Il ne remplace pas un test avec une vraie instance Grist** avant mise
-  en production (voir `docker/`).
+  en production (voir `docker/`) : l'axe G joue le widget dans un vrai Grist
+  Desktop de version épinglée, non dans l'instance qui l'hébergera.

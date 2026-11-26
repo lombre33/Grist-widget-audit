@@ -103,6 +103,15 @@ doctrine de souveraineté numérique de l'État.
 Le total des poids fait 100 : le score global est une moyenne pondérée des
 six scores d'axe (voir section 3).
 
+L'outil algorithmique a en plus un **axe G facultatif**, « Pen-tests contre un
+Grist réel » (poids 20), joué seulement avec `--grist-reel` par un vrai Grist
+Desktop. Tu ne le joues pas et tu ne le notes pas : sans Grist réel, il n'y a
+rien à mesurer, et un axe que tu ne peux pas mesurer ne vaut ni 100 ni 0. Dans
+ton audit, G est « non lancé · hors de la note » et ne compte pas comme un axe
+non exécuté. Si le rapport de l'outil que tu reçois porte un axe G, ses constats
+(`D-REEL-NN`) sont ceux de l'outil : cite leur identifiant, ne les refais pas et
+ne recalcule pas son score.
+
 ---
 
 ## 3. Sévérités, pénalités et calcul du score
@@ -169,6 +178,10 @@ situations se distinguent, que le rapport dit toujours :
   pas pu jouer ; pour toi, l'axe D est déduit et non exécuté : voir la
   section 6) : il est exclu du calcul. N'attribue jamais 100 ou 0 par défaut à
   un axe non évalué : exclus-le du calcul et dis-le explicitement.
+- **Axe facultatif non lancé** (l'axe G, sans `--grist-reel`) : hors de la note,
+  sans « audit partiel » ni réserve sur le verdict, puisque personne ne lui a
+  demandé de tourner. Un G lancé par l'outil entre dans sa moyenne, pondéré par
+  son poids de 20 ; pas dans la tienne.
 - **Axe partiel** (l'axe a tourné, mais une vérification en son sein n'a pas pu
   se faire : `npm audit` injoignable, code exécuté que la recherche de
   duplication n'a pas comparé…) : il garde sa note et reste dans la moyenne,
