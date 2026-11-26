@@ -9,7 +9,7 @@
  */
 import { CONFIANCES, trierConstats } from '../moteur/modele.js';
 import { raisonsDeTroncature } from '../contexte/inventaire.js';
-import { markdownGristReel } from './grist-reel.js';
+import { markdownGristReel, couvertureEssais } from './grist-reel.js';
 
 const ICONES = { critique: '🔴', majeur: '🟠', mineur: '🟡', info: 'ℹ️' };
 
@@ -52,7 +52,7 @@ export function genererMarkdown({ ctx, notation, meta }) {
   l.push('| Axe | Score | Critique | Majeur | Mineur |');
   l.push('|---|---:|---:|---:|---:|');
   for (const a of Object.values(notation.parAxe)) {
-    l.push(`| ${a.code} — ${a.titre} | ${a.nonExecute ? 'non exécuté' : a.score + '/100' + (a.partiel ? ' (partiel)' : '')} | ${a.repartition.critique} | ${a.repartition.majeur} | ${a.repartition.mineur} |`);
+    l.push(`| ${a.code} — ${a.titre} | ${a.nonDemande ? 'non lancé' : a.nonExecute ? 'non exécuté' : a.score + '/100' + (a.partiel ? ' (partiel)' : '')} | ${a.repartition.critique} | ${a.repartition.majeur} | ${a.repartition.mineur} |`);
   }
   l.push('');
   if (notation.axesNonExecutes.length) {
@@ -84,6 +84,11 @@ export function genererMarkdown({ ctx, notation, meta }) {
     l.push(`## Axe ${axe.code} — ${axe.titre}`);
     l.push('');
     const constats = trierConstats(axe.constats);
+    if (axe.nonDemande) {
+      l.push('*Pen-tests non lancés : ils jouent le widget contre un vrai Grist et comptent dans la note quand ils sont lancés (option `--grist-reel`). Non lancés, ils n\'entrent ni dans la note ni dans le verdict.*');
+      l.push('');
+      continue;
+    }
     if (axe.nonExecute) {
       // Un axe absent ne se lit jamais sans sa raison : ses constats (option
       // --sans-dynamique, échec avec sa cause…) sont exactement ce qui la dit.
@@ -91,7 +96,8 @@ export function genererMarkdown({ ctx, notation, meta }) {
       l.push('');
       if (!constats.length) continue;
     } else {
-      l.push(`Score : **${axe.score}/100** — ${axe.repartition.critique} critique(s), ${axe.repartition.majeur} majeur(s), ${axe.repartition.mineur} mineur(s), ${axe.repartition.info} information(s).`);
+      const cov = axe.code === 'G' ? couvertureEssais(meta.gristReel) : null;
+      l.push(`Score : **${axe.score}/100**${cov ? ` (${cov.testes}/${cov.applicables} essais joués)` : ''} — ${axe.repartition.critique} critique(s), ${axe.repartition.majeur} majeur(s), ${axe.repartition.mineur} mineur(s), ${axe.repartition.info} information(s).`);
       l.push('');
       if (axe.partiel) {
         l.push("> ⚠ Mesure partielle : une vérification de cet axe n'a pas été faite, voir l'information qui la nomme ci-dessous.");
@@ -102,7 +108,8 @@ export function genererMarkdown({ ctx, notation, meta }) {
         l.push(`> ⛔ Mesure empêchée par le widget : cet axe est noté 0, il n'a pas pu être mesuré en entier. Sur ce qui a pu être lu, il vaut ${axe.scoreMesure}/100. Cause : ${axe.causes.map((c) => `[${c.regle}] ${c.titre}`).join(' ; ')}.`);
         l.push('');
       }
-      if (!constats.length) { l.push('_Aucun constat sur cet axe._'); l.push(''); continue; }
+      if (axe.code === 'G' && meta.gristReel?.execute) l.push(...markdownGristReel(meta.gristReel));
+      else if (!constats.length) { l.push('_Aucun constat sur cet axe._'); l.push(''); continue; }
     }
 
     for (const c of constats) {
@@ -120,8 +127,6 @@ export function genererMarkdown({ ctx, notation, meta }) {
       l.push('');
     }
   }
-
-  l.push(...markdownGristReel(meta.gristReel));
 
   return l.join('\n');
 }

@@ -97,7 +97,7 @@ export function evaluerEssais(phases, jeu) {
       if (lu) {
         essais.push(essai(1, titre, 'reussi', `la charge s'est exécutée, a lu la table appât avec le niveau « ${d.niveau} »${sortie ? ' et l\'a envoyée à l\'extérieur' : ' (sortie non observée)'}`, { niveau: d.niveau, regle: 'D-REEL-01', severite: 'critique', etapes }));
         constats.push(constat({
-          regle: 'D-REEL-01', axe: 'D', severite: 'critique', bloquant: true, confiance: 'prouve',
+          regle: 'D-REEL-01', axe: 'G', severite: 'critique', bloquant: true, confiance: 'prouve',
           titre: `XSS exécutée dans un vrai Grist, avec lecture d'une autre table au niveau « ${d.niveau} »${sortie ? ' et sortie des données' : ''}`,
           constat: `Une valeur de cellule contenant \`<img onerror=…>\` a été rendue de façon à exécuter du code dans le cadre du widget, chargé par un vrai Grist (Grist Desktop, instance jetable) au niveau d'accès « ${d.niveau} ». Ce code a lu par l'API Grist une table qui n'était pas celle du widget (la table appât, canari ${jeu.prefixe}-APPAT-…)${sortie ? " et en a envoyé le contenu vers un hôte externe (requête interceptée par l'audit, rien n'est sorti de la machine)" : ''}.`,
           impact: "Une donnée de cellule ordinaire devient du code qui agit avec le niveau d'accès que l'agent a accordé au widget, et lit le reste du document. N'importe quel contributeur du document peut viser quiconque ouvre ce widget. Contrairement à D-XSS-01 (faux hôte), la lecture a été accordée ou refusée par Grist lui-même.",
@@ -108,7 +108,7 @@ export function evaluerEssais(phases, jeu) {
       } else {
         essais.push(essai(1, titre, 'reussi', `la charge s'est exécutée ; la lecture hors table a été arrêtée (${etapes[1].barriere})`, { niveau: d.niveau, regle: 'D-REEL-01', severite: 'majeur', etapes }));
         constats.push(constat({
-          regle: 'D-REEL-01', axe: 'D', severite: 'majeur', bloquant: false, confiance: 'prouve',
+          regle: 'D-REEL-01', axe: 'G', severite: 'majeur', bloquant: false, confiance: 'prouve',
           titre: `XSS exécutée dans un vrai Grist (lecture hors table arrêtée au niveau « ${d.niveau} »)`,
           constat: `Une valeur de cellule contenant \`<img onerror=…>\` a été rendue de façon à exécuter du code dans le cadre du widget, chargé par un vrai Grist (Grist Desktop, instance jetable) au niveau d'accès « ${d.niveau} ». La tentative de lecture d'une autre table par ce code n'a pas abouti : ${etapes[1].barriere}.`,
           impact: "Le code injecté s'exécute avec les moyens du widget : il agit sur ce que le widget affiche et sur les données de la table qu'il reçoit. Ici, Grist a refusé la lecture hors de cette table ; un niveau d'accès plus large (`full`) l'aurait permise.",
@@ -128,7 +128,7 @@ export function evaluerEssais(phases, jeu) {
     else if (a.canariRecu) {
       essais.push(essai(7, titre, 'reussi', "des données du document sont arrivées au widget alors qu'il était limité à « none » (défaut de Grist, pas du widget)", { niveau: 'none', regle: 'D-REEL-07', severite: 'info' }));
       constats.push(constat({
-        regle: 'D-REEL-07', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+        regle: 'D-REEL-07', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
         titre: 'Grist a transmis des données à un widget limité au niveau « none »',
         constat: "Au niveau d'accès « none », des valeurs du document de test (canari) sont arrivées au widget. Ce n'est pas un défaut du widget : le niveau d'accès est appliqué par Grist.",
         impact: "À signaler à l'éditeur de Grist, en précisant la version testée. Ne pèse pas sur la note du widget.",
@@ -153,7 +153,7 @@ export function evaluerEssais(phases, jeu) {
         const hotes = [...new Set(fuites.map((r) => r.hote))];
         essais.push(essai(13, titre, 'reussi', `une valeur du document a été trouvée dans une requête vers ${hotes.join(', ')}`, { regle: 'D-REEL-13', severite: 'critique' }));
         constats.push(constat({
-          regle: 'D-REEL-13', axe: 'D', severite: 'critique', bloquant: true, confiance: 'prouve',
+          regle: 'D-REEL-13', axe: 'G', severite: 'critique', bloquant: true, confiance: 'prouve',
           titre: `Des données du document sortent du widget vers ${hotes.join(', ')} (canari retrouvé)`,
           constat: `${fuites.length} requête(s) émise(s) par le widget, chargé par un vrai Grist, contenaient une valeur du document de test (canari « ${resume(fuites[0].canari, 60)} ») : ${fuites.slice(0, 3).map((r) => `${r.methode} ${resume(r.url, 160)}`).join(' ; ')}. Les requêtes ont été interceptées par l'audit : rien n'est sorti de la machine.`,
           impact: "C'est la preuve que des données du document quittent bien le widget, pas seulement qu'une requête externe est tentée (D-RESEAU-01). En usage réel elles atteindraient ce domaine.",
@@ -176,7 +176,7 @@ export function evaluerEssais(phases, jeu) {
     else if (navs.length) {
       essais.push(essai(15, titre, 'reussi', `la page Grist a été redirigée vers ${resume(navs[0].url, 120)}`, { regle: 'D-REEL-15', severite: 'majeur' }));
       constats.push(constat({
-        regle: 'D-REEL-15', axe: 'D', severite: 'majeur', bloquant: false, confiance: 'prouve',
+        regle: 'D-REEL-15', axe: 'G', severite: 'majeur', bloquant: false, confiance: 'prouve',
         titre: 'Le widget redirige la page Grist qui l\'héberge',
         constat: `Le widget, chargé par un vrai Grist, a fait naviguer la page parente vers ${resume(navs[0].url, 200)} (navigation interceptée par l'audit).`,
         impact: "Un widget qui peut remplacer la page Grist peut présenter une fausse page de connexion à quelqu'un qui croit être dans son document.",
@@ -197,7 +197,7 @@ export function evaluerEssais(phases, jeu) {
       const liste = [popups.length ? `${popups.length} fenêtre(s) ouverte(s)` : null, dialogues.length ? `${dialogues.length} boîte(s) de dialogue (${[...new Set(dialogues.map((d) => d.type))].join(', ')})` : null, dl.length ? `${dl.length} téléchargement(s)` : null].filter(Boolean).join(', ');
       essais.push(essai(16, titre, 'reussi', liste, { regle: 'D-REEL-16', severite: 'majeur' }));
       constats.push(constat({
-        regle: 'D-REEL-16', axe: 'D', severite: 'majeur', bloquant: false, confiance: 'prouve',
+        regle: 'D-REEL-16', axe: 'G', severite: 'majeur', bloquant: false, confiance: 'prouve',
         titre: `Le widget ouvre des fenêtres, des boîtes de dialogue ou des téléchargements (${liste})`,
         constat: `Pendant le chargement dans un vrai Grist, le widget a produit : ${liste}. Les fenêtres ont été refermées, les boîtes de dialogue fermées et les téléchargements annulés par l'audit.`,
         impact: "Une boîte de dialogue bloque l'interface de Grist ; une fenêtre ou un téléchargement non demandés sont des vecteurs d'hameçonnage ou de dépôt de fichier.",
@@ -240,7 +240,7 @@ export function evaluerEssais(phases, jeu) {
           const precis = ["la liste des tables du document", "une table sans rapport avec le widget", "les tables système (structure, règles d'accès, vues)"].filter((_, i) => etapes[i].ok);
           essais.push(essai(8, titre8, 'reussi', `avec le niveau « ${niveau} », le code d'essai joué dans le widget a pu : ${precis.join(' ; ')}`, { niveau, regle: 'D-REEL-08', severite: 'info', nature: 'rayon', etapes, lus: precis }));
           constats.push(constat({
-            regle: 'D-REEL-08', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-08', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: `Avec le niveau « ${niveau} », du code étranger dans le widget lirait bien plus que sa table`,
             constat: `Du code exécuté dans le cadre du widget, comme le ferait une bibliothèque piégée, chargé par un vrai Grist (Grist Desktop, instance jetable) au niveau d'accès « ${niveau} », a pu : ${precis.join(' ; ')}. Essai fait sur le document de test de l'audit ; il mesure ce que le niveau permet, il ne prouve pas qu'une dépendance du widget soit piégée.`,
             impact: "Si une bibliothèque chargée par le widget était un jour compromise (compte du mainteneur piraté, version non figée, CDN compromis), elle aurait ce rayon d'action. Il grandit avec le niveau d'accès demandé. Le niveau demandé est déjà pesé par C-GRIST-03 : cette mesure n'ajoute pas de pénalité.",
@@ -267,7 +267,7 @@ export function evaluerEssais(phases, jeu) {
         if (autre?.canari) {
           essais.push(essai(9, titre9, 'reussi', `le jeton d'accès obtenu par le widget a ouvert un autre document de l'instance (canari retrouvé), au niveau « ${niveau} »`, { niveau, regle: 'D-REEL-09', severite: 'info', etapes }));
           constats.push(constat({
-            regle: 'D-REEL-09', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-09', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: "Un jeton d'accès obtenu par un widget ouvre un autre document de l'instance",
             constat: `Au niveau « ${niveau} », le jeton d'accès délivré par Grist au code du widget a permis de lire un autre document de l'instance jetable (son canari a été retrouvé). Ce n'est pas un défaut du widget : les jetons doivent être limités à leur document.`,
             impact: "À signaler à l'éditeur de Grist, en précisant la version testée. Ne pèse pas sur la note du widget.",
@@ -279,7 +279,7 @@ export function evaluerEssais(phases, jeu) {
           const phrase = `avec le niveau « ${niveau} », le code d'essai a obtenu un jeton d'accès${ecrit ? ' avec écriture' : ' en lecture'} et l'a utilisé pour interroger directement l'API du document${autre ? ' (un autre document de l\'instance est resté fermé)' : ''}`;
           essais.push(essai(9, titre9, 'reussi', phrase, { niveau, regle: 'D-REEL-09', severite: 'info', nature: 'rayon', etapes, ecriture: ecrit, autreDocumentFerme: !!autre }));
           constats.push(constat({
-            regle: 'D-REEL-09', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-09', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: `Avec le niveau « ${niveau} », du code étranger dans le widget obtiendrait un jeton d'accès à l'API du document`,
             constat: `Du code exécuté dans le cadre du widget, comme le ferait une bibliothèque piégée, a obtenu de Grist un jeton d'accès${ecrit ? ' avec écriture' : ' en lecture'} (valable quelques minutes) et s'en est servi pour appeler directement l'API du document (liste des tables, requête SQL). ${autre ? "Le même jeton n'a pas ouvert un autre document de l'instance. " : ''}Essai fait sur le document de test de l'audit ; il mesure ce que le niveau permet, il ne prouve pas qu'une dépendance du widget soit piégée.`,
             impact: "Un jeton permet de lire, et ici d'écrire, le document hors de l'interface du widget, depuis n'importe quel code qui s'exécute dans son cadre. Seule la politique de sécurité (CSP) du widget limite les adresses qu'il peut appeler. Le niveau demandé est déjà pesé par C-GRIST-03 : cette mesure n'ajoute pas de pénalité.",
@@ -300,7 +300,7 @@ export function evaluerEssais(phases, jeu) {
         if (w?.cree) {
           essais.push(essai(12, titre12, 'reussi', `le code d'essai a créé un webhook vers un hôte extérieur au niveau « ${niveau} »${w.listeContientLeWebhook ? ', et il figure dans la liste des webhooks du document' : ''}`, { niveau, regle: 'D-REEL-12', severite: 'majeur' }));
           constats.push(constat({
-            regle: 'D-REEL-12', axe: 'D', severite: 'majeur', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-12', axe: 'G', severite: 'majeur', bloquant: false, confiance: 'prouve',
             titre: `Du code dans le widget a pu créer un webhook (niveau « ${niveau} »)`,
             constat: `Du code exécuté dans le cadre du widget, comme le ferait une bibliothèque piégée, a créé dans le document de test un webhook vers un hôte extérieur (adresse neutralisée par l'audit : ${HOTE_PUITS}).`,
             impact: "Un webhook appartient au document, pas au widget : il resterait en place après le retrait du widget et continuerait d'envoyer les modifications du document à une adresse extérieure.",
@@ -340,7 +340,7 @@ export function evaluerEssais(phases, jeu) {
         if (protegeesExecutees.length) {
           essais.push(essai(21, titre, 'reussi', `${liste(protegeesExecutees)} : le fichier modifié a été exécuté alors que l'analyse du code le croit protégé par une empreinte (integrity)`, { niveau, regle: 'D-REEL-21', severite: 'critique', fichiers: protegeesExecutees.length }));
           constats.push(constat({
-            regle: 'D-REEL-21', axe: 'D', severite: 'critique', bloquant: true, confiance: 'prouve',
+            regle: 'D-REEL-21', axe: 'G', severite: 'critique', bloquant: true, confiance: 'prouve',
             titre: "Une bibliothèque modifiée à la source est exécutée malgré l'empreinte (integrity) déclarée",
             constat: `Le fichier ${resume(protegeesExecutees[0], 200)}${protegeesExecutees.length > 1 ? ` (et ${protegeesExecutees.length - 1} autre(s))` : ''}, servi à la même adresse avec une ligne de plus (un marqueur inoffensif, qui ne lit ni n'envoie rien), a été exécuté par le widget chargé dans un vrai Grist (niveau « ${niveau} »), alors que l'analyse du code le croit protégé par une empreinte. L'empreinte déclarée ne joue donc pas son rôle dans ce navigateur.`,
             impact: "Un fichier modifié par le CDN, ou par quiconque en prend le contrôle, s'exécuterait dans le widget avec ses droits : voir les essais 8 et 9 pour ce que cela donne avec le niveau d'accès accordé.",
@@ -351,7 +351,7 @@ export function evaluerEssais(phases, jeu) {
         } else if (executees.length) {
           essais.push(essai(21, titre, 'reussi', `${liste(executees)} : le fichier modifié a été exécuté, rien n'a vérifié son contenu (aucune empreinte déclarée)`, { niveau, regle: 'D-REEL-21', severite: 'info', nature: 'confirmation', dejaCompte: 'E-DEP-01', fichiers: executees.length }));
           constats.push(constat({
-            regle: 'D-REEL-21', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-21', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: "Une bibliothèque modifiée à la source serait exécutée par le widget (aucune empreinte)",
             constat: `Le fichier ${resume(executees[0], 200)}${executees.length > 1 ? ` (et ${executees.length - 1} autre(s))` : ''}, servi à la même adresse avec une ligne de plus (un marqueur inoffensif, qui ne lit ni n'envoie rien), a été exécuté par le widget chargé dans un vrai Grist (niveau « ${niveau} »). L'analyse du code ne lui reconnaissait aucune empreinte : l'essai le confirme.`,
             impact: "Confirme E-DEP-01, déjà noté : ce qu'un CDN compromis servirait s'exécuterait dans le widget avec ses droits (voir les essais 8 et 9). Cette mesure n'ajoute pas de pénalité.",
@@ -394,7 +394,7 @@ export function evaluerEssais(phases, jeu) {
         if (ouverts.length) {
           essais.push(essai(22, titre, 'reussi', `avec le niveau « ${niveau} », le code d'essai a pu envoyer vers l'extérieur par ${ouverts.length} voie(s) sur ${CANAUX.length} : ${ouverts.join(', ')}${fermes.length ? ` ; arrêtées par la CSP : ${fermes.join(', ')}` : ''}${inconnus.length ? ` ; sans observation : ${inconnus.join(', ')}` : ''}.${note}`, { niveau, regle: 'D-REEL-22', severite: 'info', nature: 'confirmation', dejaCompte: 'C-CSP-01, C-CSP-02 ou C-CSP-03', etapes, ouverts: ouverts.length, total: CANAUX.length, navigation }));
           constats.push(constat({
-            regle: 'D-REEL-22', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-22', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: `Si une dépendance du widget était piégée, ${ouverts.length} voie(s) de sortie sur ${CANAUX.length} lui seraient ouvertes`,
             constat: `Du code exécuté dans le cadre du widget, comme le ferait une bibliothèque piégée, chargé par un vrai Grist au niveau d'accès « ${niveau} », a tenté d'envoyer un marqueur vers un hôte extérieur factice (intercepté par l'audit, rien n'est sorti de la machine). Voies ouvertes : ${ouverts.join(', ')}.${fermes.length ? ` Voies arrêtées par la politique de sécurité (CSP) du widget : ${fermes.join(', ')}.` : ' Aucune voie arrêtée : le widget ne déclare pas de politique de sécurité qui les ferme.'}${note}`,
             impact: "La politique de sécurité (CSP) du widget est la seule barrière qui empêcherait du code compromis d'envoyer ce qu'il a lu (voir les essais 8 et 9 pour ce qu'il peut lire). Mesure d'un rayon d'action : elle ne prouve pas qu'une dépendance soit piégée. L'absence de CSP est déjà pesée par C-CSP-01 et C-CSP-02 : cette mesure n'ajoute pas de pénalité.",
@@ -424,7 +424,7 @@ export function evaluerEssais(phases, jeu) {
       else if (k.polluees?.length) {
         essais.push(essai(3, titre, 'reussi', `des données de cellule ont ajouté une propriété à Object.prototype dans le widget : ${k.polluees.join(', ')}`, { niveau, regle: 'D-REEL-03', severite: 'majeur', polluees: k.polluees }));
         constats.push(constat({
-          regle: 'D-REEL-03', axe: 'D', severite: 'majeur', bloquant: false, confiance: 'prouve',
+          regle: 'D-REEL-03', axe: 'G', severite: 'majeur', bloquant: false, confiance: 'prouve',
           titre: "Des données de cellule modifient les prototypes du widget (pollution de prototype)",
           constat: `Le document de test contenait des lignes dont le texte est un JSON piégé (\`__proto__\`, \`constructor.prototype\`) ou un chemin \`__proto__.clé\`. Après leur réception par le widget chargé dans un vrai Grist (niveau « ${niveau} »), \`Object.prototype\` portait une propriété qui ne peut venir que de ces données : ${k.polluees.join(', ')}.`,
           impact: "Quiconque peut écrire une cellule du document peut ajouter des propriétés à tous les objets du widget : cela ouvre la voie à un contournement de contrôles, à des erreurs en cascade ou, avec un bout de code du widget qui lit ces propriétés, à l'exécution de code (CWE-1321).",
@@ -456,7 +456,7 @@ export function evaluerEssais(phases, jeu) {
         const effets = [exec > 0 ? `une charge HTML reçue dans un message s'est exécutée dans le widget (${exec} fois)` : null, requetes > 0 ? `le widget a appelé ${requetes} fois l'adresse donnée par un message` : null].filter(Boolean);
         essais.push(essai(4, titre, 'reussi', `un cadre voisin sans droit a fait agir le widget par postMessage : ${effets.join(' ; ')}`, { niveau, regle: 'D-REEL-04', severite: 'majeur', executions: exec, requetes }));
         constats.push(constat({
-          regle: 'D-REEL-04', axe: 'D', severite: 'majeur', bloquant: false, confiance: 'prouve',
+          regle: 'D-REEL-04', axe: 'G', severite: 'majeur', bloquant: false, confiance: 'prouve',
           titre: "Le widget obéit à des messages postMessage venus d'un cadre quelconque",
           constat: `Dans un vrai Grist (niveau « ${niveau} »), un cadre voisin à l'origine opaque (« null »), sans aucun droit, a envoyé au widget des messages sous quatre formes (texte brut, objet, objet imbriqué, JSON) et sous les noms de champs usuels. Effet : ${effets.join(' ; ')}. Le widget n'a donc vérifié ni l'origine ni la source des messages qu'il reçoit.`,
           impact: "N'importe quelle page qui encadre le widget, ou un autre widget de la même page Grist, peut y faire exécuter du code (XSS par message, CWE-79 et CWE-346) ou lui faire appeler une adresse de son choix, avec les droits d'accès du widget.",
@@ -494,7 +494,7 @@ export function evaluerEssais(phases, jeu) {
         if (lus.length) {
           essais.push(essai(20, titre, 'reussi', `le cadre du widget a pu lire le document par l'API de l'instance avec la session de la personne : ${lus.join(' ; ')}, quel que soit son niveau d'accès (« ${niveau} »)`, { niveau, regle: 'D-REEL-20', severite: 'info', etapes }));
           constats.push(constat({
-            regle: 'D-REEL-20', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-20', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: "Un widget peut appeler l'API de l'instance Grist avec la session de la personne",
             constat: `Depuis le cadre du widget (origine différente de celle de Grist), un appel à l'API REST de l'instance de test avec la session de la personne a lu le document : ${lus.join(' ; ')}. Le niveau d'accès accordé au widget (« ${niveau} ») n'a donc pas borné ce que son code peut lire.`,
             impact: "Le niveau d'accès (none, read table, full) ne protège plus rien : tout code du widget lit et écrit comme la personne connectée. Ce n'est pas un défaut du widget mais de Grist ou de son déploiement (cookie de session, en-têtes CORS) : à signaler à l'éditeur ou à l'administrateur de l'instance, avec la version testée.",
@@ -542,7 +542,7 @@ export function evaluerEssais(phases, jeu) {
           if (ecr?.ok && d.relu === 'attendu') {
             essais.push(essai(17, titre17, 'reussi', `après un clic dans le widget, le code d'essai joué dans le cadre a remplacé le contenu du presse-papier par un texte de test (relu depuis la page Grist)`, { niveau, regle: 'D-REEL-17', severite: 'info', nature: 'rayon', etapes }));
             constats.push(constat({
-              regle: 'D-REEL-17', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+              regle: 'D-REEL-17', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
               titre: "Du code étranger dans le widget pourrait remplacer le contenu du presse-papier de la personne",
               constat: `Dans un vrai Grist (Grist Desktop, instance jetable), le cadre du widget a reçu de Grist le droit d'écrire dans le presse-papier (${delegation}). Après un clic de l'audit dans le widget, le code d'essai y a écrit un texte de test, que l'audit a relu depuis la page Grist. Le navigateur de l'audit accorde l'écriture au presse-papier à la page Grist, comme un Chrome ordinaire pour l'onglet actif.`,
               impact: "Une bibliothèque compromise pourrait, au prochain clic de la personne dans le widget, remplacer ce qu'elle a copié par un texte de son choix (une commande à coller dans un terminal, une adresse de virement). Ce droit est donné par Grist à tous les widgets : mesure d'un rayon d'action, sans pénalité de plus.",
@@ -571,7 +571,7 @@ export function evaluerEssais(phases, jeu) {
               const noms = ouverts.map(([, l]) => l);
               essais.push(essai(18, titre18, 'reussi', `le cadre du widget peut demander à la personne : ${noms.join(', ')} (${delegation})`, { niveau, regle: 'D-REEL-18', severite: 'info', nature: 'rayon', etapes, ouverts: noms }));
               constats.push(constat({
-                regle: 'D-REEL-18', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+                regle: 'D-REEL-18', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
                 titre: `Du code étranger dans le widget pourrait demander l'accès à : ${noms.join(', ')}`,
                 constat: `La politique d'autorisations que le navigateur applique au cadre du widget dans un vrai Grist (${delegation}) laisse le cadre demander : ${noms.join(', ')}. La personne verrait alors une demande d'autorisation du navigateur, au nom de Grist.`,
                 impact: "Une bibliothèque compromise pourrait profiter de la confiance que la personne accorde à Grist pour obtenir ces autorisations. Mesure d'un rayon d'action, sans pénalité de plus.",
@@ -609,7 +609,7 @@ export function evaluerEssais(phases, jeu) {
         if (gardes.length) {
           essais.push(essai(23, titre, 'reussi', `le widget a gardé des données du document dans le navigateur : ${gardes.join(', ')}`, { niveau, regle: 'D-REEL-23', severite: 'mineur', etapes, gardes }));
           constats.push(constat({
-            regle: 'D-REEL-23', axe: 'D', severite: 'mineur', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-23', axe: 'G', severite: 'mineur', bloquant: false, confiance: 'prouve',
             titre: `Le widget garde des données du document dans le navigateur (${gardes.join(', ')})`,
             constat: `Dans un vrai Grist (Grist Desktop, instance jetable), au niveau d'accès « ${niveau} », des valeurs du document de test (canaris et valeurs ordinaires) ont été retrouvées dans : ${gardes.join(', ')}. Elles y restent après la fermeture du document.${cookiesTexte}`,
             impact: "Des données du document, parfois personnelles, survivent dans le navigateur de la personne, hors de Grist, sans que le document ni ses règles d'accès les gouvernent. Tout code qui s'exécute sur la même origine peut les lire : les autres widgets du même hébergeur, une bibliothèque compromise (essais 8 à 10). Question de conservation des données (RGPD) autant que de sécurité.",
@@ -645,7 +645,7 @@ export function evaluerEssais(phases, jeu) {
         if (acceptees.length) {
           essais.push(essai(24, titre, 'reussi', `le widget a écrit dans le document dès son chargement, sans clic ni saisie : ${acceptees.length} appel(s) accepté(s) par Grist${actions.length ? ` (${actions.join(', ')})` : ''}`, { niveau, regle: 'D-REEL-24', severite: 'info', nature: 'comportement', appels: acceptees.length, actions }));
           constats.push(constat({
-            regle: 'D-REEL-24', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-24', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: "Le widget modifie le document dès son chargement, sans action de la personne",
             constat: `Dans un vrai Grist (Grist Desktop, instance jetable), au niveau d'accès « ${niveau} », le widget a appelé \`applyUserActions\` ${acceptees.length} fois pendant son chargement${actions.length ? ` (${actions.join(', ')})` : ''}, sans que l'audit clique ni saisisse quoi que ce soit ; Grist a accepté ces écritures.`,
             impact: "Un widget qui écrit tout seul modifie des données que la personne n'a pas touchées (et remplit l'historique du document). Parfois voulu (initialiser une colonne), parfois une boucle ou une erreur. Information sur le comportement, sans pénalité.",
@@ -686,7 +686,7 @@ export function evaluerEssais(phases, jeu) {
           const faits = [...(nouvellesCharge.length ? [`${nouvellesCharge.reduce((n, d) => n + d.n, 0)} erreur(s) non rattrapée(s) : ${liste(nouvellesCharge)}`] : []), ...(figeCharge ? ["son cadre ne répondait plus au bout de 10 s"] : [])];
           essais.push(essai(2, t2, 'reussi', `avec des valeurs limites dans la table (${r.lignes} lignes), le widget : ${faits.join(' ; ')}`, { niveau, regle: 'D-REEL-02', severite: 'mineur', nature: 'comportement', erreurs: nouvellesCharge.slice(0, 5), fige: figeCharge }));
           constats.push(constat({
-            regle: 'D-REEL-02', axe: 'D', severite: 'mineur', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-02', axe: 'G', severite: 'mineur', bloquant: false, confiance: 'prouve',
             titre: figeCharge ? 'Le widget se fige avec des valeurs limites dans la table' : 'Le widget lève des erreurs non rattrapées avec des valeurs limites dans la table',
             constat: `Dans un vrai Grist (Grist Desktop, instance jetable), au niveau d'accès « ${niveau} », la table du widget a reçu ${r.lignes} lignes aux valeurs limites (cellule de 1 Mo, texte de droite à gauche, caractère nul, émoji composé, vide, null, HTML, pourcentage mal formé, et pour un widget qui lit toute la table : liste, erreur, date invalide). Le widget : ${faits.join(' ; ')}. Les autres passes, sans ces valeurs, n'ont pas produit ces erreurs.`,
             impact: "Une personne qui peut écrire dans le document peut y poser de telles valeurs : le widget s'arrête de s'afficher ou se fige pour tous ceux qui ouvrent le document (déni de service du widget). Les erreurs de bibliothèques tierces ne sont pas attribuées au widget : seules celles dont la pile passe par son code le sont.",
@@ -708,7 +708,7 @@ export function evaluerEssais(phases, jeu) {
             const faits = [...(nouvelles.length ? [`${nouvelles.reduce((n, d) => n + d.n, 0)} erreur(s) non rattrapée(s) nouvelle(s) : ${liste(nouvelles)}`] : []), ...(figeRafale ? ["son cadre ne répondait plus au bout de 10 s"] : [])];
             essais.push(essai(6, t6, 'reussi', `après une rafale de changements du document (30 lots de 50 mises à jour, puis des ajouts et retraits de lignes), le widget : ${faits.join(' ; ')}`, { niveau, regle: 'D-REEL-06', severite: 'mineur', nature: 'comportement', erreurs: nouvelles.slice(0, 5), fige: figeRafale }));
             constats.push(constat({
-              regle: 'D-REEL-06', axe: 'D', severite: 'mineur', bloquant: false, confiance: 'prouve',
+              regle: 'D-REEL-06', axe: 'G', severite: 'mineur', bloquant: false, confiance: 'prouve',
               titre: figeRafale ? 'Le widget se fige quand le document change beaucoup et vite' : 'Le widget lève des erreurs non rattrapées quand le document change beaucoup et vite',
               constat: `Dans un vrai Grist (Grist Desktop, instance jetable), au niveau d'accès « ${niveau} », le document a reçu une rafale de changements (30 lots de 50 mises à jour envoyés ensemble, puis dix ajouts et retraits de lignes). Le widget : ${faits.join(' ; ')}. Ces erreurs n'existaient pas avant la rafale.`,
               impact: "Un document très actif (import, formules, plusieurs personnes qui saisissent) peut faire tomber ou figer le widget. Ce n'est pas un essai de charge : ni fuite de mémoire ni boucle sans erreur ne sont mesurées.",
@@ -751,7 +751,7 @@ export function evaluerEssais(phases, jeu) {
         if (faits.length) {
           essais.push(essai(5, titre, 'reussi', `quand son adresse affirme « access=full&readonly=false » alors que Grist lui accorde « ${niveau} », ${faits.join(' ; ')}, ce qu'il ne fait pas avec l'adresse normale`, { niveau, regle: 'D-REEL-05', severite: 'info', nature: 'faiblesse', faits, nouveaux }));
           constats.push(constat({
-            regle: 'D-REEL-05', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-05', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: "Le widget règle sa conduite sur son adresse plutôt que sur le niveau d'accès que Grist lui accorde",
             constat: `Dans un vrai Grist (Grist Desktop, instance jetable), au niveau d'accès « ${niveau} », le widget a été appelé avec une adresse qui affirme \`access=full&readonly=false\` (Grist y ajoute ensuite ses propres paramètres sans retirer les faux). Il a changé de conduite : ${faits.join(' ; ')}. Avec l'adresse normale, au même niveau, il ne le fait pas.`,
             impact: "Le niveau d'accès réel est fixé par Grist, pas par l'adresse : le widget n'obtient rien de plus. Mais un widget qui se règle sur son adresse (il affiche l'édition, demande plus d'accès, tente d'écrire) se laisse piloter par quiconque fabrique l'adresse ou la configuration de la section. Information sans pénalité.",
@@ -780,7 +780,7 @@ export function evaluerEssais(phases, jeu) {
       else if (p.executeDans && p.origineGrist && p.executeDans === p.origineGrist) {
         essais.push(essai(14, titre, 'reussi', `la pièce jointe HTML s'est exécutée sur l'origine de Grist (${p.origineGrist}) quand on a ouvert son adresse`, { regle: 'D-REEL-14', severite: 'info', entetes: e }));
         constats.push(constat({
-          regle: 'D-REEL-14', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+          regle: 'D-REEL-14', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
           titre: "Une pièce jointe HTML du document s'exécute sur l'origine de Grist",
           constat: `Dans un vrai Grist (Grist Desktop, instance jetable), une pièce jointe HTML déposée dans le document de test, ouverte par son adresse avec la session de la personne, a exécuté son script sur l'origine de Grist (${p.origineGrist}). En-têtes reçus : ${Object.entries(e).map(([k, v]) => `${k} : ${resume(v, 80)}`).join(' ; ') || 'aucun des en-têtes suivis'}.`,
           impact: "Quiconque peut déposer une pièce jointe dans un document peut y faire exécuter du code avec les droits de la personne qui l'ouvre, et un widget hébergé à cette adresse lirait la page Grist qui l'encadre (`window.parent.document`) et contournerait les niveaux d'accès. Défaut de Grist ou de son déploiement, pas du widget : sans effet sur la note, mais grave pour l'instance.",
@@ -815,7 +815,7 @@ export function evaluerEssais(phases, jeu) {
       if (absents.length) {
         essais.push(essai(19, titre, 'reussi', `la page du document, servie par Grist, n'envoie pas : ${absents.join(' ; ')}`, { regle: 'D-REEL-19', severite: 'info', absents, presents: MESURES.length - absents.length, total: MESURES.length }));
         constats.push(constat({
-          regle: 'D-REEL-19', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+          regle: 'D-REEL-19', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
           titre: `La page Grist qui héberge le widget n'envoie pas ${absents.length === MESURES.length ? 'ses' : `${absents.length} de ses`} en-têtes de sécurité`,
           constat: `Dans un vrai Grist (Grist Desktop, instance jetable), la réponse de la page du document, lue dans le navigateur, ne comporte pas : ${absents.join(' ; ')}.`,
           impact: "Une page de Grist sans ces en-têtes peut être incluse dans un cadre par une page tierce (détournement de clic) et n'est pas bridée par une CSP ; le widget n'y est pour rien. C'est une mesure de Grist et de son déploiement : un serveur Grist derrière un proxy peut poser ces en-têtes, que cette instance jetable n'a pas. Information sans pénalité.",
@@ -846,7 +846,7 @@ export function evaluerEssais(phases, jeu) {
         if (faits.length) {
           essais.push(essai(10, titre, 'reussi', `avec le niveau « ${niveau} », le code d'essai joué dans le widget a pu, d'après le document relu côté serveur : ${faits.join(' ; ')}`, { niveau, regle: 'D-REEL-10', severite: 'info', nature: 'rayon', etapes, faits }));
           constats.push(constat({
-            regle: 'D-REEL-10', axe: 'D', severite: 'info', bloquant: false, confiance: 'prouve',
+            regle: 'D-REEL-10', axe: 'G', severite: 'info', bloquant: false, confiance: 'prouve',
             titre: `Avec le niveau « ${niveau} », du code étranger dans le widget pourrait modifier le document (${faits.join(', ')})`,
             constat: `Du code exécuté dans le cadre du widget, comme le ferait une bibliothèque piégée, chargé par un vrai Grist (Grist Desktop, instance jetable) au niveau d'accès « ${niveau} », a pu : ${faits.join(' ; ')}. L'audit a relu le document de test côté serveur : ces effets y sont. Les essais visent des tables créées pour l'audit, jamais le document du widget.`,
             impact: "Une bibliothèque compromise pourrait, avec le niveau accordé au widget, supprimer des tables, détruire des colonnes et modifier les règles d'accès du document (les fermer ou les ouvrir). Le niveau demandé est déjà pesé par C-GRIST-03 : cette mesure n'ajoute pas de pénalité. La reprise après de tels effets dépend de l'historique et des sauvegardes du document : elle n'est pas mesurée ici.",
@@ -866,6 +866,18 @@ export function evaluerEssais(phases, jeu) {
   const manquantes = [...new Map(chargees.flatMap((o) => o.dependancesNonResolues ?? []).map((d) => [d.url, d])).values()];
   if (manquantes.length) {
     const hotes = [...new Set(manquantes.map((d) => d.hote).filter(Boolean))].slice(0, 3).join(', ');
+    const avant = essais.filter((e) => e.resultat === 'rien_observe' && e.id !== 19 && e.id !== 14).length;
+    // Des essais qui ne prouvent plus rien : l'axe des pen-tests n'est mesuré qu'en partie, et la note ne doit pas se lire comme complète.
+    if (avant) {
+      constats.push(constat({
+        regle: 'D-REEL-BIBLIOTHEQUES', axe: 'G', severite: 'info', confiance: 'certain',
+        titre: `${manquantes.length} bibliothèque(s) du widget non jouée(s) : ${avant} essai(s) ne prouvent rien`,
+        constat: `${manquantes.length} bibliothèque(s) du widget (${hotes || 'hôte inconnu'}) n'ont pas pu être chargées pendant les essais : leur code n'a pas été joué. ${avant} essai(s) qui n'avaient rien observé sont passés à « Pas testé », car un « rien observé » ne prouverait rien.`,
+        impact: "La note de cet axe ne dit rien des essais non testés : elle ne vaut pas absence de problème sur ce qui n'a pas pu être joué.",
+        remediation: "Relancer avec un accès à Internet direct (un proxy d'entreprise peut empêcher le téléchargement des bibliothèques par l'outil), ou embarquer les bibliothèques dans le dépôt, ou déclarer leurs adresses en clair.",
+        mesurePartielle: true,
+      }));
+    }
     essais.forEach((e, i) => {
       if (e.resultat !== 'rien_observe' || e.id === 19 || e.id === 14) return; // les essais 14 et 19 mesurent Grist : aucun code du widget n'y entre
       essais[i] = essai(e.id, e.titre, 'non_teste', `${manquantes.length} bibliothèque(s) du widget n'ont pas pu être chargées pendant l'essai (${hotes}) : leur code n'a pas été joué, « rien observé » ne prouverait rien`, { ...(e.niveau ? { niveau: e.niveau } : {}), bibliothequesManquantes: manquantes.length });
@@ -879,7 +891,7 @@ export function evaluerEssais(phases, jeu) {
 /** Constat d'information quand le mode « Grist réel » n'a pas pu s'exécuter : jamais une note meilleure, jamais « rien trouvé ». */
 export function constatIndisponible(cause) {
   return constat({
-    regle: 'D-REEL-INDISPONIBLE', axe: 'D', severite: 'info', confiance: 'certain',
+    regle: 'D-REEL-INDISPONIBLE', axe: 'G', severite: 'info', confiance: 'certain',
     titre: 'Essais contre un Grist réel non exécutés',
     constat: `Le mode --grist-reel n'a pas pu s'exécuter : ${resume(cause, 500)}`,
     impact: "Les essais contre un vrai Grist (XSS avec le niveau d'accès réel, sorties de données mesurées par canaris, navigation et fenêtres) sont absents de ce rapport. Ce n'est pas une absence de risque, c'est une absence de mesure ; les constats de l'axe D joués contre le faux hôte de test restent valables.",

@@ -12,7 +12,7 @@
 import { SEVERITES, CONFIANCES } from '../moteur/modele.js';
 import { raisonsDeTroncature } from '../contexte/inventaire.js';
 import { libelleDeBibliotheque, regrouperParBibliotheque } from '../moteur/bibliotheque.js';
-import { htmlGristReel, cssGristReel } from './grist-reel.js';
+import { htmlGristReel, constatsNonReclames, couvertureEssais, cssGristReel } from './grist-reel.js';
 
 const SEUIL_GROUPE = 4;
 
@@ -56,14 +56,14 @@ ${css()}
   <section class="section-meteres" aria-labelledby="titre-axes">
     <h2 id="titre-axes">Notation par axe</h2>
     <div class="grille-meteres">
-      ${Object.values(notation.parAxe).map(metre).join('\n')}
+      ${Object.values(notation.parAxe).map((axe) => metre(axe, meta)).join('\n')}
     </div>
     <ul class="legende-bandes" aria-label="Légende des couleurs de score">
       <li><span class="pastille" data-bande="bonne"></span>≥ 80 conforme</li>
       <li><span class="pastille" data-bande="attention"></span>60–79 sous réserve</li>
       <li><span class="pastille" data-bande="serieuse"></span>40–59 insuffisant</li>
       <li><span class="pastille" data-bande="critique"></span>&lt; 40 critique</li>
-      <li><span class="pastille" data-bande="neutre"></span>non exécuté</li>
+      <li><span class="pastille" data-bande="neutre"></span>non exécuté ou non lancé</li>
     </ul>
   </section>
 
@@ -76,15 +76,13 @@ ${css()}
   </nav>
 
   <main class="axes">
-    ${Object.values(notation.parAxe).map((axe) => sectionAxe(axe)).join('\n')}
+    ${Object.values(notation.parAxe).map((axe) => sectionAxe(axe, meta)).join('\n')}
   </main>
-
-  ${htmlGristReel(meta.gristReel)}
 
   ${blocSyntheseExterne(notation)}
 
   <footer class="pied">
-    <p>gwaudit v${echapper(meta.version)} — audit automatisé de widgets Grist. Six axes : qualité, lisibilité, sécurité statique, sécurité en condition réelle, dépendances, conformité. Un score élevé n'emporte aucune certification ; un point bloquant suffit à rendre le verdict NON CONFORME, quel que soit le reste — mais ni l'un ni l'autre n'empêche d'installer le widget. C'est un signal de risque, pas une autorisation.</p>
+    <p>gwaudit v${echapper(meta.version)} — audit automatisé de widgets Grist. Six axes : qualité, lisibilité, sécurité statique, sécurité en condition réelle, dépendances, conformité ; un septième, les pen-tests contre un Grist réel, quand ils sont lancés. Un score élevé n'emporte aucune certification ; un point bloquant suffit à rendre le verdict NON CONFORME, quel que soit le reste — mais ni l'un ni l'autre n'empêche d'installer le widget. C'est un signal de risque, pas une autorisation.</p>
   </footer>
 </div>
 `;
@@ -142,7 +140,13 @@ function blocBloquants(bloquants) {
   </section>`;
 }
 
-function metre(axe) {
+/** Les pen-tests : « 21/23 essais joués » à côté du score, pour qu'un score ne se lise pas sans ce qui a pu être testé. */
+function couvertureDe(axe, meta) {
+  const c = axe.code === 'G' && !axe.nonExecute ? couvertureEssais(meta?.gristReel) : null;
+  return c ? ` · ${c.testes}/${c.applicables} essais joués` : '';
+}
+
+function metre(axe, meta) {
   const bande = axe.nonExecute ? 'neutre' : bandeDe(axe.score, false);
   const largeur = axe.nonExecute ? 0 : Math.max(2, axe.score);
   return `
@@ -151,11 +155,11 @@ function metre(axe) {
           <span class="metre-code">${axe.code}</span>
           <span class="metre-titre">${echapper(axe.titre)}</span>
         </div>
-        <div class="metre-piste" role="img" aria-label="${echapper(axe.titre)} : ${axe.nonExecute ? 'non exécuté' : axe.empeche ? 'noté 0 sur 100, mesure empêchée par le widget' : `${axe.score} sur 100${axe.partiel ? ', mesure partielle' : ''}`}">
+        <div class="metre-piste" role="img" aria-label="${echapper(axe.titre)} : ${axe.nonDemande ? 'non lancé' : axe.nonExecute ? 'non exécuté' : axe.empeche ? 'noté 0 sur 100, mesure empêchée par le widget' : `${axe.score} sur 100${axe.partiel ? ', mesure partielle' : ''}`}">
           <div class="metre-remplissage" data-bande="${bande}" style="width:${largeur}%"></div>
         </div>
         <div class="metre-pied">
-          <span class="metre-valeur">${axe.nonExecute ? 'non exécuté' : axe.empeche ? '0/100 · mesure empêchée' : `${axe.score}/100${axe.partiel ? ' · mesure partielle' : ''}`}</span>
+          <span class="metre-valeur">${axe.nonDemande ? 'non lancé · hors de la note' : axe.nonExecute ? 'non exécuté' : axe.empeche ? '0/100 · mesure empêchée' : `${axe.score}/100${axe.partiel ? ' · mesure partielle' : ''}${couvertureDe(axe, meta)}`}</span>
           ${!axe.nonExecute ? `<span class="metre-chips">${chipsSeverite(axe.repartition)}</span>` : ''}
         </div>
       </a>`;
@@ -166,18 +170,26 @@ function chipsSeverite(rep) {
     .map((s) => `<span class="chip" data-sev="${s}">${rep[s]}</span>`).join('');
 }
 
-function sectionAxe(axe) {
-  const constats = trierPourAffichage(axe.constats);
+const AIDE_PENTESTS_NON_LANCES = "Les pen-tests jouent le widget contre un vrai Grist (Grist Desktop jetable) et tentent des attaques : ils comptent dans la note quand ils sont lancés. Pour les lancer : cocher « Ajouter les essais contre un Grist réel » dans l'interface, ou ajouter --grist-reel à la ligne de commande. Non lancés, ils n'entrent ni dans la note ni dans le verdict.";
+
+function sectionAxe(axe, meta) {
+  // Les pen-tests : un bloc dépliant par essai (y compris ceux qui n'ont donné aucun constat), les constats de l'axe qui ne sont pas ceux d'un essai restent une liste ordinaire.
+  const reel = axe.code === 'G' && !axe.nonExecute && meta?.gristReel?.execute ? meta.gristReel : null;
+  const constats = trierPourAffichage(reel ? constatsNonReclames(reel, axe.constats) : axe.constats);
   return `
     <section class="axe" id="axe-${axe.code}" aria-labelledby="titre-axe-${axe.code}">
       <div class="axe-entete">
         <h2 id="titre-axe-${axe.code}"><span class="axe-code">${axe.code}</span> ${echapper(axe.titre)}</h2>
-        ${axe.nonExecute
-          ? `<p class="axe-non-execute">Axe non exécuté lors de cet audit${constats.length ? ' — voici pourquoi.' : '.'}</p>`
-          : `<p class="axe-score">Score <strong>${axe.score}/100</strong> — ${chipsSeverite(axe.repartition)}</p>`}
+        ${axe.nonDemande
+          ? `<p class="axe-non-execute">Non lancés lors de cet audit.</p>`
+          : axe.nonExecute
+            ? `<p class="axe-non-execute">Axe non exécuté lors de cet audit${constats.length ? ' — voici pourquoi.' : '.'}</p>`
+            : `<p class="axe-score">Score <strong>${axe.score}/100</strong>${couvertureDe(axe, meta)} — ${chipsSeverite(axe.repartition)}</p>`}
+        ${axe.nonDemande ? `<p class="axe-partiel">${echapper(AIDE_PENTESTS_NON_LANCES)}</p>` : ''}
         ${axe.partiel ? '<p class="axe-partiel">Mesure partielle : une vérification de cet axe n\'a pas été faite, voir l\'information qui la nomme ci-dessous. Ce score ne vaut pas absence de problème sur ce qui n\'a pas été vérifié.</p>' : ''}
         ${axe.empeche ? blocAxeEmpeche(axe) : ''}
       </div>
+      ${reel ? htmlGristReel(reel, axe.constats) : ''}
       ${constats.length ? `<div class="liste-constats">${grouperEtRendre(constats)}</div>` : ''}
     </section>`;
 }

@@ -1,7 +1,7 @@
 /**
- * Rendu de la sous-section « Essais contre un Grist réel » (mode --grist-reel), en HTML et en Markdown.
- * Les constats eux-mêmes (D-REEL-NN) sont des constats ordinaires, notés et exportés comme les autres ;
- * cette section remet ensemble ce que chaque essai a donné, y compris ce qui n'a PAS donné de constat
+ * Rendu du contenu de l'axe G « Pen-tests contre un Grist réel » (mode --grist-reel), en HTML et en Markdown : un bloc dépliant par essai, comme les constats des autres axes.
+ * Les constats eux-mêmes (D-REEL-NN) sont des constats ordinaires de l'axe G, notés et exportés comme les autres ;
+ * l'axe remet ensemble ce que chaque essai a donné, y compris ce qui n'a PAS donné de constat
  * (essai bloqué par Grist ou par le navigateur, rien observé, non testé), pour que « rien trouvé » ne se lise
  * jamais à la place de « pas testé ».
  *
@@ -235,42 +235,83 @@ function markdownBibliotheques(b) {
   ];
 }
 
-export function htmlGristReel(r) {
+/** Ordre de lecture des essais : ce qui est mal d'abord (le plus grave en tête), puis les expositions, ce qui n'a pas été testé, ce qui est sans objet, ce qui est bien. */
+const RANG_VERDICT = { pas_bien: 0, a_savoir: 1, non_teste: 2, sans_objet: 3, bien: 4 };
+const RANG_SEVERITE = { critique: 0, majeur: 1, mineur: 2, info: 3 };
+function trierEssais(essais) {
+  return [...essais].sort((a, b) => RANG_VERDICT[verdictEssai(a).cle] - RANG_VERDICT[verdictEssai(b).cle]
+    || (RANG_SEVERITE[a.severite] ?? 4) - (RANG_SEVERITE[b.severite] ?? 4) || a.id - b.id);
+}
+
+/** Combien d'essais ont été joués pour de bon, sur combien s'appliquent au widget (les « sans objet » ne comptent ni d'un côté ni de l'autre). */
+export function couvertureEssais(r) {
+  if (!r?.execute) return null;
+  const applicables = r.essais.filter((e) => e.resultat !== 'sans_objet');
+  return { testes: applicables.filter((e) => e.resultat !== 'non_teste').length, applicables: applicables.length };
+}
+
+/** Les constats de l'axe qui ne sont pas ceux d'un essai (par exemple « bibliothèques non jouées ») : ils s'affichent comme ceux des autres axes. */
+export function constatsNonReclames(r, constats) {
+  const regles = new Set((r?.essais ?? []).map((e) => e.regle).filter(Boolean));
+  return constats.filter((c) => !regles.has(c.regle));
+}
+
+/** Un essai, en bloc dépliant comme n'importe quel constat des autres axes : rayure et pastille de la couleur du verdict, titre, mot du verdict ; le détail s'ouvre dessous. */
+function blocEssai(e, constats) {
+  const v = verdictEssai(e);
+  const c = conseilEssai(e);
+  const siens = constats.filter((x) => x.regle && x.regle === e.regle);
+  const id = siens[0]?.uid ?? `essai-${e.id}`;
+  const sev = e.resultat === 'reussi' && e.severite ? e.severite : 'aucun';
+  const etapes = e.etapes?.length ? `<p class="occurrences-titre">Étapes :</p><ol class="occurrences">${e.etapes.map((x) => `<li>${x.ok ? 'Franchie' : 'Arrêtée'} : ${esc(x.etape)}${x.barriere ? ` — ${esc(x.barriere)}` : ''}</li>`).join('')}</ol>` : '';
+  const impact = siens.find((x) => x.impact)?.impact;
+  const referentiels = siens.find((x) => x.referentiels?.length)?.referentiels;
+  return `
+      <details class="constat essai" data-sev="${sev}" data-bande="${v.bande}" id="${esc(id)}">
+        <summary>
+          <span class="rayure" data-bande="${v.bande}" aria-hidden="true"></span>
+          <span class="constat-corps">
+            <span class="constat-ligne1">
+              <code class="regle">Essai ${e.id}</code>
+              ${siens.some((x) => x.bloquant) ? '<span class="badge-bloquant" title="Un point bloquant suffit à rendre le verdict NON CONFORME ; il n’empêche pas d’installer ce widget, c’est un signal de risque, pas une interdiction.">BLOQUANT</span>' : ''}
+              <span class="constat-titre">${esc(e.titre)}</span>
+            </span>
+            <span class="constat-ligne2"><span class="reel-verdict" data-bande="${v.bande}"><span aria-hidden="true">${v.symbole}</span> ${esc(v.mot)}</span> <span class="reel-precision">${esc(v.precision)} · niveau ${esc(e.niveau ?? 'tous')}</span></span>
+          </span>
+          <span class="chevron" aria-hidden="true"></span>
+        </summary>
+        <div class="constat-detail">
+          <p class="reel-quoi">${esc(QUOI[e.id] ?? '')}</p>
+          <p class="reel-clair"><strong>En clair.</strong> ${esc(enClair(e))}</p>
+          <p class="reel-mal" data-classe="${c.classe}"><strong>Le widget a-t-il fait quelque chose de mal ?</strong> ${enCode(c.mal)}</p>
+          <div class="reel-faire"><strong>Que faire.</strong> <ul>${c.faire.map((a) => `<li>${enCode(a)}</li>`).join('')}</ul></div>
+          ${impact ? `<p><strong>Impact.</strong> ${esc(impact)}</p>` : ''}
+          <p class="reel-detail"><strong>Observé.</strong> ${esc(e.detail)}${e.barriere ? ` <em>(barrière : ${esc(e.barriere)})</em>` : ''} <span class="reel-brut">· Résultat : ${esc(LIBELLE[e.resultat])}</span></p>
+          ${etapes}
+          <p class="constat-meta">${e.regle ? `Règle : <code>${esc(e.regle)}</code> · ` : 'Aucune règle : cet essai ne produit un constat que s\'il trouve un défaut · '}Confiance : mesuré dans un Grist réel${referentiels ? ` · Référentiel(s) : ${esc(referentiels.join(' ; '))}` : ''}</p>
+        </div>
+      </details>`;
+}
+
+/**
+ * Le contenu de l'axe « Pen-tests contre un Grist réel » : la synthèse, un bloc dépliant par essai (comme les constats des autres axes), les bibliothèques jouées,
+ * le contexte. `constats` sont ceux de l'axe : ceux d'un essai lui sont rattachés (ancre, badge bloquant, impact), les autres se rendent à part (voir constatsNonReclames).
+ */
+export function htmlGristReel(r, constats = []) {
   if (!r) return '';
   if (!r.execute) {
-    return `
-  <section class="synthese-externe reel" aria-labelledby="titre-reel">
-    <h2 id="titre-reel">Essais contre un Grist réel</h2>
-    <p><strong>Non exécutés.</strong> ${esc(r.cause ?? 'cause inconnue')} Ce n'est pas une absence de risque : c'est une absence de mesure.</p>
-  </section>`;
+    return `<p class="reel-resume" data-bande="attention"><strong>Non exécutés.</strong> ${esc(r.cause ?? 'cause inconnue')} Ce n'est pas une absence de risque : c'est une absence de mesure.</p>`;
   }
   const synthese = syntheseEssais(r.essais);
-  const cartes = r.essais.map((e) => {
-    const v = verdictEssai(e);
-    const c = conseilEssai(e);
-    const etapes = e.etapes?.length ? `<details><summary>Étapes</summary><ol>${e.etapes.map((s) => `<li>${s.ok ? 'Franchie' : 'Arrêtée'} : ${esc(s.etape)}${s.barriere ? ` — ${esc(s.barriere)}` : ''}</li>`).join('')}</ol></details>` : '';
-    return `<li class="reel-essai" data-bande="${v.bande}">
-        <div class="reel-entete"><span class="reel-verdict" data-bande="${v.bande}"><span aria-hidden="true">${v.symbole}</span> ${esc(v.mot)}</span><span class="reel-precision">${esc(v.precision)}</span><span class="reel-num">Essai ${e.id} · niveau ${esc(e.niveau ?? 'tous')}</span></div>
-        <p class="reel-titre">${esc(e.titre)}</p>
-        <p class="reel-quoi">${esc(QUOI[e.id] ?? '')}</p>
-        <p class="reel-clair"><strong>En clair.</strong> ${esc(enClair(e))}</p>
-        <p class="reel-mal" data-classe="${c.classe}"><strong>Le widget a-t-il fait quelque chose de mal ?</strong> ${enCode(c.mal)}</p>
-        <div class="reel-faire"><strong>Que faire.</strong> <ul>${c.faire.map((a) => `<li>${enCode(a)}</li>`).join('')}</ul></div>
-        <p class="reel-detail"><strong>Observé.</strong> ${esc(e.detail)}${e.barriere ? ` <em>(barrière : ${esc(e.barriere)})</em>` : ''} <span class="reel-brut">· Résultat : ${esc(LIBELLE[e.resultat])}</span>${e.regle ? ` <code>${esc(e.regle)}</code>` : ''}</p>
-        ${etapes}
-      </li>`;
-  });
   return `
-  <section class="synthese-externe reel" aria-labelledby="titre-reel">
-    <h2 id="titre-reel">Essais contre un Grist réel</h2>
+    <div class="reel">
     <p class="reel-resume" data-bande="${synthese.bande}"><strong>${esc(synthese.titre)}.</strong> ${esc(synthese.detail)}</p>
-    <ul class="reel-liste">
-      ${cartes.join('\n      ')}
-    </ul>
+    <div class="liste-constats reel-liste">${trierEssais(r.essais).map((e) => blocEssai(e, constats)).join('\n')}
+    </div>
     ${htmlBibliotheques(r.bibliotheques)}
     <p class="reel-contexte">${esc(bandeau(r))}</p>
     <p class="reel-contexte">${esc(COMMENT_LIRE)} ${esc(nonJoues(r))}</p>
-  </section>`;
+    </div>`;
 }
 
 /** Style de la section, ajouté à la feuille du rapport HTML (mêmes variables de couleur que le reste, thèmes clair et sombre compris). */
@@ -279,26 +320,20 @@ export const cssGristReel = `
 .reel-resume[data-bande="bonne"]{background:var(--bonne-bg); border-left-color:var(--bonne);}
 .reel-resume[data-bande="attention"]{background:var(--attention-bg); border-left-color:var(--attention);}
 .reel-resume[data-bande="critique"]{background:var(--critique-bg); border-left-color:var(--critique);}
-.reel-liste{list-style:none; padding:0; margin:12px 0; display:grid; gap:10px;}
-.reel-essai{background:var(--surface); border:1px solid var(--border); border-left-width:5px; border-radius:10px; padding:10px 14px; font-size:13.5px; line-height:1.5;}
-.reel-essai[data-bande="bonne"]{border-left-color:var(--bonne);}
-.reel-essai[data-bande="serieuse"]{border-left-color:var(--serieuse);}
-.reel-essai[data-bande="critique"]{border-left-color:var(--critique);}
-.reel-essai[data-bande="neutre"]{border-left-color:var(--neutre);}
-.reel-essai p{margin:6px 0;}
-.reel-entete{display:flex; flex-wrap:wrap; align-items:center; gap:4px 12px;}
-.reel-verdict{font-weight:700; font-size:13px; padding:2px 10px; border-radius:999px; color:var(--text); background:var(--neutre-bg);}
+.reel-liste{margin:12px 0;}
+.rayure[data-bande="bonne"]{background:var(--bonne);}
+.rayure[data-bande="serieuse"]{background:var(--serieuse);}
+.rayure[data-bande="critique"]{background:var(--critique);}
+.rayure[data-bande="neutre"]{background:var(--neutre);}
+.reel-verdict{font-weight:700; font-size:12.5px; padding:1px 9px; border-radius:999px; color:var(--text); background:var(--neutre-bg);}
 .reel-verdict[data-bande="bonne"]{background:var(--bonne-bg);}
 .reel-verdict[data-bande="serieuse"]{background:var(--serieuse-bg);}
 .reel-verdict[data-bande="critique"]{background:var(--critique-bg);}
-.reel-precision{color:var(--text-2); font-size:12.5px;}
-.reel-num{margin-left:auto; color:var(--text-muted); font-size:12px;}
-.reel-titre{font-weight:600;}
-.reel-quoi{color:var(--text-2);}
+.reel-precision{color:var(--text-2); font-size:12.5px; margin-left:6px;}
 .reel-mal strong{font-weight:600;}
 .reel-faire ul{margin:4px 0 6px; padding-left:22px;}
 .reel-faire li{margin:2px 0;}
-.reel-detail{color:var(--text-2); font-size:12.5px;}
+.reel-detail{font-size:12.5px;}
 .reel-brut{color:var(--text-muted);}
 .reel-contexte{color:var(--text-2); font-size:12.5px;}
 .reel-bibliotheques{margin:10px 0; font-size:12.5px; color:var(--text-2);}
@@ -307,7 +342,7 @@ export const cssGristReel = `
 
 export function markdownGristReel(r) {
   if (!r) return [];
-  const l = ['## Essais contre un Grist réel', ''];
+  const l = ['### Essais contre un Grist réel', ''];
   if (!r.execute) {
     l.push(`**Non exécutés.** ${r.cause ?? 'cause inconnue'} Ce n'est pas une absence de risque : c'est une absence de mesure.`, '');
     return l;

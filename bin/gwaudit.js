@@ -134,6 +134,7 @@ async function main() {
         const reel = await auditGristReel(ctx, { scenario, journal: (l) => console.error(l) });
         constats.push(...reel.constats);
         gristReel = reel.resume;
+        if (reel.nonExecute) axesNonExecutes.add('G'); // demandé et non joué : un audit partiel, jamais un axe sans effet
         console.error(reel.nonExecute ? `  ⚠ Non exécuté : ${reel.resume.cause}` : `  ${reel.resume.essais.length} essai(s) joué(s).`);
       }
     } else {
@@ -145,7 +146,7 @@ async function main() {
     // Les constats de tous les axes sont là : on relie ceux qui se combinent en un scénario (information, jamais une pénalité).
     constats.push(...chainesDAttaque(constats, ctx));
 
-    const notation = noter(constats, axesNonExecutes);
+    const notation = noter(constats, axesNonExecutes, { axesDemandes: flag('grist-reel') ? ['G'] : [] });
     console.error(`→ Verdict : ${notation.verdict} (score global ${notation.global}/100, ${notation.bloquants.length} bloquant(s))`);
 
     const commit = commitDepot(racine);

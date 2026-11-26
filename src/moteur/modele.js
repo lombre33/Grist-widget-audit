@@ -9,7 +9,7 @@
 // circulaire (la règle importe `constat`) et sans danger : aucun des deux modules n'emploie l'autre à son chargement, seulement dans ses fonctions.
 import { masquerLesSecrets } from '../regles/c-secrets.js';
 
-/** Les six axes d'audit. Les lettres A à E reprennent la demande initiale. */
+/** Les six axes d'audit (les lettres A à E reprennent la demande initiale), plus l'axe facultatif G des pen-tests. */
 export const AXES = {
   A: { code: 'A', titre: 'Qualité du code', poids: 20 },
   B: { code: 'B', titre: 'Lisibilité et maintenabilité humaine', poids: 15 },
@@ -17,6 +17,9 @@ export const AXES = {
   D: { code: 'D', titre: 'Sécurité en condition réelle (tests dynamiques)', poids: 25 },
   E: { code: 'E', titre: "Chaîne d'approvisionnement et dépendances", poids: 10 },
   F: { code: 'F', titre: 'Conformité Grist.Gouv, souveraineté, accessibilité', poids: 5 },
+  // Facultatif : les pen-tests (essais d'attaque contre un vrai Grist) ne tournent qu'avec --grist-reel. Non lancé, l'axe est hors du calcul
+  // (ni 100, ni « audit partiel ») ; lancé, il pèse dans la note globale comme les autres.
+  G: { code: 'G', titre: 'Pen-tests contre un Grist réel', poids: 20, facultatif: true },
 };
 
 /**

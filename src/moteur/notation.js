@@ -68,9 +68,13 @@ function penaliteRegle(occurrences) {
  * @param {Set<string>} [axesNonExecutes] axes dont les règles n'ont pas tourné
  *   (ex. D quand l'analyse dynamique est désactivée) : ils sont notés `null`
  *   et exclus du score global plutôt que notés 100, ce qui serait mensonger.
+ * @param {{axesDemandes?: Iterable<string>}} [options] `axesDemandes` : les axes facultatifs (`facultatif` dans
+ *   AXES) que l'utilisateur a demandés. Un axe facultatif non demandé est hors du calcul et n'est pas un audit
+ *   partiel : personne ne lui a demandé de tourner. Demandé mais non exécuté, il va dans `axesNonExecutes`.
  */
-export function noter(constats, axesNonExecutes = new Set()) {
+export function noter(constats, axesNonExecutes = new Set(), { axesDemandes = [] } = {}) {
   const parAxe = {};
+  const demandes = new Set(axesDemandes);
 
   // Les axes que le widget empêche de mesurer (`axesEmpeches` d'un constat) : notés 0, avec ce qu'ils valent
   // sur ce qui a pu être lu (`scoreMesure`) et les constats qui les empêchent (`causes`). Un axe que l'utilisateur
@@ -85,6 +89,10 @@ export function noter(constats, axesNonExecutes = new Set()) {
 
   for (const code of Object.keys(AXES)) {
     const liste = constats.filter((c) => c.axe === code);
+    if (AXES[code].facultatif && !demandes.has(code) && !axesNonExecutes.has(code)) {
+      parAxe[code] = { ...AXES[code], score: null, nonExecute: true, nonDemande: true, constats: liste, repartition: compter(liste) };
+      continue;
+    }
     if (axesNonExecutes.has(code)) {
       parAxe[code] = { ...AXES[code], score: null, nonExecute: true, constats: liste, repartition: compter(liste) };
       continue;

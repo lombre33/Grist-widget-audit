@@ -159,7 +159,7 @@ test("niveau joué : celui que le widget demande ; « none » = pas de phase de 
 test('rapport : la section dit ce qui a été joué, ce qui ne l\'a pas été, et la cause quand rien ne s\'est exécuté', () => {
   const resume = { execute: true, produit: 'Grist Desktop', version: '0.3.17', plateforme: 'linux-x64', date: '2026-11-19T06:00:00Z', phases: [{ niveau: 'none' }, { niveau: 'full' }], essaisPasEncore: '2 à 6', essais: [{ id: 7, titre: 'Niveau none', resultat: 'bloque', detail: 'rien transmis', barriere: 'Grist' }] };
   const html = htmlGristReel(resume);
-  assert.match(html, /Essais contre un Grist réel/); assert.match(html, /Bloqué/); assert.match(html, /restent à développer \(n° 2 à 6\)/);
+  assert.match(html, /Niveau none/); assert.match(html, /Bloqué/); assert.match(html, /restent à développer \(n° 2 à 6\)/);
   assert.match(markdownGristReel(resume).join('\n'), /7\. Niveau none/);
   assert.match(htmlGristReel({ execute: false, cause: 'Docker absent' }), /Non exécutés.*Docker absent/s);
   assert.equal(htmlGristReel(null), '');

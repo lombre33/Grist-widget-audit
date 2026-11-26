@@ -6,7 +6,7 @@ export function genererJson({ ctx, notation, meta }) {
     // src/moteur/notation.js). Deux axes à 0 ou proches de 0 restent
     // distinguables ici même quand le score arrondi ne les distingue plus,
     // utile pour comparer deux widgets ou recalibrer sans tout remesurer.
-    axes[code] = { titre: a.titre, score: a.score, penaliteBrute: a.penaliteBrute ?? null, nonExecute: a.nonExecute, repartition: a.repartition, constats: a.constats };
+    axes[code] = { titre: a.titre, score: a.score, penaliteBrute: a.penaliteBrute ?? null, nonExecute: a.nonExecute, ...(a.nonDemande ? { nonDemande: true } : {}), repartition: a.repartition, constats: a.constats };
     // Un axe que le widget empêche de mesurer : noté 0, avec ce qu'il vaut sur ce qui a pu être lu et ses causes.
     if (a.empeche) Object.assign(axes[code], { empeche: true, scoreMesure: a.scoreMesure, causes: a.causes });
   }

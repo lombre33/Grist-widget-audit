@@ -3,7 +3,9 @@
 Outil en ligne de commande qui analyse un widget personnalisé Grist et
 produit un rapport d'audit couvrant six axes : qualité du code, lisibilité
 humaine, sécurité applicative, sécurité en condition réelle, chaîne de
-dépendances, et conformité Grist.Gouv / souveraineté / accessibilité.
+dépendances, et conformité Grist.Gouv / souveraineté / accessibilité ; un
+septième axe facultatif, les pen-tests contre un Grist réel (`--grist-reel`),
+compte dans la note quand il est lancé.
 
 Conçu pour un niveau d'exigence proche d'un audit DINUM avant hébergement
 sur une instance officielle (grist.numerique.gouv.fr), et pour être lancé
@@ -293,6 +295,8 @@ En bref :
 | F — Conformité | souveraineté des flux, RGAA (partiel), écoconception, conventions du guide | statique + résultats de l'axe D |
 
 ## Essais contre un Grist réel
+
+Ces essais forment l'**axe G, « Pen-tests contre un Grist réel »**, une carte de plus dans le rapport, avec son score, sa section et un **bloc dépliant par essai** (comme les constats des autres axes ; les essais qui n'ont rien trouvé y figurent aussi, pour qu'un « Bien » ou un « Pas testé » se lise). L'axe est **facultatif** : sans `--grist-reel` (ou sans la case de l'interface), il s'affiche « non lancé · hors de la note » et ne change ni la note ni le verdict. Lancé, il pèse **20** dans la note globale (contre 25 pour la sécurité statique et la sécurité en condition réelle, 20 pour la qualité) : la note globale est la moyenne des axes pondérée par leur poids, divisée par la somme des poids des axes joués. Le poids se règle d'une ligne (`poids` de l'axe G dans `src/moteur/modele.js`). Les règles gardent leurs numéros `D-REEL-NN`. Un essai « Pas testé » ne pèse ni pour ni contre : la carte dit combien d'essais ont été joués (« 21/23 essais joués »). Seul le cas où des bibliothèques du widget n'ont pas pu être téléchargées rend l'axe « mesure partielle » (constat `D-REEL-BIBLIOTHEQUES`) : la note ne dit alors rien des essais non joués, et le verdict le dit comme pour tout audit partiel. Demandé mais impossible à lancer (Grist Desktop introuvable, par exemple), l'axe est « non exécuté » : audit partiel, jamais un axe silencieux.
 
 `gwaudit <widget> --grist-reel` ajoute à l'audit des essais joués par un vrai Grist, au lieu du faux hôte de test de l'axe D. Rien à préparer : au premier lancement, l'outil télécharge Grist Desktop (version épinglée dans `src/runtime/grist-reel/grist-desktop.json`, environ 300 Mo, empreinte SHA-256 vérifiée), le range dans un dossier de cache (`%LOCALAPPDATA%\gwaudit\cache`, ou `GWAUDIT_CACHE`) et le réutilise ensuite. Il n'utilise jamais ton propre Grist Desktop, tes documents ni ton profil : chaque audit lance une instance neuve dans un dossier temporaire, y crée un document de test (valeurs « canaris », table appât, section Custom qui charge le widget), joue le widget, puis arrête l'instance et supprime le dossier.
 
